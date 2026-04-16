@@ -1,0 +1,583 @@
+"""
+GUI - Графический интерфейс для Local AI Assistant на базе Flet.
+
+Модуль предоставляет современный кроссплатформенный GUI для диалога
+с ассистентом. Использует существующий класс Assistant из main.py,
+не дублируя бизнес-логику.
+
+Архитектурные решения:
+1. GUI принимает экземпляр Assistant и использует его методы
+2. Асинхронные операции выполняются через run_in_executor для
+   неблокирующего интерфейса
+3. Сообщения отображаются в виде "пузырей" чата (как в мессенджерах)
+
+Требования:
+- flet>=0.21.0
+
+Пример использования:
+    from src.main import Assistant
+    from src.gui import AssistantGUI
+    
+    async def main(page):
+        assistant = Assistant()
+        await assistant.initialize()
+        gui = AssistantGUI(page, assistant)
+        gui.build()
+    
+    flet.app(target=main)
+"""
+
+import asyncio
+import logging
+from datetime import datetime
+from typing import Optional
+
+import flet as ft
+
+from config import Config, GUIConfig
+from src.main import Assistant
+from src.llm_engine import Message, MessageRole
+
+
+logger = logging.getLogger(__name__)
+
+
+class ChatMessage(ft.Control):
+    """
+    Контрол сообщения в чате.
+    
+    Отображает сообщение в виде "пузыря" с указанием
+    отправителя (пользователь или ассистент).
+    """
+    
+    def __init__(
+        self,
+        text: str,
+        sender: str,
+        is_user: bool = False,
+        timestamp: Optional[datetime] = None,
+    ):
+        """
+        Инициализировать сообщение.
+        
+        Args:
+            text: Текст сообщения.
+            sender: Имя отправителя.
+            is_user: True если сообщение от пользователя.
+            timestamp: Время отправки.
+        """
+        super().__init__()
+        self.text = text
+        self.sender = sender
+        self.is_user = is_user
+        self.timestamp = timestamp or datetime.now()
+        
+        # Цвета для пользователя и ассистента
+        self.user_color = ft.Colors.BLUE_700
+        self.assistant_color = ft.Colors.GREEN_700
+        
+    def build(self):
+        """Построить контрол сообщения."""
+        # Форматируем время
+        time_str = self.timestamp.strftime("%H:%M")
+        
+        # Выбираем цвета в зависимости от отправителя
+        bg_color = self.user_color if self.is_user else self.assistant_color
+        align = ft.alignment.center_right if self.is_user else ft.alignment.center_left
+        
+        return ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Text(
+                        self.sender,
+                        size=12,
+                        color=ft.Colors.WHITE,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+                    ft.Text(
+                        self.text,
+                        size=14,
+                        color=ft.Colors.WHITE,
+                        selectable=True,  # Можно выделить и скопировать
+                    ),
+                    ft.Text(
+                        time_str,
+                        size=10,
+                        color=ft.Colors.WHITE70,
+                    ),
+                ],
+                spacing=2,
+                tight=True,
+            ),
+            bgcolor=bg_color,
+            border_radius=ft.border_radius.only(
+                top_left=15,
+                top_right=15,
+                bottom_left=15 if self.is_user else 0,
+                bottom_right=0 if self.is_user else 15,
+            ),
+            padding=ft.padding.all(12),
+            alignment=align,
+            width=None,  # Автоматическая ширина
+        )
+
+
+class TypingIndicator(ft.Control):
+    """
+    Индикатор набора текста ("Печатает...").
+
+    Анимированный контрол с тремя точками.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._visible = False
+        self._dot1: ft.Container | None = None
+        self._dot2: ft.Container | None = None
+        self._dot3: ft.Container | None = None
+        self._row: ft.Row | None = None
+
+    def build(self):
+        """Построить индикатор."""
+        # Создаём точки
+        self._dot1 = ft.Container(
+            width=6,
+            height=6,
+            border_radius=3,
+            bgcolor=ft.Colors.GREY_400,
+        )
+        self._dot2 = ft.Container(
+            width=6,
+            height=6,
+            border_radius=3,
+            bgcolor=ft.Colors.GREY_400,
+        )
+        self._dot3 = ft.Container(
+            width=6,
+            height=6,
+            border_radius=3,
+            bgcolor=ft.Colors.GREY_400,
+        )
+        
+        self._row = ft.Row(
+            controls=[
+                ft.Text("Печатает", size=12, color=ft.Colors.GREY_400),
+                ft.Container(
+                    content=ft.Row(
+                        controls=[
+                            self._dot1,
+                            self._dot2,
+                            self._dot3,
+                        ],
+                        spacing=3,
+                    ),
+                    padding=ft.padding.symmetric(horizontal=5),
+                ),
+            ],
+            visible=False,
+        )
+        return self._row
+    
+    def start_animation(self):
+        """Запустить анимацию."""
+        self._row.visible = True
+        self.update()
+        
+        # Запускаем анимацию точек (простая смена прозрачности)
+        async def animate():
+            while self._row.visible:
+                for dot in [self._dot1, self._dot2, self._dot3]:
+                    dot.opacity = 1.0
+                    self.update()
+                    await asyncio.sleep(0.15)
+                    dot.opacity = 0.3
+                    self.update()
+        
+        # Запускаем в фоне
+        asyncio.create_task(animate())
+    
+    def stop_animation(self):
+        """Остановить анимацию."""
+        self._row.visible = False
+        self.update()
+
+
+class AssistantGUI:
+    """
+    Графический интерфейс для AI ассистента.
+    
+    Использует Flet для создания кроссплатформенного GUI.
+    Делегирует бизнес-логику классу Assistant.
+    
+    Структура интерфейса:
+    ┌─────────────────────────────────────┐
+    │  Local AI Assistant           [_][X]│
+    ├─────────────────────────────────────┤
+    │  ┌───────────────────────────────┐  │
+    │  │ 🤖 Привет! Чем могу помочь?   │  │
+    │  │                        10:30  │  │
+    │  └───────────────────────────────┘  │
+    │  ┌───────────────────────────────┐  │
+    │  │      Привет! Расскажи о себе  │  │
+    │  │                          10:31│  │
+    │  └───────────────────────────────┘  │
+    │                                     │
+    │  [Печатает...]                      │
+    ├─────────────────────────────────────┤
+    │  [Поле ввода...]      [Отправить]   │
+    ├─────────────────────────────────────┤
+    │  [Clear] [Stats]              [Exit]│
+    └─────────────────────────────────────┘
+    """
+    
+    def __init__(self, page: ft.Page, assistant: Assistant):
+        """
+        Инициализировать GUI.
+        
+        Args:
+            page: Страница Flet.
+            assistant: Инициализированный экземпляр Assistant.
+        """
+        self.page = page
+        self.assistant = assistant
+        self.config = assistant._config
+        
+        # Элементы интерфейса
+        self._chat_view: ft.ListView | None = None
+        self._message_input: ft.TextField | None = None
+        self._typing_indicator: TypingIndicator | None = None
+        self._status_text: ft.Text | None = None
+        
+        # История сообщений для отображения
+        self._messages: list[ChatMessage] = []
+        
+        logger.info("AssistantGUI инициализирован")
+    
+    def build(self) -> None:
+        """
+        Построить интерфейс.
+
+        Вызывается после инициализации для создания всех элементов.
+        """
+        # Настройки страницы
+        self.page.title = self.config.gui.title
+        self.page.theme_mode = (
+            ft.ThemeMode.DARK
+            if self.config.gui.theme == "dark"
+            else ft.ThemeMode.LIGHT
+        )
+        self.page.window_width = self.config.gui.width
+        self.page.window_height = self.config.gui.height
+
+        # Создаём элементы интерфейса
+        self._create_chat_view()
+        self._create_input_area()
+        self._create_button_bar()
+
+        # Собираем всё вместе
+        self.page.add(
+            ft.Column(
+                controls=[
+                    self._chat_view,
+                    self._typing_indicator,
+                    self._input_area,
+                    self._button_bar,
+                ],
+                spacing=0,
+                expand=True,
+            )
+        )
+
+        # Добавляем приветственное сообщение
+        self._add_welcome_message()
+
+        logger.debug("GUI построен")
+    
+    def _create_chat_view(self) -> None:
+        """Создать область чата с историей сообщений."""
+        self._chat_view = ft.ListView(
+            expand=True,
+            spacing=10,
+            padding=ft.padding.all(20),
+            auto_scroll=True,  # Автопрокрутка к новым сообщениям
+        )
+    
+    def _create_input_area(self) -> None:
+        """Создать область ввода сообщения."""
+        self._message_input = ft.TextField(
+            hint_text="Введите сообщение...",
+            expand=True,
+            multiline=False,
+            shift_enter=True,
+            border_radius=25,
+            content_padding=ft.padding.symmetric(horizontal=20, vertical=10),
+            on_submit=lambda e: self._on_send(),  # Отправка по Enter
+        )
+        
+        send_button = ft.IconButton(
+            icon=ft.icons.SEND,
+            tooltip="Отправить",
+            on_click=lambda e: self._on_send(),
+            style=ft.ButtonStyle(
+                bgcolor=ft.Colors.BLUE,
+                color=ft.Colors.WHITE,
+            ),
+        )
+        
+        self._input_area = ft.Row(
+            controls=[
+                self._message_input,
+                send_button,
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            padding=ft.padding.symmetric(horizontal=20, vertical=10),
+        )
+    
+    def _create_button_bar(self) -> None:
+        """Создать панель кнопок команд."""
+        self._status_text = ft.Text(
+            "Готов к работе",
+            size=12,
+            color=ft.Colors.GREY_400,
+        )
+        
+        clear_button = ft.TextButton(
+            "Очистить",
+            on_click=lambda e: self._on_clear(),
+            tooltip="Очистить историю диалога",
+        )
+        
+        stats_button = ft.TextButton(
+            "Статистика",
+            on_click=lambda e: self._on_stats(),
+            tooltip="Показать статистику",
+        )
+        
+        exit_button = ft.TextButton(
+            "Выход",
+            on_click=lambda e: self._on_exit(),
+            tooltip="Выйти из приложения",
+            style=ft.ButtonStyle(
+                color=ft.Colors.RED,
+            ),
+        )
+        
+        self._button_bar = ft.Row(
+            controls=[
+                clear_button,
+                stats_button,
+                ft.Container(expand=True),  # Распорка
+                self._status_text,
+                ft.Container(expand=True),  # Распорка
+                exit_button,
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            padding=ft.padding.symmetric(horizontal=20, vertical=5),
+        )
+    
+    def _create_typing_indicator(self) -> None:
+        """Создать индикатор набора текста."""
+        self._typing_indicator = TypingIndicator()
+    
+    def _add_welcome_message(self) -> None:
+        """Добавить приветственное сообщение."""
+        welcome_text = (
+            f"🤖 Привет! Я ваш локальный AI-ассистент.\n\n"
+            f"Модель: {self.config.ollama.model}\n"
+            f"Память: ChromaDB\n\n"
+            f"Чем могу помочь?"
+        )
+        self._add_message(welcome_text, is_user=False)
+        self._update_status("Готов к работе")
+    
+    def _add_message(self, text: str, is_user: bool = False) -> None:
+        """
+        Добавить сообщение в чат.
+        
+        Args:
+            text: Текст сообщения.
+            is_user: True если сообщение от пользователя.
+        """
+        sender = "Вы" if is_user else "🤖 Ассистент"
+        message = ChatMessage(
+            text=text,
+            sender=sender,
+            is_user=is_user,
+        )
+        
+        self._messages.append(message)
+        self._chat_view.controls.append(message)
+        self.page.update()
+        
+        # Автопрокрутка вниз
+        self._chat_view.scroll_to(
+            key=str(len(self._messages) - 1),
+            duration=200,
+        )
+    
+    def _update_status(self, status: str) -> None:
+        """
+        Обновить текст статуса.
+        
+        Args:
+            status: Новый текст статуса.
+        """
+        if self._status_text:
+            self._status_text.value = status
+            self.page.update()
+    
+    async def _on_send(self) -> None:
+        """
+        Обработать отправку сообщения.
+        
+        1. Получает текст из поля ввода
+        2. Добавляет сообщение пользователя в чат
+        3. Отправляет запрос ассистенту
+        4. Получает и отображает ответ
+        5. Очищает поле ввода
+        """
+        if not self._message_input:
+            return
+        
+        user_text = self._message_input.value.strip()
+        if not user_text:
+            return
+        
+        # Очищаем поле ввода
+        self._message_input.value = ""
+        self.page.update()
+        
+        # Добавляем сообщение пользователя
+        self._add_message(user_text, is_user=True)
+        self._update_status("Обработка...")
+        
+        # Показываем индикатор набора
+        if not self._typing_indicator:
+            self._create_typing_indicator()
+            self.page.insert(1, self._typing_indicator)
+        self._typing_indicator.start_animation()
+        
+        # Отправляем запрос ассистенту (в фоне, чтобы не блокировать GUI)
+        try:
+            # Используем run_in_executor для асинхронного вызова
+            loop = asyncio.get_event_loop()
+            answer = await loop.run_in_executor(
+                None,
+                lambda: asyncio.run(self.assistant.process_message(user_text)),
+            )
+            
+            # Останавливаем индикатор
+            self._typing_indicator.stop_animation()
+            
+            # Добавляем ответ ассистента
+            self._add_message(answer, is_user=False)
+            self._update_status("Готов к работе")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обработке сообщения: {e}", exc_info=True)
+            self._typing_indicator.stop_animation()
+            self._add_message(
+                f"❌ Произошла ошибка: {str(e)}\n\n"
+                f"Проверьте, что Ollama запущена и модель загружена.",
+                is_user=False,
+            )
+            self._update_status("Ошибка")
+    
+    def _on_clear(self, e=None) -> None:
+        """
+        Очистить историю диалога.
+        
+        Args:
+            e: Событие Flet (опционально).
+        """
+        # Очищаем историю в ассистенте
+        self.assistant._llm.clear_history()
+        
+        # Очищаем GUI
+        self._messages.clear()
+        self._chat_view.controls.clear()
+        
+        # Добавляем приветственное сообщение
+        self._add_welcome_message()
+        
+        logger.info("История диалога очищена")
+    
+    def _on_stats(self, e=None) -> None:
+        """
+        Показать статистику.
+        
+        Args:
+            e: Событие Flet (опционально).
+        """
+        # Получаем статистику
+        stats = {
+            "Сообщений в сессии": self.assistant._message_count,
+        }
+        
+        # Форматируем в текст
+        stats_text = "📊 Статистика:\n\n"
+        for key, value in stats.items():
+            stats_text += f"• {key}: {value}\n"
+        
+        # Показываем в диалоге
+        self.page.dialog = self._create_stats_dialog(stats_text)
+        self.page.dialog.open = True
+        self.page.update()
+    
+    def _create_stats_dialog(self, text: str) -> ft.AlertDialog:
+        """
+        Создать диалог статистики.
+        
+        Args:
+            text: Текст статистики.
+        
+        Returns:
+            ft.AlertDialog: Диалог.
+        """
+        return ft.AlertDialog(
+            title=ft.Text("📊 Статистика"),
+            content=ft.Text(text),
+            actions=[
+                ft.TextButton("Закрыть", on_click=lambda e: self._close_dialog()),
+            ],
+            modal=True,
+        )
+    
+    def _close_dialog(self, e=None) -> None:
+        """Закрыть диалог."""
+        if self.page.dialog:
+            self.page.dialog.open = False
+            self.page.update()
+    
+    def _on_exit(self, e=None) -> None:
+        """
+        Выйти из приложения.
+        
+        Args:
+            e: Событие Flet (опционально).
+        """
+        logger.info("Выход из приложения через GUI")
+        
+        # Закрываем страницу
+        self.page.window.destroy()
+
+
+def create_gui_page(assistant: Assistant):
+    """
+    Создать страницу Flet для GUI.
+
+    Фабричная функция для создания GUI.
+
+    Args:
+        assistant: Инициализированный экземпляр Assistant.
+
+    Returns:
+        Callable: Функция для flet.run().
+    """
+    def page_handler(page: ft.Page):
+        gui = AssistantGUI(page, assistant)
+        gui.build()
+    
+    return page_handler

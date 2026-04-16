@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local AI Assistant</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Боковая панель с чатами -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>💬 Чаты</h1>
+                <button id="new-chat-btn" class="btn-icon" title="Новый чат">+</button>
+            </div>
+            
+            <div id="chats-list" class="chats-list">
+                <!-- Список чатов загружается через JS -->
+            </div>
+            
+            <div class="sidebar-footer">
+                <button id="memory-btn" class="btn-secondary">🧠 Память</button>
+                <button id="status-btn" class="btn-secondary">📊 Статус</button>
+            </div>
+        </aside>
+        
+        <!-- Основная область чата -->
+        <main class="chat-area">
+            <header class="chat-header">
+                <h2 id="chat-title">Выберите чат</h2>
+                <div class="chat-actions">
+                    <button id="clear-chat-btn" class="btn-icon" title="Очистить чат">🧹</button>
+                    <button id="delete-chat-btn" class="btn-icon" title="Удалить чат">🗑️</button>
+                </div>
+            </header>
+            
+            <div id="messages-container" class="messages-container">
+                <!-- Сообщения загружаются через JS -->
+                <div class="welcome-message">
+                    <h2>🤖 Добро пожаловать в Local AI Assistant!</h2>
+                    <p>Выберите существующий чат или создайте новый</p>
+                </div>
+            </div>
+            
+            <div class="input-area">
+                <textarea 
+                    id="message-input" 
+                    placeholder="Введите сообщение..." 
+                    rows="1"
+                ></textarea>
+                <button id="send-btn" class="btn-primary">➤</button>
+            </div>
+            
+            <div id="typing-indicator" class="typing-indicator hidden">
+                <span>🤖 Печатает...</span>
+            </div>
+        </main>
+        
+        <!-- Панель памяти (скрыта по умолчанию) -->
+        <aside id="memory-panel" class="memory-panel hidden">
+            <header class="memory-header">
+                <h2>🧠 Память (ChromaDB)</h2>
+                <button id="close-memory-btn" class="btn-icon">✕</button>
+            </header>
+            
+            <div class="memory-search">
+                <input 
+                    type="text" 
+                    id="memory-search-input" 
+                    placeholder="Поиск в памяти..."
+                >
+                <button id="memory-search-btn" class="btn-primary">🔍</button>
+            </div>
+            
+            <div class="memory-add">
+                <input 
+                    type="text" 
+                    id="memory-add-input" 
+                    placeholder="Добавить запись в память..."
+                >
+                <button id="memory-add-btn" class="btn-primary">➕</button>
+            </div>
+            
+            <div id="memory-results" class="memory-results">
+                <!-- Результаты поиска -->
+            </div>
+        </aside>
+    </div>
+    
+    <!-- Модальное окно статуса -->
+    <div id="status-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>📊 Статус системы</h3>
+            <div id="status-content"></div>
+            <button id="close-status-btn" class="btn-primary">Закрыть</button>
+        </div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>

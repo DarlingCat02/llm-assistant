@@ -1,0 +1,42 @@
+# === Local AI Assistant - Dependencies ===
+# Точные версии библиотек для стабильности
+
+# === HTTP Client ===
+# Асинхронный HTTP клиент для Ollama API
+httpx>=0.27.0
+
+# === Vector Database ===
+# ChromaDB для долговременной памяти и RAG
+chromadb>=0.4.24
+
+# === Embeddings ===
+# Легковесная модель для эмбеддингов (работает на CPU)
+# all-MiniLM-L6-v2: 384 измерения, ~80MB
+sentence-transformers>=2.7.0
+
+# === Configuration ===
+# Валидация и загрузка настроек из .env
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.1
+
+# === GUI (Graphical User Interface) ===
+# CustomTkinter - стабильный кроссплатформенный GUI
+customtkinter>=5.2.0
+
+# Flet - альтернативный GUI фреймворк (опционально)
+# flet>=0.21.0
+
+# === PyTorch (CPU only) ===
+# Эмбеддинги работают на CPU, чтобы не занимать VRAM
+# Версия без CUDA экономит ~2GB дискового пространства
+# Если нужен GPU для эмбеддингов, установьте torch с CUDA отдельно
+torch>=2.0.0; platform_system != "Darwin"
+torch>=2.0.0; platform_system == "Darwin"
+
+# === TTS (Optional) ===
+# Раскомментировать при включении TTS
+# pyttsx3>=2.90
+
+# === Development (Optional) ===
+# pytest>=7.4.0
+# pytest-asyncio>=0.21.0

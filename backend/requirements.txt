@@ -1,0 +1,19 @@
+# === Backend Dependencies ===
+# FastAPI фреймворк
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Асинхронная БД
+aiosqlite>=0.19.0
+
+# Для CORS и статики (встроены в FastAPI)
+# fastapi уже включает starlette который имеет StaticFiles
+
+# API валидация
+pydantic>=2.5.0
+
+# WebSocket (встроен в FastAPI)
+# websockets>=12.0
+
+# Для будущего голосового сервиса
+# python-multipart>=0.0.6  # Для загрузки файлов
