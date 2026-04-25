@@ -78,6 +78,7 @@ class ChatMessage(BaseModel):
     """Модель сообщения для чата (API запрос)."""
     message: str = Field(..., min_length=1, max_length=10000)
     chat_id: Optional[int] = None
+    thinking: bool = Field(default=False, description="Включить режим рассуждения")
 
 
 class ChatResponseMessage(BaseModel):

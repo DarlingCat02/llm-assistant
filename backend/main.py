@@ -299,7 +299,7 @@ async def chat(request: ChatMessage):
 
     # Получаем ответ от ассистента
     try:
-        response_text = await _assistant.process_message(request.message)
+        response_text = await _assistant.process_message(request.message, thinking=request.thinking)
     except Exception as e:
         logger.error(f"Ошибка при генерации ответа: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -338,10 +338,13 @@ async def get_status():
         memory_stats = await _assistant._memory.get_stats()
         stats["memory_entries"] = memory_stats.get("total_entries", 0)
     
+    thinking_supported = await _config.llm.check_thinking_support() if _config else False
+    
     return {
         "status": "ok",
         "provider": _config.llm.provider.value if _config else "unknown",
         "model": _config.llm.model if _config else "unknown",
+        "supports_thinking": thinking_supported,
         **stats,
     }
 

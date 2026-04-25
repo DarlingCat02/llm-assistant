@@ -156,18 +156,75 @@ class Assistant:
     
     def _should_search_memory(self, message: str) -> bool:
         """
-        Определить, нужно ли искать в памяти.
+        Определить, нужно ли искать в памяти (расширенная логика).
         
-        RAG не нужен для:
-        - Коротких сообщений (<15 символов)
-        - Приветствий и простых фраз
-        - Вопросов без личной информации
+        RAG выполняется когда сообщение требует знаний/контекста.
         """
         msg = message.strip().lower()
         
-        # Очень короткие сообщения
+        # === Категория 1: Явные запросы на воспоминание (100%) ===
+        recall_keywords = [
+            'помнишь', 'помни', 'remember', 'recall', 'ты знаешь', 'do you know',
+            'было', 'was it', 'это было', 'is it was', 'как зовут', "what's my name",
+            'моё имя', 'my name is', 'как меня зовут', 'what do you call me',
+            'сохрани', 'запомни', 'keep in mind', 'не забудь',
+        ]
+        for kw in recall_keywords:
+            if kw in msg:
+                return True
+        
+        # === Категория 2: Вопросы требующие знаний (100%) ===
+        question_keywords = [
+            'что такое', 'what is', 'кто такой', 'who is',
+            'как работает', 'how does', 'explain', 'объясни',
+            'расскажи про', 'tell me about', 'describe',
+            'почему', 'why', 'зачем', 'for what',
+            'чем отличается', 'difference between',
+        ]
+        # Вопрос с вопросительным знаком
+        if '?' in message:
+            return True
+        for kw in question_keywords:
+            if kw in msg:
+                return True
+        
+        # === Категория 3: Временные ссылки на прошлое ===
+        temporal_keywords = [
+            'в прошлый раз', 'last time', 'раньше', 'earlier', 'before',
+            'недавно', 'recently', 'на прошлой неделе', 'last week',
+            'вчера', 'yesterday', 'на прошлой встрече', 'at our last',
+        ]
+        for kw in temporal_keywords:
+            if kw in msg:
+                return True
+        
+        # === Категория 4: Контекстные ссылки (проект/код) ===
+        context_keywords = [
+            'мой проект', 'my project', 'наш код', 'our code',
+            'этот файл', 'that file', 'тот проект', 'that project',
+            'текущий проект', 'current project', 'данный проект',
+            'модель', 'model', 'конфигурация', 'config',
+        ]
+        for kw in context_keywords:
+            if kw in msg:
+                return True
+        
+        # === Категория 5: Глаголы намерения/уточнения ===
+        intent_keywords = [
+            'проверь', 'check', 'посмотри', 'look',
+            'какой', 'which', 'сколько', 'how many', 'how much',
+            'найди', 'find', 'покажи', 'show me',
+        ]
+        for kw in intent_keywords:
+            if kw in msg:
+                return True
+        
+        # === ИСКЛЮЧЕНИЯ - когда RAG НЕ нужен ===
+        
+        # Очень короткие сообщения (кроме если есть явные маркеры)
         if len(message.strip()) < 15:
-            return False
+            # Всё равно проверяем на явные маркеры выше
+            pass  # Continue to exclusions
         
         # Приветствия и простые фразы
         greetings = [
@@ -176,21 +233,25 @@ class Assistant:
             'пока', 'до свидания', 'спасибо', 'благодарю',
             'работает', 'есть кто', 'ты здесь',
         ]
-        
         for greeting in greetings:
             if msg.startswith(greeting):
                 return False
         
-        # Вопросы, на которые можно ответить без контекста
+        # Простые вопросы о времени/погоде без личного контекста
         simple_questions = [
             'который час', 'сколько времени', 'какая дата',
-            'как погода', 'какой день',
+            'как погода', 'какой день', 'today date', 'current time',
         ]
-        
         for q in simple_questions:
             if q in msg:
                 return False
         
+        # Сообщение начинается с "я" new данные" без запроса
+        if msg.startswith('я ') or msg.startswith('я:'):
+            # Это новая информация от пользователя, а не вопрос
+            return False
+        
+        # По умолчанию - ищем в памяти (лучше переусердствовать чем недополучить)
         return True
     
     def _looks_like_new_fact(self, message: str) -> bool:
@@ -272,18 +333,13 @@ class Assistant:
                 f"Длительность: {duration}"
             )
     
-    async def process_message(self, user_message: str) -> str:
+    async def process_message(self, user_message: str, thinking: bool = False) -> str:
         """
         Обработать сообщение пользователя.
 
-        Основной метод обработки запросов:
-        1. Поиск контекста в памяти
-        2. Генерация ответа LLM
-        3. Озвучка (если включено)
-        4. Сохранение диалога
-
         Args:
             user_message: Сообщение пользователя.
+            thinking: Включить режим рассуждения (для Qwen3).
 
         Returns:
             str: Ответ ассистента.
@@ -311,6 +367,7 @@ class Assistant:
         response: LLMResponse = await self._llm.generate(
             user_message=user_message,
             additional_context=context,
+            thinking=thinking,
         )
 
         answer = response.content
@@ -330,7 +387,7 @@ class Assistant:
 
         return answer
 
-    def process_message_sync(self, user_message: str) -> str:
+    def process_message_sync(self, user_message: str, thinking: bool = False) -> str:
         """
         Обработать сообщение пользователя (синхронная версия для GUI).
         """
@@ -389,9 +446,11 @@ class Assistant:
             }
             
             if self._config.llm.provider.value == "ollama":
+                thinking_type = "on" if thinking else "off"
                 payload["options"] = {
                     "num_ctx": self._config.llm.num_ctx,
                     "temperature": self._config.llm.temperature,
+                    "thinking": {"type": thinking_type},
                 }
                 del payload["temperature"]
             

@@ -87,14 +87,12 @@ class LLMEngine:
         self._conversation_history: list[Message] = []
         
         self._system_prompt = (
-            "Ты — дружелюбный AI-ассистент. Веди естественный разговор с пользователем.\n\n"
+            "Ты — AI-ассистент. Отвечай кратко и по делу.\n\n"
             "ПРАВИЛА:\n"
-            "1. Отвечай развёрнуто и по существу, показывай, что понимаешь смысл сообщения\n"
-            "2. НЕ повторяй и не эхо-отражай сообщение пользователя — формулируй свой оригинальный ответ\n"
-            "3. Если собираешься просто повторить то, что сказал пользователь — переформулируй по-другому\n"
-            "4. Задавай уточняющие вопросы, если нужно\n"
-            "5. Если не знаешь ответа — скажи честно\n"
-            "6. Помни информацию о пользователе из контекста"
+            "1. Отвечай прямо, без лишних слов и эмоций\n"
+            "2. Не повторяй и не перефразируй сообщение пользователя\n"
+            "3. Если не знаешь — скажи честно\n"
+            "4. Используй контекст из памяти"
         )
         
         self._tools: dict[str, Callable] = {}
@@ -220,7 +218,8 @@ class LLMEngine:
         self,
         user_message: str,
         additional_context: list[str] | None = None,
-    ) -> list[dict]:
+        thinking: bool = False,
+    ) -> tuple[list[dict], bool]:
         """Построить список сообщений для отправки."""
         messages = []
         
@@ -247,13 +246,14 @@ class LLMEngine:
             Message(role=MessageRole.USER, content=user_message).to_dict()
         )
         
-        return messages
+        return messages, thinking
     
     async def generate(
         self,
         user_message: str,
         additional_context: list[str] | None = None,
         stream: bool = False,
+        thinking: bool = False,
     ) -> LLMResponse:
         """
         Сгенерировать ответ на сообщение пользователя.
@@ -262,6 +262,7 @@ class LLMEngine:
             user_message: Сообщение пользователя
             additional_context: Контекст из Memory Manager
             stream: Если True, возвращать токены по мере генерации
+            thinking: Включить режим рассуждения
         
         Returns:
             LLMResponse: Ответ от модели.
@@ -269,7 +270,7 @@ class LLMEngine:
         if not self._initialized:
             raise RuntimeError("LLM Engine не инициализирован. Вызовите initialize().")
         
-        messages = await self._build_messages(user_message, additional_context)
+        messages, thinking_enabled = await self._build_messages(user_message, additional_context, thinking)
         
         payload = {
             "model": self._config.model,
@@ -278,11 +279,13 @@ class LLMEngine:
             "temperature": self._config.temperature,
         }
         
-        # num_ctx — специфичен для Ollama, другие провайдеры его игнорируют
+        # num_ctx и thinking — специфичны для Ollama
         if self._config.provider == LLMProvider.OLLAMA:
+            thinking_type = "on" if thinking_enabled else "off"
             payload["options"] = {
                 "num_ctx": self._config.num_ctx,
                 "temperature": self._config.temperature,
+                "thinking": {"type": thinking_type},
             }
             # Убираем temperature из корня для Ollama (он в options)
             del payload["temperature"]
@@ -416,6 +419,7 @@ class LLMEngine:
             payload["options"] = {
                 "num_ctx": self._config.num_ctx,
                 "temperature": self._config.temperature,
+                "thinking": {"type": "off"},
             }
             del payload["temperature"]
         

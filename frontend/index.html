@@ -44,12 +44,18 @@
             </div>
             
             <div class="input-area">
-                <textarea 
-                    id="message-input" 
-                    placeholder="Введите сообщение..." 
-                    rows="1"
-                ></textarea>
-                <button id="send-btn" class="btn-primary">➤</button>
+                <label class="thinking-toggle">
+                    <input type="checkbox" id="thinking-toggle">
+                    <span>🧠 Рассуждение</span>
+                </label>
+                <div class="input-row">
+                    <textarea 
+                        id="message-input" 
+                        placeholder="Введите сообщение..." 
+                        rows="1"
+                    ></textarea>
+                    <button id="send-btn" class="btn-primary">➤</button>
+                </div>
             </div>
             
             <div id="typing-indicator" class="typing-indicator hidden">

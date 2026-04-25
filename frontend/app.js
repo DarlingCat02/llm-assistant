@@ -256,12 +256,16 @@ async function sendMessage() {
     
     // Отправляем на сервер
     try {
+        const thinkingToggle = document.getElementById('thinking-toggle');
+        const thinkingEnabled = thinkingToggle ? thinkingToggle.checked : false;
+        
         const response = await fetch(`${API_BASE}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message: message,
                 chat_id: currentChatId,
+                thinking: thinkingEnabled,
             }),
         });
         
@@ -522,11 +526,34 @@ document.addEventListener('click', (e) => {
 
 async function updateStatus() {
     // Периодическое обновление статуса
+    const response = await fetch(`${API_BASE}/api/status`);
+    const data = await response.json();
+    console.log('Статус:', data);
+    
+    // Обновление состояния переключателя рассуждения
+    const thinkingToggle = document.getElementById('thinking-toggle');
+    if (thinkingToggle) {
+        const supportsThinking = data.supports_thinking === true;
+        thinkingToggle.disabled = !supportsThinking;
+        if (!supportsThinking) {
+            thinkingToggle.checked = false;
+        }
+    }
+    
     setInterval(async () => {
         try {
-            const response = await fetch(`${API_BASE}/api/status`);
-            const data = await response.json();
-            console.log('Статус:', data);
+            const resp = await fetch(`${API_BASE}/api/status`);
+            const st = await resp.json();
+            console.log('Статус:', st);
+            
+            const tg = document.getElementById('thinking-toggle');
+            if (tg) {
+                const supports = st.supports_thinking === true;
+                tg.disabled = !supports;
+                if (!supports) {
+                    tg.checked = false;
+                }
+            }
         } catch (error) {
             console.error('Ошибка обновления статуса:', error);
         }

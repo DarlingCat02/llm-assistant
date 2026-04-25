@@ -119,6 +119,39 @@ class LLMConfig(BaseConfig):
     def is_local(self) -> bool:
         """Проверить, является ли провайдер локальным."""
         return self.provider in (LLMProvider.OLLAMA, LLMProvider.LM_STUDIO)
+    
+    async def check_thinking_support(self) -> bool:
+        """
+        Динамически проверить, поддерживает ли модель режим рассуждения.
+        
+        Делает запрос к Ollama API для получения информации о модели.
+        """
+        if self.provider != LLMProvider.OLLAMA:
+            return False
+        
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(
+                    f"{self.host}/api/show",
+                    json={"name": self.model}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    capabilities = data.get("capabilities", {})
+                    if "thinking" in capabilities:
+                        return capabilities["thinking"] is True
+                    details = data.get("details", {})
+                    if "thinking" in details:
+                        return details["thinking"] is True
+                return False
+        except Exception:
+            return False
+    
+    @property
+    def supports_thinking(self) -> bool:
+        """Синхронная заглушка - используйте check_thinking_support() для async."""
+        return False
 
 
 class OllamaConfig(BaseConfig):
