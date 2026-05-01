@@ -238,6 +238,23 @@ async def create_chat(request: dict):
     }
 
 
+@app.put("/api/chats/{chat_id}")
+async def update_chat(chat_id: int, request: dict):
+    """Обновить чат (переименовать)."""
+    title = request.get("title")
+    if title:
+        await _db.update_chat_title(chat_id, title)
+    chat = await _db.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Чат не найден")
+    return {
+        "id": chat.id,
+        "title": chat.title,
+        "created_at": chat.created_at,
+        "updated_at": chat.updated_at,
+    }
+
+
 @app.get("/api/chats/{chat_id}/messages")
 async def get_chat_messages(chat_id: int):
     """Получить сообщения чата."""

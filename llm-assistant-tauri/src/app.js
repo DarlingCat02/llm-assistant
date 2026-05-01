@@ -34,11 +34,33 @@ try {
 
 // === Инициализация ===
 
-document.addEventListener('DOMContentLoaded', () => {
-    initEventListeners();
-    loadChats();
-    connectWebSocket();
-    updateStatus();
+async function waitForApi(retries = 20, delay = 500) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            const response = await fetch(`${API_BASE}/api/status`, { method: 'GET' });
+            if (response.ok) return true;
+        } catch (e) {
+            console.log(`Ожидание API... (${i + 1}/${retries})`);
+        }
+        await new Promise(r => setTimeout(r, delay));
+    }
+    console.error('API не доступно');
+    return false;
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    console.log('Ожидание готовности Python бэкенда...');
+    const ready = await waitForApi();
+    if (ready) {
+        console.log('API готово, загрузка...');
+        initEventListeners();
+        loadChats();
+        connectWebSocket();
+        updateStatus();
+    } else {
+        document.getElementById('messages-container').innerHTML = 
+            '<div class="error">Ошибка: Python бэкенд не запущен</div>';
+    }
 });
 
 function initEventListeners() {
@@ -160,13 +182,72 @@ function createChatElement(chat) {
     });
     
     div.innerHTML = `
-        <div class="chat-item-title">${escapeHtml(chat.title)}</div>
+        <div class="chat-item-title" data-chat-id="${chat.id}">${escapeHtml(chat.title)}</div>
         <div class="chat-item-date">${dateStr}</div>
     `;
     
-    div.addEventListener('click', () => selectChat(chat.id));
+    // Клик - выбор чата
+    div.addEventListener('click', (e) => {
+        if (!e.target.classList.contains('chat-item-title') || !e.target.contentEditable) {
+            selectChat(chat.id);
+        }
+    });
+    
+    // Двойной клик - переименование
+    const titleEl = div.querySelector('.chat-item-title');
+    titleEl.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        const chatId = parseInt(e.target.dataset.chatId);
+        startRenameChat(chatId, e.target);
+    });
     
     return div;
+}
+
+async function startRenameChat(chatId, element) {
+    element.contentEditable = true;
+    element.focus();
+    
+    // Выделить весь текст
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    
+    const finishRename = async () => {
+        element.contentEditable = false;
+        const newTitle = element.textContent.trim();
+        
+        if (newTitle && newTitle !== element.dataset.originalTitle) {
+            try {
+                await fetch(`${API_BASE}/api/chats/${chatId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: newTitle }),
+                });
+                await loadChats();
+            } catch (error) {
+                console.error('Ошибка переименования:', error);
+            }
+        } else {
+            element.textContent = element.dataset.originalTitle;
+        }
+    };
+    
+    element.dataset.originalTitle = element.textContent;
+    
+    element.addEventListener('blur', finishRename, { once: true });
+    element.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            element.blur();
+        }
+        if (e.key === 'Escape') {
+            element.textContent = element.dataset.originalTitle;
+            element.blur();
+        }
+    });
 }
 
 async function createNewChat() {
