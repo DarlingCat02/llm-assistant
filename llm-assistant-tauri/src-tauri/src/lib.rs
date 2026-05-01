@@ -19,7 +19,10 @@ fn start_python_backend(app_handle: AppHandle) {
     
     let exe_path = std::env::current_exe().unwrap();
     let binding = exe_path;
+    // exe: .../llm-assistant-tauri/src-tauri/target/release/llm-assistant-tauri.exe
+    // parent: release -> target -> src-tauri -> llm-assistant-tauri -> llm-assistant
     let project_dir = binding
+        .parent().unwrap()
         .parent().unwrap()
         .parent().unwrap()
         .parent().unwrap()
