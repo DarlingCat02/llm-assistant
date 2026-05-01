@@ -7,9 +7,29 @@ struct AppState {
     python_process: Option<std::process::Child>,
 }
 
+impl Drop for AppState {
+    fn drop(&mut self) {
+        if let Some(mut process) = self.python_process.take() {
+            info!("Остановка Python процесса...");
+            let _ = process.kill();
+        }
+    }
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+fn stop_python_backend(app_handle: &AppHandle) {
+    if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
+        if let Ok(mut state) = state.lock() {
+            if let Some(mut process) = state.python_process.take() {
+                info!("Остановка Python процесса...");
+                let _ = process.kill();
+            }
+        }
+    }
 }
 
 fn start_python_backend(app_handle: AppHandle) {
@@ -19,8 +39,6 @@ fn start_python_backend(app_handle: AppHandle) {
     
     let exe_path = std::env::current_exe().unwrap();
     let binding = exe_path;
-    // exe: .../llm-assistant-tauri/src-tauri/target/release/llm-assistant-tauri.exe
-    // parent: release -> target -> src-tauri -> llm-assistant-tauri -> llm-assistant
     let project_dir = binding
         .parent().unwrap()
         .parent().unwrap()
@@ -86,12 +104,16 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             info!("Настройка приложения...");
-            
             start_python_backend(app.handle().clone());
             setup_global_shortcuts(app.handle());
-            
             info!("Приложение готово!");
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                info!("Закрытие приложения...");
+                stop_python_backend(window.app_handle());
+            }
         })
         .invoke_handler(tauri::generate_handler![greet])
         .run(tauri::generate_context!())
