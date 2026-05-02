@@ -307,15 +307,27 @@ class LLMEngine:
     
     async def _generate_single(self, payload: dict) -> LLMResponse:
         """Обычный режим (ждём полный ответ)."""
-        response = await self._client.post("/chat/completions", json=payload)
+        # Для Ollama используем /api/chat/completions
+        endpoint = "/chat/completions"
+        if self._config.provider == LLMProvider.OLLAMA:
+            endpoint = "/api/chat"
+        
+        response = await self._client.post(endpoint, json=payload)
         response.raise_for_status()
         data = response.json()
         
-        # OpenAI-совместимый формат ответа
-        choice = data.get("choices", [{}])[0]
-        message_data = choice.get("message", {})
-        content = message_data.get("content", "")
-        model = data.get("model", self._config.model)
+        # Парсим ответ в зависимости от провайдера
+        if self._config.provider == LLMProvider.OLLAMA:
+            # Ollama format: {"message": {"role": "assistant", "content": "..."}}
+            message_data = data.get("message", {})
+            content = message_data.get("content", "")
+            model = data.get("model", self._config.model)
+        else:
+            # OpenAI format: {"choices": [{"message": {...}}]}
+            choice = data.get("choices", [{}])[0]
+            message_data = choice.get("message", {})
+            content = message_data.get("content", "")
+            model = data.get("model", self._config.model)
         
         # Парсим tool calls если есть
         tool_calls = []
@@ -334,13 +346,17 @@ class LLMEngine:
                     f"{[tc.name for tc in tool_calls]}"
                 )
         
-        # Получаем usage информацию
-        usage = data.get("usage", {})
+        # Получаем duration информацию
         total_duration = 0
-        if usage:
-            # Примерная оценка: ~50ms на токен
-            total_tokens = usage.get("total_tokens", 0)
-            total_duration = total_tokens * 50_000_000  # наносекунды
+        if self._config.provider == LLMProvider.OLLAMA:
+            # Ollama returns total_duration directly (in nanoseconds)
+            total_duration = data.get("total_duration", 0)
+        else:
+            # OpenAI format: {"usage": {...}}
+            usage = data.get("usage", {})
+            if usage:
+                total_tokens = usage.get("total_tokens", 0)
+                total_duration = total_tokens * 50_000_000  # наносекунды
         
         llm_response = LLMResponse(
             content=content,

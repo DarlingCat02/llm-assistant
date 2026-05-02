@@ -20,7 +20,7 @@ try {
         import('@tauri-apps/api/event').then(({ listen }) => {
             listen('hotkey-voice', () => {
                 console.log('Горячая клавиша: Голосовой ввод');
-                startVoiceInput();
+                toggleVoiceRecording();
             });
             listen('hotkey-live', () => {
                 console.log('Горячая клавиша: Live режим');
@@ -67,14 +67,19 @@ function initEventListeners() {
     // Кнопки
     document.getElementById('new-chat-btn').addEventListener('click', createNewChat);
     document.getElementById('send-btn').addEventListener('click', sendMessage);
+    document.getElementById('voice-btn').addEventListener('click', toggleVoiceRecording);
     document.getElementById('clear-chat-btn').addEventListener('click', clearChat);
     document.getElementById('delete-chat-btn').addEventListener('click', deleteChat);
     document.getElementById('memory-btn').addEventListener('click', toggleMemoryPanel);
     document.getElementById('status-btn').addEventListener('click', showStatus);
+    document.getElementById('settings-btn').addEventListener('click', openSettings);
     document.getElementById('close-memory-btn').addEventListener('click', toggleMemoryPanel);
     document.getElementById('memory-search-btn').addEventListener('click', searchMemory);
     document.getElementById('memory-add-btn').addEventListener('click', addMemoryEntry);
     document.getElementById('close-status-btn').addEventListener('click', hideStatus);
+    document.getElementById('close-settings-btn').addEventListener('click', closeSettings);
+    document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
+    document.getElementById('provider-select').addEventListener('change', onProviderChange);
     
     // Enter для отправки
     document.getElementById('message-input').addEventListener('keydown', (e) => {
@@ -618,6 +623,125 @@ function hideStatus() {
     }
 }
 
+// === Настройки ===
+async function openSettings() {
+    const modal = document.getElementById('settings-modal');
+    modal.classList.remove('hidden');
+    
+    // Загружаем текущие настройки
+    try {
+        const response = await fetch(`${API_BASE}/api/config`);
+        const config = await response.json();
+        
+        document.getElementById('provider-select').value = config.provider || 'ollama';
+        document.getElementById('ollama-host-input').value = config.ollama_host || 'http://localhost:11434';
+        document.getElementById('api-key-input').value = config.api_key || '';
+        
+        onProviderChange();
+        await loadModelsForProvider(config.provider || 'ollama');
+        
+        // Выбрать текущую модель
+        const modelSelect = document.getElementById('model-select');
+        if (config.model) {
+            modelSelect.value = config.model;
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки настроек:', error);
+    }
+}
+
+function closeSettings() {
+    const modal = document.getElementById('settings-modal');
+    modal.classList.add('hidden');
+}
+
+function onProviderChange() {
+    const provider = document.getElementById('provider-select').value;
+    const apiKeySection = document.getElementById('api-key-section');
+    const ollamaHostSection = document.getElementById('ollama-host-input').parentElement;
+    const hostInput = document.getElementById('ollama-host-input');
+    
+    if (provider === 'openrouter') {
+        apiKeySection.classList.remove('hidden');
+        ollamaHostSection.classList.add('hidden');
+    } else if (provider === 'lm_studio') {
+        apiKeySection.classList.add('hidden');
+        ollamaHostSection.classList.remove('hidden');
+        // LM Studio по умолчанию на порту 1234
+        if (hostInput.value.includes('11434')) {
+            hostInput.value = 'http://localhost:1234';
+        }
+    } else {
+        // Ollama
+        apiKeySection.classList.add('hidden');
+        ollamaHostSection.classList.remove('hidden');
+        if (hostInput.value.includes('1234')) {
+            hostInput.value = 'http://localhost:11434';
+        }
+    }
+    
+    loadModelsForProvider(provider);
+}
+
+async function loadModelsForProvider(provider) {
+    const modelSelect = document.getElementById('model-select');
+    modelSelect.innerHTML = '<option value="">Загрузка...</option>';
+    
+    // Получаем хост из настроек
+    const hostInput = document.getElementById('ollama-host-input');
+    const host = hostInput.value || 'http://localhost:11434';
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/models?provider=${provider}&host=${encodeURIComponent(host)}`);
+        const data = await response.json();
+        
+        modelSelect.innerHTML = '';
+        if (data.models && data.models.length > 0) {
+            data.models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model;
+                option.textContent = model;
+                modelSelect.appendChild(option);
+            });
+        } else {
+            modelSelect.innerHTML = '<option value="">Нет моделей</option>';
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки моделей:', error);
+        modelSelect.innerHTML = '<option value="">Ошибка</option>';
+    }
+}
+
+async function saveSettings() {
+    const provider = document.getElementById('provider-select').value;
+    const model = document.getElementById('model-select').value;
+    const ollamaHost = document.getElementById('ollama-host-input').value;
+    const apiKey = document.getElementById('api-key-input').value;
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/config`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                provider,
+                model,
+                ollama_host: ollamaHost,
+                api_key: apiKey,
+            }),
+        });
+        
+        if (response.ok) {
+            alert('Настройки сохранены! Перезапустите приложение для применения.');
+            closeSettings();
+        } else {
+            alert('Ошибка сохранения настроек');
+        }
+    } catch (error) {
+        console.error('Ошибка сохранения:', error);
+        alert('Ошибка сохранения настроек');
+    }
+}
+
 // Закрытие модалки при клике вне контента
 document.addEventListener('click', (e) => {
     const modal = document.getElementById('status-modal');
@@ -727,6 +851,188 @@ function startLiveMode() {
 function stopLiveMode() {
     const input = document.getElementById('message-input');
     input.placeholder = 'Введите сообщение...';
+}
+
+// === Voice Recording (Web Audio API + VAD) ===
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let isProcessingVoice = false;
+let voiceActivityTimeout = null;
+const SILENCE_THRESHOLD = 0.01;
+const SILENCE_DURATION = 2000; // 2 seconds of silence to stop
+
+async function toggleVoiceRecording() {
+    if (isProcessingVoice) return; // Блокируем во время обработки
+    if (isRecording) {
+        stopVoiceRecording();
+    } else {
+        await startVoiceRecording();
+    }
+}
+
+async function startVoiceRecording() {
+    if (isProcessingVoice) return; // Блокируем во время обработки
+    
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        audioChunks = [];
+        mediaRecorder = new MediaRecorder(stream, {
+            mimeType: 'audio/webm;codecs=opus'
+        });
+        
+        mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                audioChunks.push(event.data);
+            }
+        };
+        
+        mediaRecorder.onstop = async () => {
+            isProcessingVoice = true; // Блокируем повторную запись пока обрабатываем
+            stream.getTracks().forEach(track => track.stop());
+            
+            // Ждём 1 секунду перед отправкой
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            await processVoiceRecording();
+            isProcessingVoice = false;
+        };
+        
+        // Начинаем запись
+        mediaRecorder.start(100);
+        isRecording = true;
+        
+        // UI - показываем что записываем
+        const voiceBtn = document.getElementById('voice-btn');
+        voiceBtn.classList.add('recording');
+        voiceBtn.disabled = true;
+        
+        // Начинаем мониторинг голосовой активности
+        monitorVoiceActivity(stream);
+        
+        console.log('Запись голоса начата...');
+        
+    } catch (error) {
+        console.error('Ошибка доступа к микрофону:', error);
+        alert('Не удалось получить доступ к микрофону');
+    }
+}
+
+function monitorVoiceActivity(stream) {
+    const audioContext = new AudioContext();
+    const analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(stream);
+    
+    source.connect(analyser);
+    analyser.fftSize = 256;
+    
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    
+    const checkLevel = () => {
+        if (!isRecording) return;
+        
+        analyser.getByteFrequencyData(dataArray);
+        
+        // Вычисляем средний уровень
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+        }
+        const average = sum / dataArray.length / 255;
+        
+        if (average > SILENCE_THRESHOLD) {
+            // Есть звук - сбрасываем таймер
+            if (voiceActivityTimeout) {
+                clearTimeout(voiceActivityTimeout);
+            }
+            // Запускаем новый таймер на остановку после тишины
+            voiceActivityTimeout = setTimeout(() => {
+                console.log('Тишина detected - останавливаем запись');
+                stopVoiceRecording();
+            }, SILENCE_DURATION);
+        }
+        
+        if (isRecording) {
+            requestAnimationFrame(checkLevel);
+        }
+    };
+    
+    checkLevel();
+}
+
+function stopVoiceRecording() {
+    if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        isRecording = false;
+        
+        if (voiceActivityTimeout) {
+            clearTimeout(voiceActivityTimeout);
+            voiceActivityTimeout = null;
+        }
+        
+        const voiceBtn = document.getElementById('voice-btn');
+        voiceBtn.classList.remove('recording');
+        voiceBtn.disabled = false;
+        
+        console.log('Запись голоса остановлена');
+    }
+}
+
+async function processVoiceRecording() {
+    if (audioChunks.length === 0) {
+        console.log('Нет аудио данных');
+        return;
+    }
+    
+    console.log('Обработка записи...');
+    
+    // Собираем аудио в blob
+    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+    
+    // Показываем индикатор обработки
+    const voiceBtn = document.getElementById('voice-btn');
+    voiceBtn.textContent = '⏳';
+    voiceBtn.disabled = true;
+    
+    try {
+        // Отправляем на сервер
+        const formData = new FormData();
+        formData.append('file', audioBlob, 'recording.webm');
+        
+        const response = await fetch(`${API_BASE}/api/stt`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            throw new Error(`STT error: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success && data.text) {
+            // Вставляем текст в поле ввода
+            const input = document.getElementById('message-input');
+            input.value = data.text;
+            input.focus();
+            console.log('Распознано:', data.text);
+            
+            // Автоматически отправляем сообщение
+            sendMessage();
+        } else {
+            console.log('Пустой результат распознавания');
+        }
+        
+    } catch (error) {
+        console.error('Ошибка STT:', error);
+        alert('Ошибка распознавания голоса: ' + error.message);
+    } finally {
+        // Возвращаем кнопку в_NORMALное состояние
+        voiceBtn.textContent = '🎤';
+        voiceBtn.disabled = false;
+        audioChunks = [];
+    }
 }
 
 // Глобальная функция для удаления записей памяти

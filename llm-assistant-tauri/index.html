@@ -22,6 +22,7 @@
             <div class="sidebar-footer">
                 <button id="memory-btn" class="btn-secondary">🧠 Память</button>
                 <button id="status-btn" class="btn-secondary">📊 Статус</button>
+                <button id="settings-btn" class="btn-secondary">⚙️ Настройки</button>
             </div>
         </aside>
         
@@ -49,6 +50,7 @@
                     <span>🧠 Рассуждение</span>
                 </label>
                 <div class="input-row">
+                    <button id="voice-btn" class="btn-icon voice-btn" title="Голосовой ввод (Ctrl+Num0)">🎤</button>
                     <textarea 
                         id="message-input" 
                         placeholder="Введите сообщение..." 
@@ -100,6 +102,39 @@
             <h3>📊 Статус системы</h3>
             <div id="status-content"></div>
             <button id="close-status-btn" class="btn-primary">Закрыть</button>
+        </div>
+    </div>
+    
+    <!-- Модальное окно настроек -->
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-content settings-modal">
+            <h3>⚙️ Настройки</h3>
+            <div class="settings-section">
+                <label for="provider-select">Провайдер:</label>
+                <select id="provider-select" class="settings-select">
+                    <option value="ollama">Ollama (локально)</option>
+                    <option value="lm_studio">LM Studio (локально)</option>
+                    <option value="openrouter">OpenRouter (облако)</option>
+                </select>
+            </div>
+            <div class="settings-section">
+                <label for="model-select">Модель:</label>
+                <select id="model-select" class="settings-select">
+                    <option value="">Загрузка...</option>
+                </select>
+            </div>
+            <div id="api-key-section" class="settings-section hidden">
+                <label for="api-key-input">API ключ:</label>
+                <input type="password" id="api-key-input" class="settings-input" placeholder="Введите API ключ...">
+            </div>
+            <div class="settings-section">
+                <label for="ollama-host-input">Ollama хост:</label>
+                <input type="text" id="ollama-host-input" class="settings-input" value="http://localhost:11434">
+            </div>
+            <div class="settings-buttons">
+                <button id="save-settings-btn" class="btn-primary">Сохранить</button>
+                <button id="close-settings-btn" class="btn-secondary">Отмена</button>
+            </div>
         </div>
     </div>
     

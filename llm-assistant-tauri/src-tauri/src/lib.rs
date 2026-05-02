@@ -35,7 +35,12 @@ fn stop_python_backend(app_handle: &AppHandle) {
 fn start_python_backend(app_handle: AppHandle) {
     info!("Запуск Python бэкенда...");
     
-    let python_cmd = if cfg!(windows) { "python" } else { "python3" };
+    // На Windows пробуем разные варианты python
+    let python_cmds = if cfg!(windows) {
+        vec!["python", "python3", "py"]
+    } else {
+        vec!["python3", "python"]
+    };
     
     let exe_path = std::env::current_exe().unwrap();
     let binding = exe_path;
@@ -48,7 +53,31 @@ fn start_python_backend(app_handle: AppHandle) {
     
     info!("Project dir: {:?}", project_dir);
     
-    let child = Command::new(python_cmd)
+    // Пробуем найти рабочую команду python
+    let mut python_cmd = None;
+    for cmd in &python_cmds {
+        let test = Command::new(cmd)
+            .arg("--version")
+            .output();
+        
+        if let Ok(output) = test {
+            if output.status.success() {
+                info!("Найден python: {}", cmd);
+                python_cmd = Some(cmd.to_string());
+                break;
+            }
+        }
+    }
+    
+    let python = match python_cmd {
+        Some(cmd) => cmd,
+        None => {
+            error!("Python не найден в системе");
+            return;
+        }
+    };
+    
+    let child = Command::new(&python)
         .args(["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"])
         .current_dir(project_dir)
         .spawn();
@@ -71,6 +100,7 @@ fn setup_global_shortcuts(app: &AppHandle) {
     
     let voice_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV);
     let live_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyL);
+    let voice_num0_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Numpad0);
     
     let app_handle = app.clone();
     app.global_shortcut().on_shortcut(voice_shortcut, move |_app, _shortcut, _event| {
@@ -88,7 +118,16 @@ fn setup_global_shortcuts(app: &AppHandle) {
         }
     }).ok();
     
-    info!("Горячие клавиши зарегистрированы: Ctrl+Shift+V (голос), Ctrl+Shift+L (live)");
+    // Ctrl+Num0 для голосового ввода
+    let app_handle3 = app.clone();
+    app.global_shortcut().on_shortcut(voice_num0_shortcut, move |_app, _shortcut, _event| {
+        info!("Горячая клавиша: Voice Input (Ctrl+Num0)");
+        if let Some(window) = app_handle3.get_webview_window("main") {
+            let _ = window.emit("hotkey-voice", ());
+        }
+    }).ok();
+    
+    info!("Горячие клавиши зарегистрированы: Ctrl+Shift+V, Ctrl+Num0 (голос), Ctrl+Shift+L (live)");
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

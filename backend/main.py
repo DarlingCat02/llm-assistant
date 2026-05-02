@@ -21,10 +21,11 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request, HTTPException, Depends, WebSocket
+from fastapi import FastAPI, Request, HTTPException, Depends, WebSocket, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.datastructures import UploadFile
 
 # Добавляем родительскую директорию в path для импортов
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -366,6 +367,79 @@ async def get_status():
     }
 
 
+@app.get("/api/config")
+async def get_current_config():
+    """Получить текущую конфигурацию."""
+    if not _config:
+        return {"provider": "ollama", "model": "", "ollama_host": "http://localhost:11434", "api_key": ""}
+    
+    return {
+        "provider": _config.llm.provider.value,
+        "model": _config.llm.model,
+        "ollama_host": _config.llm.host,
+        "api_key": _config.llm.api_key or "",
+    }
+
+
+@app.put("/api/config")
+async def update_config(request: dict):
+    """Обновить конфигурацию (сохраняется в .env файл)."""
+    from config import get_config, save_config
+    
+    provider = request.get("provider", "ollama")
+    model = request.get("model", "")
+    ollama_host = request.get("ollama_host", "http://localhost:11434")
+    api_key = request.get("api_key", "")
+    
+    # Сохраняем в .env
+    save_config(provider=provider, model=model, ollama_host=ollama_host, api_key=api_key)
+    
+    return {"status": "ok", "message": "Конфигурация сохранена в .env"}
+
+
+@app.get("/api/models")
+async def get_models(provider: str = "ollama", host: str = "http://localhost:11434"):
+    """Получить список моделей для провайдера."""
+    import httpx
+    
+    if provider == "ollama":
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{host}/api/tags")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    models = [m["name"] for m in data.get("models", [])]
+                    return {"models": models}
+        except Exception as e:
+            return {"models": [], "error": str(e)}
+    
+    elif provider == "lm_studio":
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get("http://localhost:1234/v1/models")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    models = [m["id"] for m in data.get("data", [])]
+                    return {"models": models}
+        except Exception as e:
+            return {"models": [], "error": str(e)}
+    
+    elif provider == "openrouter":
+        # OpenRouter не имеет простого API для списка моделей
+        # Используем популярные модели по умолчанию
+        return {
+            "models": [
+                "qwen/qwen2.5-7b-instruct",
+                "qwen/qwen2.5-32b-instruct",
+                "meta-llama/llama-3.1-8b-instruct",
+                "google/gemma-2-9b-it",
+                "anthropic/claude-3.5-sonnet",
+            ]
+        }
+    
+    return {"models": []}
+
+
 # === Статический фронтенд ===
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -401,6 +475,60 @@ async def serve_static(path: str):
         raise HTTPException(status_code=404, detail="Файл не найден")
     
     return FileResponse(file_path)
+
+
+# === STT (Speech-to-Text) ===
+
+_stt_engine = None
+
+async def get_stt_engine():
+    """Получить или создать STT движок."""
+    global _stt_engine
+    if _stt_engine is None:
+        from src.stt_engine import get_stt_engine
+        _stt_engine = get_stt_engine()
+        await _stt_engine.initialize()
+    return _stt_engine
+
+
+@app.post("/api/stt")
+async def stt_transcribe(file: UploadFile = File(...)):
+    """
+    Распознать речь из аудио файла.
+    
+    Принимает аудио файл (webm, wav, mp3) и возвращает распознанный текст.
+    """
+    logger.info(f"Получен аудио файл: {file.filename}, тип: {file.content_type}")
+    
+    # Проверяем формат
+    allowed_types = ["audio/webm", "audio/wav", "audio/wave", "audio/x-wav", "audio/mp3", "audio/mpeg", "audio/ogg", "audioopus"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Неподдерживаемый формат: {file.content_type}. Используйте webm, wav или mp3"
+        )
+    
+    try:
+        # Инициализируем STT если нужно
+        stt = await get_stt_engine()
+        
+        # Читаем аудио
+        audio_data = await file.read()
+        
+        # Определяем формат
+        ext = file.filename.split(".")[-1] if "." in file.filename else "webm"
+        
+        # Распознаём
+        logger.info("Начало распознавания...")
+        text = await stt.transcribe_bytes(audio_data, format=ext)
+        
+        logger.info(f"Распознано: {text[:100]}...")
+        
+        return {"text": text, "success": True}
+        
+    except Exception as e:
+        logger.error(f"Ошибка STT: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка распознавания: {str(e)}")
 
 
 # === Запуск ===

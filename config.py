@@ -80,7 +80,7 @@ class LLMConfig(BaseConfig):
         description="API-ключ (нужен для OpenRouter)",
     )
     model: str = Field(
-        default="qwen2.5:7b",
+        default="",
         description="Модель для генерации ответов",
     )
     num_ctx: int = Field(
@@ -102,13 +102,16 @@ class LLMConfig(BaseConfig):
     def api_base_url(self) -> str:
         """
         Получить базовый URL API для текущего провайдера.
-        
-        Returns:
-            str: URL для OpenAI-совместимого endpoint.
         """
         if self.provider == LLMProvider.OPENROUTER:
             return "https://openrouter.ai/api/v1"
-        return f"{self.host}/v1"
+        elif self.provider == LLMProvider.LM_STUDIO:
+            if "localhost" in self.host and ":" not in self.host:
+                return "http://localhost:1234/v1"
+            return f"{self.host}/v1"
+        else:
+            # Ollama - без /v1
+            return self.host
     
     @property
     def requires_api_key(self) -> bool:
@@ -342,3 +345,53 @@ def setup_logging(config: Config | None = None) -> None:
     
     logger = logging.getLogger(__name__)
     logger.info(f"Логирование настроено: уровень {config.log.level}")
+
+
+def save_config(
+    provider: str = None,
+    model: str = None,
+    ollama_host: str = None,
+    api_key: str = None,
+) -> None:
+    """
+    Сохранить конфигурацию в .env файл.
+    """
+    from pathlib import Path
+    
+    env_path = Path(__file__).parent / ".env"
+    
+    # Читаем текущий .env
+    env_vars = {}
+    if env_path.exists():
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and "=" in line:
+                    key, value = line.split("=", 1)
+                    env_vars[key] = value
+    
+    # Обновляем значения
+    if provider is not None:
+        env_vars["LLM_PROVIDER"] = provider
+    
+    # Модель сохраняем только если не пустая
+    if model is not None and model != "":
+        # Сохраняем в зависимости от провайдера
+        if provider == "ollama":
+            env_vars["OLLAMA_MODEL"] = model
+            env_vars["LLM_MODEL"] = model
+        else:
+            env_vars["LLM_MODEL"] = model
+    
+    if ollama_host is not None:
+        env_vars["LLM_HOST"] = ollama_host
+        if provider == "ollama":
+            env_vars["OLLAMA_HOST"] = ollama_host
+    
+    if api_key is not None:
+        env_vars["LLM_API_KEY"] = api_key
+    
+    # Записываем обратно
+    with open(env_path, "w", encoding="utf-8") as f:
+        for key, value in env_vars.items():
+            f.write(f"{key}={value}\n")
