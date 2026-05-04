@@ -49,6 +49,30 @@
                     <input type="checkbox" id="thinking-toggle">
                     <span>🧠 Рассуждение</span>
                 </label>
+                <label class="tts-toggle">
+                    <input type="checkbox" id="tts-toggle">
+                    <span>🔊 TTS</span>
+                </label>
+                <div class="tts-mode-group">
+                    <label class="tts-mode">
+                        <input type="radio" name="tts-mode" value="instruct" checked>
+                        <span>🎭 Синтез</span>
+                    </label>
+                    <label class="tts-mode">
+                        <input type="radio" name="tts-mode" value="clone">
+                        <span>🎤 Клон</span>
+                    </label>
+                </div>
+                <select id="tts-voice-select" class="tts-voice-select" title="Выбор голоса TTS">
+                    <option value="female">👩 Женский</option>
+                    <option value="male">👨 Мужской</option>
+                    <option value="female, russian">🇷🇺 Женский (Русский)</option>
+                    <option value="female, young">👧 Молодой</option>
+                    <option value="female, low pitch">👩 Низкий</option>
+                </select>
+                <select id="tts-clone-select" class="tts-voice-select" title="Выбор голоса для клонирования" style="display: none;">
+                    <option value="">Загрузка...</option>
+                </select>
                 <div class="input-row">
                     <button id="voice-btn" class="btn-icon voice-btn" title="Голосовой ввод (Ctrl+Num0)">🎤</button>
                     <textarea 

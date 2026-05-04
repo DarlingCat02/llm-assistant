@@ -157,6 +157,79 @@ body {
     color: var(--accent-color);
 }
 
+.tts-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-secondary);
+    padding: 8px 12px;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+.tts-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.tts-toggle input {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--accent-color);
+}
+
+.tts-toggle:has(input:checked) {
+    color: var(--accent-color);
+}
+
+.tts-voice-select {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    outline: none;
+}
+
+.tts-voice-select:hover {
+    border-color: var(--accent-color);
+}
+
+.tts-mode-group {
+    display: flex;
+    gap: 8px;
+}
+
+.tts-mode {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 6px 8px;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+.tts-mode:hover {
+    background: var(--bg-hover);
+}
+
+.tts-mode input {
+    cursor: pointer;
+    accent-color: var(--accent-color);
+}
+
+.tts-mode:has(input:checked) {
+    color: var(--accent-color);
+    background: var(--bg-hover);
+}
+
 .messages-container {
     flex: 1;
     overflow-y: auto;

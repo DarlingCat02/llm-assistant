@@ -1,162 +1,213 @@
 # Local AI Assistant
 
-Локальный AI-ассистент с модульной архитектурой. Поддерживает **Ollama**, **LM Studio** и **OpenRouter**.
+Локальный AI-ассистент с голосовым вводом/выводом для Windows.
 
-**Особенности:**
-- 🖥️ Графический интерфейс (Tauri desktop app)
-- 🧠 Долговременная память на ChromaDB
-- 🎤 Голосовой ввод (STT) — Whisper локально
-- 🔊 Голосовой вывод (TTS) — в разработке
-- 🎨 Тёмная тема UI
-- 🚀 Глобальные горячие клавиши (работают вне окна)
+## Особенности
+
+- 🎙️ **Голосовой ввод (STT)** - локальный Whisper без интернета
+- 🔊 **Голосовой вывод (TTS)** - OmniVoice синтез и клонирование голоса
+- 🖥️ **Desktop app** - Tauri (exe файл)
+- 🧠 **Долговременная память** - ChromaDB
+- ⚡ **Быстрый** - работает на локальных моделях через Ollama
+- ⌨️ **Глобальные горячие клавиши** - работают вне окна приложения
+
+## Требования
+
+- Windows 10/11
+- Python 3.11+
+- Ollama (для LLM)
+- GPU с 8GB+ VRAM (для OmniVoice + Whisper)
 
 ## Быстрый старт
 
-### Запуск (Tauri Desktop)
+### 1. Установка Ollama
 
+Скачайте с https://ollama.com и установите. Затем:
 ```bash
-# Запустите exe: llm-assistant-tauri\src-tauri\target\release\llm-assistant-tauri.exe
-# или установите: llm-assistant-tauri\src-tauri\target\release\bundle\nsis\Local AI Assistant_1.0.0_x64-setup.exe
+ollama pull llama3.2:3b
 ```
 
-Приложение автоматически запускает Python backend и веб-интерфейс.
+### 2. Скачайте exe
 
-### Запуск из исходников
+- **Installer:** `llm-assistant-tauri/src-tauri/target/release/bundle/nsis/Local AI Assistant_1.0.0_x64-setup.exe`
+- **Portable:** `llm-assistant-tauri/src-tauri/target/release/llm-assistant-tauri.exe`
 
+### 3. Запуск
+
+Запустите exe - приложение само запустит backend и откроет окно.
+
+## Настройка модели LLM
+
+Файл: `.env` (строка 5)
+```
+LLM_MODEL=llama3.2:3b
+```
+
+Доступные модели:
 ```bash
-cd local_assistant
-
-# Установка зависимостей Python
-pip install -r requirements.txt
-pip install -r backend/requirements.txt
-
-# Создайте .env из .env.example и настройте модель
-
-# Запуск веб-сервера
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+ollama list
+ollama pull qwen2.5:1.5b
 ```
 
 ## Голосовой ввод (STT)
-
-### Используемые модели
-
-- **STT**: [Whisper Large V3 Turbo](https://huggingface.co/openai/whisper-large-v3-turbo)
-- Модель должна быть в папке: `llm-assistant-tauri/src-tauri/target/release/openai_whisper-large-v3-turbo`
-
-### Установка модели
-
-```bash
-# Скачайте модель с HuggingFace и распакуйте в нужную папку
-# Или используйте скрипт загрузки (добавить позже)
-```
 
 ### Горячие клавиши
 
 | Действие | Клавиша |
 |----------|---------|
-| Голосовой ввод | `Ctrl+Num0` (цифровая клавиатура) |
-| Голосовой ввод (альтернатива) | `Ctrl+Shift+V` |
-| Live-режим (непрерывный чат) | `Ctrl+Shift+L` |
+| Голосовой ввод | `Ctrl+Num0` |
+| Остановка записи | `Ctrl+Num0` (повторно) |
+
+После остановки - 1 секунда паузы, затем текст отправляется AI.
 
 ### Как изменить горячие клавиши
 
 Файл: `llm-assistant-tauri/src-tauri/src/lib.rs`
-
 ```rust
-fn setup_global_shortcuts(app: &AppHandle) {
-    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-    
-    // Измените здесь
-    let voice_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Numpad0); // Ctrl+Num0
-    
-    // Добавьте новые:
-    // Modifiers::CONTROL | Modifiers::SHIFT - Ctrl+Shift
-    // Modifiers::ALT - Alt
-    // Code::KeyA, Code::KeyB, и т.д. - буквы
-    // Code::Numpad1..Code::Numpad0 - цифры на цифровой клавиатуре
-}
+let voice_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Numpad0);
 ```
 
-После изменения пересоберите: `cd llm-assistant-tauri && npm run tauri build`
+После изменения: `cd llm-assistant-tauri && npm run tauri build`
 
-### Как это работает
+## Голосовой вывод (TTS)
 
-1. Нажмите `Ctrl+Num0` → запись начнётся (кнопка микрофона анимируется)
-2. Говорите → VAD автоматически остановит запись через 2 сек тишины
-3. Нажмите `Ctrl+Num0` ещё раз → запись остановится
-4. Через 1 секунду текст отправится AI и ответ придёт голосом (если TTS включён)
+### OmniVoice
 
-## Настройка LLM
+Используется [OmniVoice](https://github.com/k2-fsa/OmniVoice) для синтеза и клонирования голоса.
 
-### Ollama (рекомендуется)
+### Режимы
+
+1. **Синтез (Synthesis)** - генерация голоса по текстовому описанию
+2. **Клонирование (Clone)** - копирование голоса из референсного аудио
+
+### Настройка голоса в UI
+
+1. Включите TTS переключателем
+2. Выберите режим: Synthesis или Clone
+3. Для Clone - выберите аудио файл из папки `voices/`
+
+### Параметры TTS
+
+```python
+num_step=32        # Шаги диффузии (меньше = быстрее)
+guidance_scale=2.0  # Сила следования инструкции
+seed=468556206     # Фиксированный сид для стабильности (режим синтеза)
+```
+
+### Голоса для клонирования
+
+Добавьте аудио файлы в папку `voices/`:
+- Формат: MP3, WAV
+- Рекомендуемая длительность: 3-10 секунд
+- Язык: тот же, что планируете использовать для синтеза
+
+## Локальные модели
+
+### Whisper (STT)
+
+Модель должна быть скачана в:
+```
+llm-assistant-tauri/src-tauri/target/release/openai_whisper-large-v3-turbo
+```
+
+### OmniVoice (TTS)
+
+Модель должна быть скачана в:
+```
+llm-assistant-tauri/src-tauri/target/release/OmniVoice
+```
+
+Скачать можно через HuggingFace:
+- Whisper: https://huggingface.co/openai/whisper-large-v3-turbo
+- OmniVoice: https://huggingface.co/k2-fsa/OmniVoice
+
+## Конфигурация (.env)
 
 ```env
+# LLM
 LLM_PROVIDER=ollama
-LLM_MODEL=qwen2.5:7b
-```
-Установка: https://ollama.ai
+LLM_MODEL=llama3.2:3b
+LLM_HOST=http://localhost:11434
+LLM_NUM_CTX=4096
+LLM_TEMPERATURE=0.7
 
-### LM Studio
+# ChromaDB
+CHROMA_PERSIST_DIR=./storage/chroma
 
-```env
-LLM_PROVIDER=lm_studio
-LLM_MODEL=qwen2.5-7b-instruct
-```
+# Память
+MEMORY_MAX_CONTEXT=20
+MEMORY_SEARCH_RESULTS=3
 
-### OpenRouter (облачный)
+# TTS
+TTS_ENABLED=false
 
-```env
-LLM_PROVIDER=openrouter
-LLM_MODEL=openai/gpt-4o
-LLM_API_KEY=sk-or-v1-...
-```
-
-## Структура проекта
-
-```
-local_assistant/
-├── .env.example
-├── config.py
-├── requirements.txt
-├── backend/
-│   ├── main.py           # FastAPI + STT endpoint
-│   └── requirements.txt
-├── src/
-│   ├── llm_engine.py     # Ollama API
-│   ├── stt_engine.py     # Whisper STT
-│   └── memory_manager.py # ChromaDB
-├── llm-assistant-tauri/  # Desktop app (Tauri)
-│   ├── src-tauri/
-│   │   ├── src/lib.rs    # Global shortcuts
-│   │   └── tauri.conf.json
-│   └── src/
-│       ├── app.js        # Voice recording + VAD
-│       └── index.html    # UI
-└── storage/              # ChromaDB
+# Прочее
+LOG_LEVEL=INFO
 ```
 
 ## API Endpoints
 
 | Метод | Эндпоинт | Описание |
 |-------|----------|----------|
-| GET | `/api/status` | Статус |
-| POST | `/api/chat` | Чат с AI |
-| POST | `/api/stt` | Распознавание голоса |
+| GET | `/api/status` | Статус приложения |
+| POST | `/api/chat` | Отправить сообщение |
+| POST | `/api/stt` | Распознать голос |
 | GET | `/api/chats` | Список чатов |
-| DELETE | `/api/chats/{id}` | Удалить чат |
+| POST | `/api/tts/toggle` | Включить/выключить TTS |
+| POST | `/api/tts/config` | Настроить голос |
+| POST | `/api/tts/speak` | Озвучить текст |
 
-## Зависимости Python
+## Структура проекта
 
-```bash
-pip install transformers torch torchaudio librosa numpy
+```
+local_assistant/
+├── .env                 # Конфигурация
+├── config.py            # Python конфиг
+├── README.md            # Этот файл
+├── backend/
+│   ├── main.py          # FastAPI backend
+│   └── requirements.txt
+├── src/
+│   ├── main.py          # Assistant логика
+│   ├── llm_engine.py    # Ollama/LM Studio/OpenRouter
+│   ├── stt_engine.py    # Whisper STT
+│   ├── tts_engine.py    # OmniVoice TTS
+│   └── memory_manager.py # ChromaDB память
+├── llm-assistant-tauri/ # Tauri desktop app
+│   ├── src-tauri/
+│   │   ├── src/lib.rs   # Глобальные горячие клавиши
+│   │   └── target/release/
+│   │       ├── OmniVoice/           # TTS модель
+│   │       └── openai_whisper-*/    # STT модель
+│   └── src/
+│       ├── app.js        # Voice recording + VAD
+│       ├── index.html    # UI
+│       └── style.css
+├── storage/             # ChromaDB данные
+└── voices/              # Голоса для клонирования
 ```
 
-## Требования
+## Оптимизация скорости
 
-- Python 3.11+
-- 8GB RAM (рекомендуется 16GB)
-- GPU с 6GB VRAM (для LLM + STT)
-- Windows 10/11
+1. **LLM** - используйте легкие модели (1.5-3B параметров)
+2. **TTS** - уменьшите `num_step` до 16-32
+3. **Кеширование** - при первом клоне транскрипция кешируется
+
+## Устранение проблем
+
+### TTS не работает
+
+1. Проверьте что FFmpeg доступен: `F:\ffmpeg\bin` в PATH
+2. Проверьте наличие моделей в папках
+
+### Модель не загружается
+
+1. Проверьте Ollama: `ollama list`
+2. Проверьте .env: `LLM_MODEL=llama3.2:3b`
+
+### Голос не клонируется
+
+Попробуйте режим Synthesis вместо Clone.
 
 ## Лицензия
 

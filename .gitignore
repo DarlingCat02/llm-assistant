@@ -8,3 +8,13 @@ venv/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
+
+# TTS debug output
+debug_tts/
+
+# User voice samples (add your own voices here)
+voices/
+
+# Tauri build output (generated)
+llm-assistant-tauri/src-tauri/target/
+llm-assistant-tauri/dist/

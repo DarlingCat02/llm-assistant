@@ -397,6 +397,159 @@ async def update_config(request: dict):
     return {"status": "ok", "message": "Конфигурация сохранена в .env"}
 
 
+@app.post("/api/tts/toggle")
+async def toggle_tts(enabled: bool):
+    """
+    Переключить TTS (OmniVoice) вкл/выкл.
+    
+    При enabled=True - загружает OmniVoice в память.
+    При enabled=False - выгружает OmniVoice из памяти.
+    """
+    if not _assistant:
+        raise HTTPException(status_code=503, detail="Ассистент не инициализирован")
+    
+    if enabled:
+        success = await _assistant._tts.enable_omnivoice()
+    else:
+        success = await _assistant._tts.disable_omnivoice()
+    
+    return {
+        "status": "ok",
+        "enabled": enabled,
+        "omnivoice_loaded": _assistant._tts.is_omnivoice_loaded if enabled else False,
+    }
+
+
+@app.get("/api/tts/status")
+async def get_tts_status():
+    """Получить статус TTS."""
+    if not _assistant or not _assistant._tts:
+        return {"enabled": False, "omnivoice_loaded": False}
+    
+    return {
+        "enabled": True,
+        "omnivoice_loaded": _assistant._tts.is_omnivoice_loaded,
+    }
+
+
+@app.post("/api/tts/config")
+async def tts_config(request: dict):
+    """
+    Настроить параметры TTS голоса.
+    
+    Параметры:
+    - instruct: описание голоса (female, male, female russian, и т.д.)
+    - position_temperature: 0 = стабильный, выше = случайный
+    - class_temperature: 0 = стабильный, выше = случайный
+    """
+    if not _assistant or not _assistant._tts:
+        raise HTTPException(status_code=503, detail="TTS не инициализирован")
+    
+    mode = request.get("mode", "instruct")  # "instruct" или "clone"
+    instruct = request.get("instruct", "female")
+    ref_audio = request.get("ref_audio", None)  # путь к файлу референса
+    position_temp = request.get("position_temperature", 0.0)
+    class_temp = request.get("class_temperature", 0.0)
+    
+    # Сохраняем конфиг в TTSEngine (фасад)
+    _assistant._tts.set_voice_config(
+        mode=mode,
+        instruct=instruct,
+        ref_audio=ref_audio,
+        position_temperature=position_temp,
+        class_temperature=class_temp,
+    )
+    
+    # Если OmniVoice уже загружен - применяем конфиг сразу
+    if _assistant._tts.is_omnivoice_loaded and hasattr(_assistant._tts._engine, 'set_voice_config'):
+        _assistant._tts._engine.set_voice_config(
+            mode=mode,
+            instruct=instruct,
+            ref_audio=ref_audio,
+            position_temperature=position_temp,
+            class_temperature=class_temp,
+        )
+        logger.info(f"Конфиг применён к уже загруженному OmniVoice: mode={mode}, ref={ref_audio}")
+    
+    return {
+        "status": "ok",
+        "mode": mode,
+        "instruct": instruct,
+        "ref_audio": ref_audio,
+        "position_temperature": position_temp,
+        "class_temperature": class_temp,
+    }
+
+
+@app.get("/api/tts/voices")
+async def get_voices():
+    """Получить список доступных голосов для клонирования."""
+    from pathlib import Path
+    
+    voices_dir = Path("E:/My_Python_Projects/OpenCode_test/local_assistant/voices")
+    voices = []
+    
+    if voices_dir.exists():
+        for f in voices_dir.iterdir():
+            if f.suffix.lower() in ['.wav', '.mp3', '.ogg', '.flac']:
+                voices.append({
+                    "name": f.stem,
+                    "file": f.name,
+                    "path": str(f),
+                })
+    
+    return {"voices": voices}
+
+
+@app.get("/api/tts/config")
+async def get_tts_config():
+    """Получить текущую конфигурацию TTS."""
+    if not _assistant or not _assistant._tts:
+        return {"instruct": "female", "position_temperature": 0.0, "class_temperature": 0.0}
+    
+    engine = _assistant._tts._engine
+    if hasattr(engine, '_instruct'):
+        return {
+            "instruct": engine._instruct,
+            "position_temperature": engine._position_temperature,
+            "class_temperature": engine._class_temperature,
+        }
+    
+    return {"instruct": "female", "position_temperature": 0.0, "class_temperature": 0.0}
+
+
+@app.post("/api/tts/speak")
+async def tts_speak(request: dict):
+    """
+    Синтезировать речь из текста и вернуть аудио.
+    """
+    if not _assistant or not _assistant._tts:
+        raise HTTPException(status_code=503, detail="TTS не инициализирован")
+    
+    text = request.get("text", "")
+    if not text:
+        raise HTTPException(status_code=400, detail="Текст не предоставлен")
+    
+    # Проверяем что OmniVoice загружен
+    if not _assistant._tts.is_omnivoice_loaded:
+        # Пробуем загрузить
+        await _assistant._tts.enable_omnivoice()
+    
+    # Синтезируем
+    result = await _assistant._tts.speak(text)
+    
+    if not result.success:
+        raise HTTPException(status_code=500, detail=result.error or "Ошибка синтеза")
+    
+    # Возвращаем аудио
+    from fastapi.responses import Response
+    return Response(
+        content=result.audio_data,
+        media_type="audio/wav",
+        headers={"Content-Disposition": "inline"},
+    )
+
+
 @app.get("/api/models")
 async def get_models(provider: str = "ollama", host: str = "http://localhost:11434"):
     """Получить список моделей для провайдера."""

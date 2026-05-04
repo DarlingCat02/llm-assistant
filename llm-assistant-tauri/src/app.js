@@ -68,6 +68,64 @@ function initEventListeners() {
     document.getElementById('new-chat-btn').addEventListener('click', createNewChat);
     document.getElementById('send-btn').addEventListener('click', sendMessage);
     document.getElementById('voice-btn').addEventListener('click', toggleVoiceRecording);
+    document.getElementById('tts-toggle').addEventListener('change', async (e) => {
+        const enabled = e.target.checked;
+        console.log('TTS переключено:', enabled);
+        try {
+            const response = await fetch(`${API_BASE}/api/tts/toggle`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(enabled),
+            });
+            const data = await response.json();
+            console.log('TTS статус:', data);
+            
+            // Загружаем голоса для клонирования
+            await loadTTSVoices();
+            
+        } catch (err) {
+            console.error('Ошибка переключения TTS:', err);
+            e.target.checked = !enabled;
+        }
+    });
+    
+    // Загружаем голоса при старте
+    loadTTSVoices();
+    
+    // Переключение режима TTS (синтез/клонирование)
+    document.querySelectorAll('input[name="tts-mode"]').forEach(radio => {
+        radio.addEventListener('change', async (e) => {
+            const mode = e.target.value;
+            const voiceSelect = document.getElementById('tts-voice-select');
+            const cloneSelect = document.getElementById('tts-clone-select');
+            
+            if (mode === 'clone') {
+                voiceSelect.style.display = 'none';
+                cloneSelect.style.display = 'block';
+                
+                // Загрузить голоса если ещё не загружены
+                if (cloneSelect.options.length === 1 && cloneSelect.options[0].value === '') {
+                    await loadTTSVoices();
+                }
+            } else {
+                voiceSelect.style.display = 'block';
+                cloneSelect.style.display = 'none';
+            }
+            
+            await updateTTSConfig();
+        });
+    });
+    
+    // Выбор голоса в режиме синтеза
+    document.getElementById('tts-voice-select').addEventListener('change', async (e) => {
+        await updateTTSConfig();
+    });
+    
+    // Выбор голоса в режиме клонирования
+    document.getElementById('tts-clone-select').addEventListener('change', async (e) => {
+        await updateTTSConfig();
+    });
+    
     document.getElementById('clear-chat-btn').addEventListener('click', clearChat);
     document.getElementById('delete-chat-btn').addEventListener('click', deleteChat);
     document.getElementById('memory-btn').addEventListener('click', toggleMemoryPanel);
@@ -393,6 +451,12 @@ async function sendMessage() {
         // Показываем ответ из HTTP-ответа
         appendMessage('assistant', data.response);
         hideTypingIndicator();
+        
+        // TTS - озвучиваем ответ если включено
+        const ttsToggle = document.getElementById('tts-toggle');
+        if (ttsToggle && ttsToggle.checked) {
+            playTTS(data.response);
+        }
         
     } catch (error) {
         console.error('Ошибка отправки:', error);
@@ -1032,6 +1096,107 @@ async function processVoiceRecording() {
         voiceBtn.textContent = '🎤';
         voiceBtn.disabled = false;
         audioChunks = [];
+    }
+}
+
+// === TTS (Text-to-Speech) ===
+async function playTTS(text) {
+    if (!text) return;
+    
+    console.log('TTS: синтез речи для:', text.substring(0, 50) + '...');
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/tts/speak`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text }),
+        });
+        
+        if (!response.ok) {
+            throw new Error(`TTS error: ${response.status}`);
+        }
+        
+        const blob = await response.blob();
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+        
+        audio.onended = () => {
+            URL.revokeObjectURL(audioUrl);
+            console.log('TTS: воспроизведение завершено');
+        };
+        
+        audio.onerror = (e) => {
+            console.error('TTS ошибка воспроизведения:', e);
+            URL.revokeObjectURL(audioUrl);
+        };
+        
+        await audio.play();
+        console.log('TTS: воспроизведение начато');
+        
+    } catch (error) {
+        console.error('Ошибка TTS:', error);
+    }
+}
+
+// Загрузить список голосов для клонирования
+async function loadTTSVoices() {
+    try {
+        const response = await fetch(`${API_BASE}/api/tts/voices`);
+        const data = await response.json();
+        
+        const cloneSelect = document.getElementById('tts-clone-select');
+        cloneSelect.innerHTML = '';
+        
+        if (data.voices && data.voices.length > 0) {
+            data.voices.forEach(voice => {
+                const option = document.createElement('option');
+                option.value = voice.path;
+                option.textContent = `🎤 ${voice.name}`;
+                cloneSelect.appendChild(option);
+            });
+        } else {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Нет голосов в папке voices/';
+            cloneSelect.appendChild(option);
+        }
+        
+        console.log('Загружено голосов для клонирования:', data.voices?.length || 0);
+    } catch (err) {
+        console.error('Ошибка загрузки голосов:', err);
+    }
+}
+
+// Обновить конфигурацию TTS
+async function updateTTSConfig() {
+    const mode = document.querySelector('input[name="tts-mode"]:checked').value;
+    let instruct = 'female';
+    let ref_audio = null;
+    
+    if (mode === 'instruct') {
+        instruct = document.getElementById('tts-voice-select').value;
+    } else {
+        ref_audio = document.getElementById('tts-clone-select').value;
+    }
+    
+    console.log('TTS конфиг:', { mode, instruct, ref_audio });
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/tts/config`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mode: mode,
+                instruct: instruct,
+                ref_audio: ref_audio,
+                position_temperature: 0.0,
+                class_temperature: 0.0,
+            }),
+        });
+        const data = await response.json();
+        console.log('TTS конфиг сохранён:', data);
+    } catch (err) {
+        console.error('Ошибка сохранения TTS конфига:', err);
     }
 }
 
