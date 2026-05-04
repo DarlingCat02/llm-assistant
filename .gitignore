@@ -12,9 +12,15 @@ venv/
 # TTS debug output
 debug_tts/
 
-# User voice samples (add your own voices here)
-voices/
+# Node modules (Tauri)
+llm-assistant-tauri/node_modules/
 
 # Tauri build output (generated)
 llm-assistant-tauri/src-tauri/target/
 llm-assistant-tauri/dist/
+
+# Cargo lock (optional - generated)
+llm-assistant-tauri/src-tauri/Cargo.lock
+
+# Old web frontend (not used - main app is in llm-assistant-tauri/)
+frontend/
