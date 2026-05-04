@@ -36,6 +36,36 @@ ollama pull llama3.2:3b
 
 Запустите exe - приложение само запустит backend и откроет окно.
 
+## Где скачать готовые модели и exe
+
+### Вариант 1: GitHub Releases (скоро)
+
+Скачайте готовые сборки из https://github.com/DarlingCat02/llm-assistant/releases
+
+### Вариант 2: Сборка из исходников
+
+#### 1. Скачайте модели
+
+```bash
+# Whisper (STT) - скачайте и распакуйте в:
+# llm-assistant-tauri/src-tauri/target/release/openai_whisper-large-v3-turbo
+# https://huggingface.co/openai/whisper-large-v3-turbo
+
+# OmniVoice (TTS) - скачайте и распакуйте в:
+# llm-assistant-tauri/src-tauri/target/release/OmniVoice
+# https://huggingface.co/k2-fsa/OmniVoice
+```
+
+#### 2. Соберите Tauri app
+
+```bash
+cd llm-assistant-tauri
+npm install
+npm run tauri build
+```
+
+exe появится в: `llm-assistant-tauri/src-tauri/target/release/`
+
 ## Настройка модели LLM
 
 Файл: `.env` (строка 5)
