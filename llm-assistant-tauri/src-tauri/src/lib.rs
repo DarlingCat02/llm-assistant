@@ -103,29 +103,35 @@ fn setup_global_shortcuts(app: &AppHandle) {
     let voice_num0_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Numpad0);
     
     let app_handle = app.clone();
-    app.global_shortcut().on_shortcut(voice_shortcut, move |_app, _shortcut, _event| {
+    if let Err(e) = app.global_shortcut().on_shortcut(voice_shortcut, move |_app, _shortcut, _event| {
         info!("Горячая клавиша: Voice Input (Ctrl+Shift+V)");
         if let Some(window) = app_handle.get_webview_window("main") {
             let _ = window.emit("hotkey-voice", ());
         }
-    }).ok();
+    }) {
+        error!("Ошибка регистрации Ctrl+Shift+V: {:?}", e);
+    }
     
     let app_handle2 = app.clone();
-    app.global_shortcut().on_shortcut(live_shortcut, move |_app, _shortcut, _event| {
+    if let Err(e) = app.global_shortcut().on_shortcut(live_shortcut, move |_app, _shortcut, _event| {
         info!("Горячая клавиша: Live Mode (Ctrl+Shift+L)");
         if let Some(window) = app_handle2.get_webview_window("main") {
             let _ = window.emit("hotkey-live", ());
         }
-    }).ok();
+    }) {
+        error!("Ошибка регистрации Ctrl+Shift+L: {:?}", e);
+    }
     
     // Ctrl+Num0 для голосового ввода
     let app_handle3 = app.clone();
-    app.global_shortcut().on_shortcut(voice_num0_shortcut, move |_app, _shortcut, _event| {
+    if let Err(e) = app.global_shortcut().on_shortcut(voice_num0_shortcut, move |_app, _shortcut, _event| {
         info!("Горячая клавиша: Voice Input (Ctrl+Num0)");
         if let Some(window) = app_handle3.get_webview_window("main") {
             let _ = window.emit("hotkey-voice", ());
         }
-    }).ok();
+    }) {
+        error!("Ошибка регистрации Ctrl+Num0: {:?}", e);
+    }
     
     info!("Горячие клавиши зарегистрированы: Ctrl+Shift+V, Ctrl+Num0 (голос), Ctrl+Shift+L (live)");
 }

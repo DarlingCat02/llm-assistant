@@ -21,6 +21,11 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+from dotenv import load_dotenv
+
+# Загружаем .env в переменные окружения для поисковых инструментов
+load_dotenv()
+
 from fastapi import FastAPI, Request, HTTPException, Depends, WebSocket, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
@@ -317,7 +322,7 @@ async def chat(request: ChatMessage):
 
     # Получаем ответ от ассистента
     try:
-        response_text = await _assistant.process_message(request.message, thinking=request.thinking)
+        response_text = await _assistant.process_message(request.message, thinking=request.thinking, search=request.search)
     except Exception as e:
         logger.error(f"Ошибка при генерации ответа: {e}")
         raise HTTPException(status_code=500, detail=str(e))

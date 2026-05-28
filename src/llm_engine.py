@@ -29,6 +29,7 @@ class MessageRole(str, Enum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 @dataclass
@@ -37,7 +38,10 @@ class Message:
     role: MessageRole
     content: str
     images: list[str] = field(default_factory=list)
-    
+    tool_calls: list[dict] | None = None
+    name: str | None = None
+    tool_call_id: str | None = None
+
     def to_dict(self) -> dict:
         result = {
             "role": self.role.value,
@@ -45,12 +49,19 @@ class Message:
         }
         if self.images:
             result["images"] = self.images
+        if self.tool_calls:
+            result["tool_calls"] = self.tool_calls
+        if self.name:
+            result["name"] = self.name
+        if self.tool_call_id:
+            result["tool_call_id"] = self.tool_call_id
         return result
 
 
 @dataclass
 class ToolCall:
     """Вызов функции (инструмента) из LLM."""
+    id: str
     name: str
     arguments: dict[str, Any]
 
@@ -89,10 +100,18 @@ class LLMEngine:
         self._system_prompt = (
             "Ты — AI-ассистент. Отвечай кратко и по делу.\n\n"
             "ПРАВИЛА:\n"
-            "1. Отвечай прямо, без лишних слов и эмоций\n"
-            "2. Не повторяй и не перефразируй сообщение пользователя\n"
-            "3. Если не знаешь — скажи честно\n"
-            "4. Используй контекст из памяти"
+            "1. Отвечай ТОЛЬКО на русском языке, без вставок английских слов\n"
+            "2. Отвечай прямо, без лишних слов и эмоций\n"
+            "3. Не повторяй и не перефразируй сообщение пользователя\n"
+            "4. Если не знаешь — скажи честно\n"
+            "5. Используй контекст из памяти\n\n"
+            "ПРАВИЛА РАБОТЫ С ПОИСКОМ:\n"
+            "- ТЫ НЕ ЗНАЕШЬ ТЕКУЩУЮ ДАТУ, ВРЕМЯ, ПОГОДУ, КУРСЫ ВАЛЮТ — у тебя нет актуальных данных\n"
+            "- ВСЕГДА используй web_search для: времени, даты, погоды, курсов, новостей, актуальных цен\n"
+            "- Если тебе вернулись результаты поиска — ОБЯЗАТЕЛЬНО используй их для ответа\n"
+            "- НЕ придумывай данные из головы — опирайся ТОЛЬКО на результаты поиска\n"
+            "- Указывай конкретные цифры и факты из результатов\n"
+            "- НЕ отвечай на вопросы о времени/дате/температуре без предварительного поиска"
         )
         
         self._tools: dict[str, Callable] = {}
@@ -247,38 +266,45 @@ class LLMEngine:
         )
         
         return messages, thinking
-    
+
     async def generate(
         self,
         user_message: str,
         additional_context: list[str] | None = None,
         stream: bool = False,
         thinking: bool = False,
+        tools: list[dict] | None = None,
     ) -> LLMResponse:
         """
         Сгенерировать ответ на сообщение пользователя.
-        
+
         Args:
             user_message: Сообщение пользователя
             additional_context: Контекст из Memory Manager
             stream: Если True, возвращать токены по мере генерации
-            thinking: Включить режим рассуждения
-        
+            thinking: Включить режим рассуждения (для Qwen3)
+            tools: Список определений инструментов (OpenAI tool format)
+
         Returns:
             LLMResponse: Ответ от модели.
         """
         if not self._initialized:
             raise RuntimeError("LLM Engine не инициализирован. Вызовите initialize().")
-        
-        messages, thinking_enabled = await self._build_messages(user_message, additional_context, thinking)
-        
+
+        messages, thinking_enabled = await self._build_messages(
+            user_message, additional_context, thinking
+        )
+
         payload = {
             "model": self._config.model,
             "messages": messages,
             "stream": stream,
             "temperature": self._config.temperature,
         }
-        
+
+        if tools:
+            payload["tools"] = tools
+
         # num_ctx и thinking — специфичны для Ollama
         if self._config.provider == LLMProvider.OLLAMA:
             thinking_type = "on" if thinking_enabled else "off"
@@ -287,23 +313,86 @@ class LLMEngine:
                 "temperature": self._config.temperature,
                 "thinking": {"type": thinking_type},
             }
-            # Убираем temperature из корня для Ollama (он в options)
             del payload["temperature"]
-        
+
         logger.debug(
             f"Запрос к LLM: {len(messages)} сообщений, "
             f"провайдер={self._config.provider.value}, "
             f"модель={self._config.model}"
         )
-        
+        if tools:
+            logger.info(f"Инструменты: {[t['function']['name'] for t in tools]}")
+
         try:
-            if stream:
-                return await self._generate_stream(payload)
-            else:
-                return await self._generate_single(payload)
+            max_rounds = 5
+            for round_idx in range(max_rounds):
+                if stream and round_idx == 0:
+                    response = await self._generate_stream(payload)
+                else:
+                    response = await self._generate_single(payload)
+
+                if not response.tool_calls:
+                    break
+
+                logger.info(
+                    f"Раунд {round_idx + 1}: LLM вызвала инструмент(ы): "
+                    f"{[tc.name for tc in response.tool_calls]}"
+                )
+
+                import json
+                assistant_msg = Message(
+                    role=MessageRole.ASSISTANT,
+                    content=response.content,
+                    tool_calls=[
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.arguments, ensure_ascii=False) if isinstance(tc.arguments, dict) else tc.arguments,
+                            },
+                        }
+                        for tc in response.tool_calls
+                    ],
+                )
+                payload["messages"].append(assistant_msg.to_dict())
+
+                for tc in response.tool_calls:
+                    tool_result = await self._execute_tool(tc)
+                    tool_msg = Message(
+                        role=MessageRole.TOOL,
+                        content=tool_result,
+                        tool_call_id=tc.id,
+                    )
+                    payload["messages"].append(tool_msg.to_dict())
+
+                if stream:
+                    payload["stream"] = False
+
+            if response.tool_calls:
+                logger.info(f"Инструменты выполнены за {round_idx + 1} раунд(ов)")
+
+            return response
+
         except httpx.HTTPError as e:
             logger.error(f"Ошибка запроса к {self._config.provider.value}: {e}")
             raise
+
+    async def _execute_tool(self, tool_call: ToolCall) -> str:
+        """Выполнить вызов инструмента и вернуть результат."""
+        if not hasattr(self, '_tools') or not self._tools:
+            return f"[Ошибка: инструмент '{tool_call.name}' не зарегистрирован]"
+
+        tool_fn = self._tools.get(tool_call.name)
+        if not tool_fn:
+            return f"[Ошибка: инструмент '{tool_call.name}' не найден]"
+
+        try:
+            result = await tool_fn(**tool_call.arguments)
+            return str(result)
+        except Exception as e:
+            logger.error(f"Ошибка выполнения инструмента {tool_call.name}: {e}")
+            return f"[Ошибка выполнения инструмента {tool_call.name}: {e}]"
     
     async def _generate_single(self, payload: dict) -> LLMResponse:
         """Обычный режим (ждём полный ответ)."""
@@ -334,9 +423,15 @@ class LLMEngine:
         if message_data.get("tool_calls"):
             for tc in message_data["tool_calls"]:
                 import json
+                raw_args = tc.get("function", {}).get("arguments", "{}")
+                if isinstance(raw_args, dict):
+                    arguments = raw_args
+                else:
+                    arguments = json.loads(raw_args)
                 tool_call = ToolCall(
+                    id=tc.get("id", ""),
                     name=tc.get("function", {}).get("name", "unknown"),
-                    arguments=json.loads(tc.get("function", {}).get("arguments", "{}")),
+                    arguments=arguments,
                 )
                 tool_calls.append(tool_call)
             

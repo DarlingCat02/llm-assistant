@@ -41,10 +41,14 @@ body {
 /* === Sidebar === */
 .sidebar {
     width: 280px;
+    min-width: 200px;
+    max-width: 500px;
     background-color: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    position: relative;
 }
 
 .sidebar-header {
@@ -97,10 +101,31 @@ body {
 }
 
 .sidebar-footer {
-    padding: 16px;
+    padding: 12px;
     border-top: 1px solid var(--border-color);
     display: flex;
-    gap: 8px;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.sidebar-footer button {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 4px;
+    font-size: 11px;
+}
+
+/* === Resize Handle === */
+.resize-handle {
+    width: 4px;
+    cursor: col-resize;
+    background: transparent;
+    transition: background 0.2s;
+    flex-shrink: 0;
+}
+
+.resize-handle:hover {
+    background: var(--accent-primary);
 }
 
 /* === Chat Area === */
@@ -318,8 +343,14 @@ body {
     border-top: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 6px;
     align-items: stretch;
+}
+
+.toolbar-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
 }
 
 .input-area .thinking-toggle {

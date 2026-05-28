@@ -79,6 +79,7 @@ class ChatMessage(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
     chat_id: Optional[int] = None
     thinking: bool = Field(default=False, description="Включить режим рассуждения")
+    search: str = Field(default="", description="Провайдер поиска: ddg / searxng")
 
 
 class ChatResponseMessage(BaseModel):

@@ -40,3 +40,7 @@ torch>=2.0.0; platform_system == "Darwin"
 # === Development (Optional) ===
 # pytest>=7.4.0
 # pytest-asyncio>=0.21.0
+
+# === Web Search ===
+# DuckDuckGo Search для поиска в интернете
+duckduckgo-search>=7.5.0

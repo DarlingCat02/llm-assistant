@@ -64,13 +64,48 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function initEventListeners() {
+    // Resize sidebar
+    const resizeHandle = document.getElementById('resize-handle');
+    const sidebar = document.querySelector('.sidebar');
+    if (resizeHandle && sidebar) {
+        let isResizing = false;
+        resizeHandle.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            const newWidth = Math.min(Math.max(e.clientX, 200), 500);
+            sidebar.style.width = newWidth + 'px';
+        });
+        document.addEventListener('mouseup', () => {
+            isResizing = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        });
+    }
+
     // Кнопки
     document.getElementById('new-chat-btn').addEventListener('click', createNewChat);
     document.getElementById('send-btn').addEventListener('click', sendMessage);
+    document.getElementById('search-ddg-toggle').addEventListener('change', (e) => {
+        if (e.target.checked) {
+            document.getElementById('search-searxng-toggle').checked = false;
+        }
+    });
+
     document.getElementById('voice-btn').addEventListener('click', toggleVoiceRecording);
     document.getElementById('tts-toggle').addEventListener('change', async (e) => {
         const enabled = e.target.checked;
         console.log('TTS переключено:', enabled);
+        
+        // Показываем/скрываем TTS опции
+        const ttsOptions = document.getElementById('tts-options');
+        if (ttsOptions) {
+            ttsOptions.style.display = enabled ? 'flex' : 'none';
+        }
+        
         try {
             const response = await fetch(`${API_BASE}/api/tts/toggle`, {
                 method: 'POST',
@@ -81,7 +116,7 @@ function initEventListeners() {
             console.log('TTS статус:', data);
             
             // Загружаем голоса для клонирования
-            await loadTTSVoices();
+            if (enabled) await loadTTSVoices();
             
         } catch (err) {
             console.error('Ошибка переключения TTS:', err);
@@ -423,7 +458,10 @@ async function sendMessage() {
     try {
         const thinkingToggle = document.getElementById('thinking-toggle');
         const thinkingEnabled = thinkingToggle ? thinkingToggle.checked : false;
-        
+        const searchDdg = document.getElementById('search-ddg-toggle');
+        let searchProvider = '';
+        if (searchDdg && searchDdg.checked) searchProvider = 'ddg';
+
         const response = await fetch(`${API_BASE}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -431,6 +469,7 @@ async function sendMessage() {
                 message: message,
                 chat_id: currentChatId,
                 thinking: thinkingEnabled,
+                search: searchProvider,
             }),
         });
         

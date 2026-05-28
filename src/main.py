@@ -97,25 +97,29 @@ class Assistant:
     def __init__(self, config: Config | None = None):
         """
         Инициализировать ассистента.
-        
+
         Args:
             config: Конфигурация приложения.
         """
         self._config = config or get_config()
         self._logger = logging.getLogger(__name__)
-        
+
         # Компоненты (инициализируются позже)
         self._llm: LLMEngine | None = None
         self._memory: MemoryManager | None = None
         self._tts: TTSEngine | None = None
-        
+
         # Флаг работы
         self._running = False
         self._closed = False
-        
+
         # Статистика сессии
         self._message_count = 0
         self._start_time: datetime | None = None
+
+        # Поиск в интернете
+        self._search_tool = None
+        self._ddg_tool_def = None
     
     async def initialize(self) -> None:
         """
@@ -287,17 +291,25 @@ class Assistant:
             return True
         
         return False
-    
+
     async def _register_tools(self) -> None:
         """
         Зарегистрировать доступные инструменты (Function Calling).
-        
-        Заглушка для будущей реализации.
         """
         if not self._llm:
             return
-        
-        self._logger.debug("Инструменты зарегистрированы (заглушка)")
+
+        from src.web_search import DuckDuckGoSearchTool, DDG_TOOL_DEFINITION
+
+        self._ddg_tool_def = DDG_TOOL_DEFINITION
+        self._llm.register_tool("web_search_ddg", self._execute_web_search_ddg)
+
+        try:
+            self._search_tool = DuckDuckGoSearchTool()
+            await self._search_tool.initialize()
+            self._logger.info("DuckDuckGo поиск готов")
+        except Exception as e:
+            self._logger.warning(f"Не удалось инициализировать DuckDuckGo: {e}")
     
     def _get_api_headers(self) -> dict:
         """Получить заголовки для API-запросов."""
@@ -333,13 +345,14 @@ class Assistant:
                 f"Длительность: {duration}"
             )
     
-    async def process_message(self, user_message: str, thinking: bool = False) -> str:
+    async def process_message(self, user_message: str, thinking: bool = False, search: str = "") -> str:
         """
         Обработать сообщение пользователя.
 
         Args:
             user_message: Сообщение пользователя.
             thinking: Включить режим рассуждения (для Qwen3).
+            search: Включить поиск в интернете.
 
         Returns:
             str: Ответ ассистента.
@@ -354,7 +367,7 @@ class Assistant:
         if self._should_search_memory(user_message):
             self._logger.debug(f"Поиск контекста для: {user_message[:50]}...")
             context = await self._memory.search_context(user_message)
-            
+
             if context:
                 self._logger.info(f"Найдено {len(context)} записей в памяти")
             else:
@@ -362,30 +375,53 @@ class Assistant:
         else:
             self._logger.debug("RAG пропущен (приветствие/короткое сообщение)")
 
-        # 2. Генерация ответа через LLM
+        # 2. Подготовка инструментов (поиск в интернете)
+        tools = None
+        if search and search == "ddg" and self._search_tool:
+            tools = [self._ddg_tool_def]
+
+        # 2.1. Если поиск включён — всегда ищем в интернете
+        if search and search == "ddg" and self._search_tool:
+            web_results = await self._search_tool.search(user_message, max_results=7)
+
+            if web_results and not web_results.startswith("["):
+                search_context = f"\n\n=== РЕЗУЛЬТАТЫ ПОИСКА В ИНТЕРНЕТЕ ===\n{web_results}\n=== КОНЕЦ РЕЗУЛЬТАТОВ ==="
+                context.append(search_context)
+                self._logger.info("Результаты поиска добавлены в контекст")
+            else:
+                self._logger.warning(f"Поиск не дал результатов: {web_results}")
+
+        # 3. Генерация ответа через LLM
         self._logger.debug("Генерация ответа...")
         response: LLMResponse = await self._llm.generate(
             user_message=user_message,
             additional_context=context,
             thinking=thinking,
+            tools=tools,
         )
 
         answer = response.content
 
-        # 3. Озвучка ответа (если включено)
+        # 4. Озвучка ответа (если включено)
         if self._tts and self._config.tts.enabled:
             self._logger.debug("Озвучка ответа...")
             await self._tts.speak(answer)
 
-        # 4. Извлечение фактов (только если сообщение содержит факты)
+        # 5. Извлечение фактов (только если сообщение содержит факты)
         if self._looks_like_new_fact(user_message):
             await self._extract_and_save_facts(user_message, answer)
 
-        # 5. Добавляем в историю LLM
+        # 6. Добавляем в историю LLM
         self._llm.add_to_history(Message(role=MessageRole.USER, content=user_message))
         self._llm.add_to_history(Message(role=MessageRole.ASSISTANT, content=answer))
 
         return answer
+
+    async def _execute_web_search_ddg(self, query: str) -> str:
+        """Поиск через DuckDuckGo (callback для LLM)."""
+        if not self._search_tool:
+            return "[DuckDuckGo поиск недоступен]"
+        return await self._search_tool.search(query, max_results=7)
 
     def process_message_sync(self, user_message: str, thinking: bool = False) -> str:
         """
