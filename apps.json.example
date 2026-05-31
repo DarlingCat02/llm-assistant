@@ -1,0 +1,72 @@
+{
+    "apps": [
+        {
+            "name": "notepad",
+            "aliases": ["блокнот", "notepad", "заметки", "заметка"],
+            "path": "notepad.exe"
+        },
+        {
+            "name": "calc",
+            "aliases": ["калькулятор", "calc", "calculator"],
+            "path": "calc.exe"
+        },
+        {
+            "name": "paint",
+            "aliases": ["паинт", "paint", "рисовалка", "рисование"],
+            "path": "mspaint.exe"
+        },
+        {
+            "name": "explorer",
+            "aliases": ["проводник", "explorer", "папки", "файлы"],
+            "path": "explorer.exe"
+        },
+        {
+            "name": "cmd",
+            "aliases": ["командная строка", "cmd", "консоль", "терминал", "кмд"],
+            "path": "cmd.exe"
+        },
+        {
+            "name": "powershell",
+            "aliases": ["power shell", "powershell", "pwsh"],
+            "path": "powershell.exe"
+        },
+        {
+            "name": "task_manager",
+            "aliases": ["диспетчер задач", "task manager", "процессы", "нагрузка"],
+            "path": "taskmgr.exe"
+        },
+        {
+            "name": "yandex",
+            "aliases": ["яндекс", "yandex", "браузер", "browser"],
+            "path": "C:\\Users\\%USERNAME%\\AppData\\Local\\Yandex\\YandexBrowser\\Application\\browser.exe"
+        },
+        {
+            "name": "chrome",
+            "aliases": ["гугл", "chrome", "браузер", "google"],
+            "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+            "name": "telegram",
+            "aliases": ["телеграм", "telegram", "tg", "телега"],
+            "path": "C:\\Users\\%USERNAME%\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe"
+        },
+        {
+            "name": "discord",
+            "aliases": ["дискорд", "discord"],
+            "path": "C:\\Users\\%USERNAME%\\AppData\\Local\\Discord\\Discord.exe"
+        },
+        {
+            "name": "vscode",
+            "aliases": ["код", "vscode", "visual studio code", "визуал"],
+            "path": "C:\\Users\\%USERNAME%\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
+        },
+        {
+            "name": "replays",
+            "aliases": ["реплеи", "повторы"],
+            "path": "E:\\###NVIDIA photo video"
+        }
+    ],
+    "default_browser": "yandex",
+    "default_save_folder": "C:\\Users\\%USERNAME%\\Documents",
+    "blocked_apps": []
+}
