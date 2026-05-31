@@ -155,6 +155,37 @@ body {
     align-items: center;
 }
 
+.context-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 160px;
+}
+
+.context-bar-bg {
+    flex: 1;
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+    min-width: 60px;
+}
+
+.context-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4caf50, #ff9800, #f44336);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.context-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    min-width: 70px;
+    text-align: right;
+}
+
 .thinking-toggle {
     display: flex;
     align-items: center;
@@ -815,13 +846,4 @@ body {
 .settings-buttons button {
     flex: 1;
     padding: 10px;
-}
-    
-    .memory-panel {
-        width: 300px;
-    }
-    
-    .message {
-        max-width: 90%;
-    }
 }

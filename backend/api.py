@@ -87,6 +87,8 @@ class ChatResponseMessage(BaseModel):
     response: str
     chat_id: int
     message_id: int
+    used_context_tokens: int = 0
+    max_context_tokens: int = 8192
 
 
 class MemoryEntry(BaseModel):

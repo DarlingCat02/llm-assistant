@@ -29,6 +29,12 @@
         <main class="chat-area">
             <header class="chat-header">
                 <h2 id="chat-title">Выберите чат</h2>
+                <div class="context-indicator" id="context-indicator" style="display:none;">
+                    <div class="context-bar-bg">
+                        <div class="context-bar-fill" id="context-bar-fill"></div>
+                    </div>
+                    <span class="context-label" id="context-label">0 / 8192</span>
+                </div>
                 <div class="chat-actions">
                     <button id="clear-chat-btn" class="btn-icon" title="Очистить чат">🧹</button>
                     <button id="delete-chat-btn" class="btn-icon" title="Удалить чат">🗑️</button>

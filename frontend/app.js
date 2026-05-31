@@ -167,6 +167,10 @@ async function createNewChat() {
 async function selectChat(chatId) {
     currentChatId = chatId;
     
+    // Показываем индикатор контекста
+    const ctxIndicator = document.getElementById('context-indicator');
+    if (ctxIndicator) ctxIndicator.style.display = 'flex';
+    
     // Обновляем выделение
     document.querySelectorAll('.chat-item').forEach(el => {
         el.classList.remove('active');
@@ -177,6 +181,9 @@ async function selectChat(chatId) {
     
     // Обновляем заголовок
     document.getElementById('chat-title').textContent = `Чат #${chatId}`;
+    
+    // Сбрасываем индикатор контекста (обновится после следующего ответа)
+    updateContextIndicator(0, 8192);
 }
 
 async function loadChatMessages(chatId) {
@@ -209,6 +216,9 @@ async function deleteChat() {
         
         currentChatId = null;
         document.getElementById('chat-title').textContent = 'Выберите чат';
+        // Прячем индикатор контекста
+        const ctxIndicator = document.getElementById('context-indicator');
+        if (ctxIndicator) ctxIndicator.style.display = 'none';
         document.getElementById('messages-container').innerHTML = `
             <div class="welcome-message">
                 <h2>🤖 Добро пожаловать в Local AI Assistant!</h2>
@@ -233,6 +243,7 @@ async function clearChat() {
         });
         
         document.getElementById('messages-container').innerHTML = '';
+        updateContextIndicator(0, 8192);
     } catch (error) {
         console.error('Ошибка очистки чата:', error);
     }
@@ -287,6 +298,9 @@ async function sendMessage() {
         appendMessage('assistant', data.response);
         hideTypingIndicator();
         
+        // Обновляем индикатор контекста
+        updateContextIndicator(data.used_context_tokens, data.max_context_tokens);
+        
     } catch (error) {
         console.error('Ошибка отправки:', error);
         hideTypingIndicator();
@@ -330,6 +344,18 @@ function showTypingIndicator() {
 
 function hideTypingIndicator() {
     document.getElementById('typing-indicator').classList.add('hidden');
+}
+
+function updateContextIndicator(usedTokens, maxTokens) {
+    const indicator = document.getElementById('context-indicator');
+    const fill = document.getElementById('context-bar-fill');
+    const label = document.getElementById('context-label');
+    if (!indicator || !fill || !label) return;
+
+    const pct = maxTokens > 0 ? Math.min(usedTokens / maxTokens * 100, 100) : 0;
+    fill.style.width = pct + '%';
+    label.textContent = `${usedTokens} / ${maxTokens}`;
+    indicator.style.display = 'flex';
 }
 
 function scrollToBottom() {

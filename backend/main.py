@@ -361,9 +361,24 @@ async def chat(request: ChatMessage):
     # Сохраняем сообщение пользователя
     await _db.add_message(chat_id, "user", request.message)
 
+    # Загружаем историю чата для контекста
+    history_messages = await _db.get_chat_history(chat_id)
+    chat_history = [
+        {"role": msg.role, "content": msg.content}
+        for msg in history_messages
+        if msg.role in ("user", "assistant")
+    ]
+
     # Получаем ответ от ассистента
     try:
-        response_text = await _assistant.process_message(request.message, thinking=request.thinking, search=request.search)
+        llm_response = await _assistant.process_message(
+            request.message,
+            thinking=request.thinking,
+            search=request.search,
+            chat_history=chat_history,
+        )
+        response_text = llm_response.content
+        used_tokens = llm_response.prompt_tokens
     except Exception as e:
         logger.error(f"Ошибка при генерации ответа: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -380,10 +395,14 @@ async def chat(request: ChatMessage):
         "content": response_text,
     })
 
+    max_ctx = getattr(get_config().llm, 'num_ctx', 8192)
+
     return ChatResponseMessage(
         response=response_text,
         chat_id=chat_id,
-        message_id=0,  # Можно получить из БД
+        message_id=0,
+        used_context_tokens=used_tokens,
+        max_context_tokens=max_ctx,
     )
 
 

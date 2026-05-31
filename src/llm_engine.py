@@ -73,6 +73,7 @@ class LLMResponse:
     model: str
     done: bool = True
     total_duration: int = 0
+    prompt_tokens: int = 0
     tool_calls: list[ToolCall] = field(default_factory=list)
 
 
@@ -245,6 +246,7 @@ class LLMEngine:
         user_message: str,
         additional_context: list[str] | None = None,
         thinking: bool = False,
+        chat_history: list[dict] | None = None,
     ) -> tuple[list[dict], bool]:
         """Построить список сообщений для отправки."""
         messages = []
@@ -265,8 +267,9 @@ class LLMEngine:
                 Message(role=MessageRole.SYSTEM, content=context_message).to_dict()
             )
         
-        for msg in self._conversation_history:
-            messages.append(msg.to_dict())
+        history = chat_history if chat_history is not None else [msg.to_dict() for msg in self._conversation_history]
+        for msg in history:
+            messages.append(msg if isinstance(msg, dict) else msg.to_dict())
         
         messages.append(
             Message(role=MessageRole.USER, content=user_message).to_dict()
@@ -281,6 +284,7 @@ class LLMEngine:
         stream: bool = False,
         thinking: bool = False,
         tools: list[dict] | None = None,
+        chat_history: list[dict] | None = None,
     ) -> LLMResponse:
         """
         Сгенерировать ответ на сообщение пользователя.
@@ -299,7 +303,7 @@ class LLMEngine:
             raise RuntimeError("LLM Engine не инициализирован. Вызовите initialize().")
 
         messages, thinking_enabled = await self._build_messages(
-            user_message, additional_context, thinking
+            user_message, additional_context, thinking, chat_history
         )
 
         payload = {
@@ -450,21 +454,23 @@ class LLMEngine:
         
         # Получаем duration информацию
         total_duration = 0
+        prompt_tokens = 0
         if self._config.provider == LLMProvider.OLLAMA:
-            # Ollama returns total_duration directly (in nanoseconds)
             total_duration = data.get("total_duration", 0)
+            prompt_tokens = data.get("prompt_eval_count", 0)
         else:
-            # OpenAI format: {"usage": {...}}
             usage = data.get("usage", {})
             if usage:
                 total_tokens = usage.get("total_tokens", 0)
-                total_duration = total_tokens * 50_000_000  # наносекунды
+                total_duration = total_tokens * 50_000_000
+                prompt_tokens = usage.get("prompt_tokens", 0)
         
         llm_response = LLMResponse(
             content=content,
             model=model,
             done=True,
             total_duration=total_duration,
+            prompt_tokens=prompt_tokens,
             tool_calls=tool_calls,
         )
         

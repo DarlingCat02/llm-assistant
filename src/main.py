@@ -355,7 +355,7 @@ class Assistant:
                 f"Длительность: {duration}"
             )
     
-    async def process_message(self, user_message: str, thinking: bool = False, search: str = "") -> str:
+    async def process_message(self, user_message: str, thinking: bool = False, search: str = "", chat_history: list[dict] | None = None) -> LLMResponse:
         """
         Обработать сообщение пользователя.
 
@@ -363,9 +363,10 @@ class Assistant:
             user_message: Сообщение пользователя.
             thinking: Включить режим рассуждения (для Qwen3).
             search: Включить поиск в интернете.
+            chat_history: История сообщений чата (список dict'ов с role/content).
 
         Returns:
-            str: Ответ ассистента.
+            LLMResponse: Ответ ассистента с контентом и метаданными.
         """
         if not self._llm or not self._memory:
             raise RuntimeError("Ассистент не инициализирован")
@@ -410,6 +411,7 @@ class Assistant:
             additional_context=context,
             thinking=thinking,
             tools=tools,
+            chat_history=chat_history,
         )
 
         answer = response.content
@@ -423,11 +425,7 @@ class Assistant:
         if self._looks_like_new_fact(user_message):
             await self._extract_and_save_facts(user_message, answer)
 
-        # 6. Добавляем в историю LLM
-        self._llm.add_to_history(Message(role=MessageRole.USER, content=user_message))
-        self._llm.add_to_history(Message(role=MessageRole.ASSISTANT, content=answer))
-
-        return answer
+        return response
 
     async def _execute_web_search_ddg(self, query: str) -> str:
         """Поиск через DuckDuckGo (callback для LLM)."""
@@ -650,10 +648,10 @@ Assistant: {assistant_response}
                 # Обрабатываем сообщение
                 print("\n🤖 Ассистент печатает...", end="\r")
                 answer = await self.process_message(user_input.strip())
-                print(" " * 50, end="\r")  # Очищаем строку
+                print(" " * 50, end="\r")
                 
                 # Выводим ответ
-                print(f"\n🤖 {answer}\n")
+                print(f"\n🤖 {answer.content}\n")
         
         except KeyboardInterrupt:
             # Ctrl+C
