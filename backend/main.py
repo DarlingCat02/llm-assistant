@@ -3,8 +3,7 @@ FastAPI бэкенд для Local AI Assistant.
 
 Основное приложение, которое:
 1. Предоставляет REST API для всех функций ассистента
-2. Раздаёт статический фронтенд
-3. Поддерживает WebSocket для real-time событий
+2. Поддерживает WebSocket для real-time событий
 
 Архитектурные решения:
 1. API-first: бэкенд работает независимо от фронтенда
@@ -29,10 +28,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, Request, HTTPException, Depends, WebSocket, UploadFile, File
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.datastructures import UploadFile
 
 # Добавляем родительскую директорию в path для импортов
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -686,43 +682,6 @@ async def get_models(provider: str = "ollama", host: str = "http://localhost:114
         }
     
     return {"models": []}
-
-
-# === Статический фронтенд ===
-
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
-
-
-@app.get("/", response_class=HTMLResponse)
-async def serve_frontend():
-    """
-    Отдать главную страницу фронтенда.
-    """
-    index_path = FRONTEND_DIR / "index.html"
-    
-    if not index_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Фронтенд не найден. Создайте frontend/index.html",
-        )
-    
-    return FileResponse(index_path)
-
-
-@app.get("/{path:path}")
-async def serve_static(path: str):
-    """
-    Отдать статические файлы фронтенда.
-    """
-    file_path = (FRONTEND_DIR / path).resolve()
-    
-    if not str(file_path).startswith(str(FRONTEND_DIR.resolve())):
-        raise HTTPException(status_code=403, detail="Доступ запрещён")
-    
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="Файл не найден")
-    
-    return FileResponse(file_path)
 
 
 # === STT (Speech-to-Text) ===

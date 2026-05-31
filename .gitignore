@@ -22,5 +22,6 @@ llm-assistant-tauri/dist/
 # Cargo lock (optional - generated)
 llm-assistant-tauri/src-tauri/Cargo.lock
 
-# Old web frontend (not used - main app is in llm-assistant-tauri/)
-frontend/
+# Installer logs
+install.log
+ffmpeg/
