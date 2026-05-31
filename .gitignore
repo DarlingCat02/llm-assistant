@@ -1,5 +1,4 @@
 .env
-apps.json
 /storage/
 logs/
 *.pyc
