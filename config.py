@@ -84,7 +84,7 @@ class LLMConfig(BaseConfig):
         description="Модель для генерации ответов",
     )
     num_ctx: int = Field(
-        default=4096,
+        default=8192,
         ge=512,
         le=32768,
         description="Максимальное количество токенов контекста",
@@ -164,7 +164,7 @@ class OllamaConfig(BaseConfig):
     
     host: str = Field(default="http://localhost:11434")
     model: str = Field(default="qwen2.5:7b")
-    num_ctx: int = Field(default=4096, ge=512, le=32768)
+    num_ctx: int = Field(default=8192, ge=512, le=32768)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     
     model_config = SettingsConfigDict(env_prefix="OLLAMA_")
@@ -215,6 +215,8 @@ class TTSConfig(BaseConfig):
     
     enabled: bool = Field(default=False, description="Включить озвучку")
     model: str = Field(default="silero_v3", description="TTS модель")
+    steps: int = Field(default=64, ge=16, le=128, description="Шаги генерации")
+    temperature: float = Field(default=1.0, ge=0.0, le=2.0, description="Temperature TTS")
     
     model_config = SettingsConfigDict(env_prefix="TTS_")
 
@@ -352,6 +354,13 @@ def save_config(
     model: str = None,
     ollama_host: str = None,
     api_key: str = None,
+    num_ctx: int = None,
+    temperature: float = None,
+    tts_steps: int = None,
+    tts_temperature: float = None,
+    memory_max_context: int = None,
+    memory_search_results: int = None,
+    memory_threshold: float = None,
 ) -> None:
     """
     Сохранить конфигурацию в .env файл.
@@ -376,7 +385,6 @@ def save_config(
     
     # Модель сохраняем только если не пустая
     if model is not None and model != "":
-        # Сохраняем в зависимости от провайдера
         if provider == "ollama":
             env_vars["OLLAMA_MODEL"] = model
             env_vars["LLM_MODEL"] = model
@@ -390,6 +398,31 @@ def save_config(
     
     if api_key is not None:
         env_vars["LLM_API_KEY"] = api_key
+    
+    if num_ctx is not None:
+        env_vars["LLM_NUM_CTX"] = str(num_ctx)
+        if provider == "ollama":
+            env_vars["OLLAMA_NUM_CTX"] = str(num_ctx)
+    
+    if temperature is not None:
+        env_vars["LLM_TEMPERATURE"] = str(temperature)
+        if provider == "ollama":
+            env_vars["OLLAMA_TEMPERATURE"] = str(temperature)
+    
+    if tts_steps is not None:
+        env_vars["TTS_STEPS"] = str(tts_steps)
+    
+    if tts_temperature is not None:
+        env_vars["TTS_TEMPERATURE"] = str(tts_temperature)
+    
+    if memory_max_context is not None:
+        env_vars["MEMORY_MAX_CONTEXT_MESSAGES"] = str(memory_max_context)
+    
+    if memory_search_results is not None:
+        env_vars["MEMORY_SEARCH_RESULTS"] = str(memory_search_results)
+    
+    if memory_threshold is not None:
+        env_vars["MEMORY_SIMILARITY_THRESHOLD"] = str(memory_threshold)
     
     # Записываем обратно
     with open(env_path, "w", encoding="utf-8") as f:

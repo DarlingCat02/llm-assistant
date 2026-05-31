@@ -85,6 +85,14 @@
                 </div>
                 <div class="input-row">
                     <button id="voice-btn" class="btn-icon voice-btn" title="Голосовой ввод (Ctrl+Num0)">🎤</button>
+                    <label id="attach-btn" class="btn-icon attach-btn" title="Прикрепить файл (txt, pdf, docx)">
+                        📎
+                        <input type="file" id="file-input" accept=".txt,.pdf,.docx" style="display:none">
+                    </label>
+                    <div id="file-preview" class="file-preview hidden">
+                        <span id="file-name"></span>
+                        <button id="file-remove" class="file-remove">✕</button>
+                    </div>
                     <textarea 
                         id="message-input" 
                         placeholder="Введите сообщение..." 
@@ -143,28 +151,89 @@
     <div id="settings-modal" class="modal hidden">
         <div class="modal-content settings-modal">
             <h3>⚙️ Настройки</h3>
-            <div class="settings-section">
-                <label for="provider-select">Провайдер:</label>
-                <select id="provider-select" class="settings-select">
-                    <option value="ollama">Ollama (локально)</option>
-                    <option value="lm_studio">LM Studio (локально)</option>
-                    <option value="openrouter">OpenRouter (облако)</option>
-                </select>
+            
+            <div class="settings-tabs">
+                <button class="settings-tab active" data-tab="llm">🧠 LLM</button>
+                <button class="settings-tab" data-tab="tts">🔊 TTS</button>
+                <button class="settings-tab" data-tab="memory">💾 Память</button>
             </div>
-            <div class="settings-section">
-                <label for="model-select">Модель:</label>
-                <select id="model-select" class="settings-select">
-                    <option value="">Загрузка...</option>
-                </select>
+
+            <!-- LLM Tab -->
+            <div class="settings-tab-content active" id="tab-llm">
+                <div class="settings-section">
+                    <label for="provider-select">Провайдер:</label>
+                    <select id="provider-select" class="settings-select">
+                        <option value="ollama">Ollama (локально)</option>
+                        <option value="lm_studio">LM Studio (локально)</option>
+                        <option value="openrouter">OpenRouter (облако)</option>
+                    </select>
+                </div>
+                <div class="settings-section">
+                    <label for="model-select">Модель:</label>
+                    <select id="model-select" class="settings-select">
+                        <option value="">Загрузка...</option>
+                    </select>
+                </div>
+                <div id="api-key-section" class="settings-section hidden">
+                    <label for="api-key-input">API ключ:</label>
+                    <input type="password" id="api-key-input" class="settings-input" placeholder="Введите API ключ...">
+                </div>
+                <div class="settings-section">
+                    <label for="ollama-host-input">Хост:</label>
+                    <input type="text" id="ollama-host-input" class="settings-input" value="http://localhost:11434">
+                </div>
+                <div class="settings-section">
+                    <label>Контекст: <span id="num-ctx-value">8192</span> токенов</label>
+                    <input type="range" id="num-ctx-slider" class="settings-slider" min="9" max="15" value="13" step="1">
+                    <div class="slider-labels">
+                        <span>512</span><span>1K</span><span>2K</span><span>4K</span><span>8K</span><span>16K</span><span>32K</span>
+                    </div>
+                </div>
+                <div class="settings-section">
+                    <label>Temperature: <span id="temperature-value">0.7</span></label>
+                    <input type="range" id="temperature-slider" class="settings-slider" min="0" max="20" value="7" step="1">
+                    <div class="slider-labels"><span>0.0</span><span>1.0</span><span>2.0</span></div>
+                </div>
             </div>
-            <div id="api-key-section" class="settings-section hidden">
-                <label for="api-key-input">API ключ:</label>
-                <input type="password" id="api-key-input" class="settings-input" placeholder="Введите API ключ...">
+
+            <!-- TTS Tab -->
+            <div class="settings-tab-content" id="tab-tts">
+                <div class="settings-section">
+                    <label>Шаги генерации: <span id="tts-steps-value">64</span></label>
+                    <div class="slider-hint">Меньше = быстрее, больше = качественнее</div>
+                    <input type="range" id="tts-steps-slider" class="settings-slider" min="16" max="128" value="64" step="8">
+                    <div class="slider-labels"><span>16</span><span>64</span><span>128</span></div>
+                </div>
+                <div class="settings-section">
+                    <label>Temperature: <span id="tts-temp-value">1.0</span></label>
+                    <div class="slider-hint">Креативность голоса (0.0 = стабильный, 2.0 = случайный)</div>
+                    <input type="range" id="tts-temp-slider" class="settings-slider" min="0" max="20" value="10" step="1">
+                    <div class="slider-labels"><span>0.0</span><span>1.0</span><span>2.0</span></div>
+                </div>
             </div>
-            <div class="settings-section">
-                <label for="ollama-host-input">Ollama хост:</label>
-                <input type="text" id="ollama-host-input" class="settings-input" value="http://localhost:11434">
+
+            <!-- Memory Tab -->
+            <div class="settings-tab-content" id="tab-memory">
+                <div class="settings-section">
+                    <label>Макс. сообщений в контексте: <span id="memory-context-value">20</span></label>
+                    <div class="slider-hint">Сколько последних сообщений помнит ассистент</div>
+                    <input type="range" id="memory-context-slider" class="settings-slider" min="5" max="100" value="20" step="5">
+                    <div class="slider-labels"><span>5</span><span>20</span><span>50</span><span>100</span></div>
+                </div>
+                <div class="settings-section">
+                    <label>Результатов поиска в памяти: <span id="memory-search-value">3</span></label>
+                    <div class="slider-hint">Сколько записей искать в базе знаний</div>
+                    <input type="range" id="memory-search-slider" class="settings-slider" min="1" max="10" value="3" step="1">
+                    <div class="slider-labels"><span>1</span><span>5</span><span>10</span></div>
+                </div>
+                <div class="settings-section">
+                    <label>Порог схожести: <span id="memory-threshold-value">0.3</span></label>
+                    <div class="slider-hint">Насколько точно искать совпадения (0 = всё, 1 = только точные)</div>
+                    <input type="range" id="memory-threshold-slider" class="settings-slider" min="0" max="10" value="3" step="1">
+                    <div class="slider-labels"><span>0.0</span><span>0.5</span><span>1.0</span></div>
+                </div>
             </div>
+
             <div class="settings-buttons">
                 <button id="save-settings-btn" class="btn-primary">Сохранить</button>
                 <button id="close-settings-btn" class="btn-secondary">Отмена</button>

@@ -17,6 +17,8 @@ FastAPI бэкенд для Local AI Assistant.
 
 import logging
 import sys
+import os
+import tempfile
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -293,6 +295,45 @@ async def clear_chat_messages(chat_id: int):
     return {"status": "ok"}
 
 
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Загрузить файл и извлечь из него текст."""
+    allowed_types = [
+        "text/plain",
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    ]
+    
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail=f"Формат {file.content_type} не поддерживается. Используйте: txt, pdf, docx")
+    
+    try:
+        # Сохраняем во временный файл
+        ext = file.filename.split(".")[-1] if "." in file.filename else "txt"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        
+        # Извлекаем текст
+        from src.file_processor import extract_text
+        text = await extract_text(tmp_path, file.content_type)
+        
+        # Удаляем временный файл
+        os.unlink(tmp_path)
+        
+        return {
+            "filename": file.filename,
+            "text": text,
+            "char_count": len(text),
+        }
+        
+    except Exception as e:
+        logger.error(f"Ошибка загрузки файла: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/chat", response_model=ChatResponseMessage)
 async def chat(request: ChatMessage):
     """
@@ -376,13 +417,25 @@ async def get_status():
 async def get_current_config():
     """Получить текущую конфигурацию."""
     if not _config:
-        return {"provider": "ollama", "model": "", "ollama_host": "http://localhost:11434", "api_key": ""}
+        return {
+            "provider": "ollama", "model": "", "ollama_host": "http://localhost:11434",
+            "api_key": "", "num_ctx": 8192, "temperature": 0.7,
+            "tts_steps": 64, "tts_temperature": 1.0,
+            "memory_max_context": 20, "memory_search_results": 3, "memory_threshold": 0.3,
+        }
     
     return {
         "provider": _config.llm.provider.value,
         "model": _config.llm.model,
         "ollama_host": _config.llm.host,
         "api_key": _config.llm.api_key or "",
+        "num_ctx": _config.llm.num_ctx,
+        "temperature": _config.llm.temperature,
+        "tts_steps": _config.tts.steps,
+        "tts_temperature": _config.tts.temperature,
+        "memory_max_context": _config.memory.max_context_messages,
+        "memory_search_results": _config.memory.search_results,
+        "memory_threshold": _config.memory.similarity_threshold,
     }
 
 
@@ -395,9 +448,27 @@ async def update_config(request: dict):
     model = request.get("model", "")
     ollama_host = request.get("ollama_host", "http://localhost:11434")
     api_key = request.get("api_key", "")
+    num_ctx = request.get("num_ctx")
+    temperature = request.get("temperature")
+    tts_steps = request.get("tts_steps")
+    tts_temperature = request.get("tts_temperature")
+    memory_max_context = request.get("memory_max_context")
+    memory_search_results = request.get("memory_search_results")
+    memory_threshold = request.get("memory_threshold")
     
-    # Сохраняем в .env
-    save_config(provider=provider, model=model, ollama_host=ollama_host, api_key=api_key)
+    save_config(
+        provider=provider,
+        model=model,
+        ollama_host=ollama_host,
+        api_key=api_key,
+        num_ctx=num_ctx,
+        temperature=temperature,
+        tts_steps=tts_steps,
+        tts_temperature=tts_temperature,
+        memory_max_context=memory_max_context,
+        memory_search_results=memory_search_results,
+        memory_threshold=memory_threshold,
+    )
     
     return {"status": "ok", "message": "Конфигурация сохранена в .env"}
 

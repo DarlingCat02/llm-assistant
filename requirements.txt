@@ -44,3 +44,8 @@ torch>=2.0.0; platform_system == "Darwin"
 # === Web Search ===
 # DuckDuckGo Search для поиска в интернете
 duckduckgo-search>=7.5.0
+
+# === File Processing ===
+# Обработка PDF, DOCX файлов
+pdfplumber>=0.11.0
+python-docx>=1.1.0

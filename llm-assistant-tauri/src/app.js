@@ -89,6 +89,10 @@ function initEventListeners() {
     // Кнопки
     document.getElementById('new-chat-btn').addEventListener('click', createNewChat);
     document.getElementById('send-btn').addEventListener('click', sendMessage);
+    
+    // Файлы
+    document.getElementById('file-input').addEventListener('change', handleFileSelect);
+    document.getElementById('file-remove').addEventListener('click', clearFile);
     document.getElementById('search-ddg-toggle').addEventListener('change', (e) => {
         if (e.target.checked) {
             document.getElementById('search-searxng-toggle').checked = false;
@@ -440,18 +444,65 @@ async function clearChat() {
 
 // === Сообщения ===
 
+let attachedFileText = null;
+
+async function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const filePreview = document.getElementById('file-preview');
+    const fileName = document.getElementById('file-name');
+    
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: formData });
+        
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || 'Ошибка загрузки');
+        }
+        
+        const data = await response.json();
+        attachedFileText = data.text;
+        fileName.textContent = `📎 ${file.name} (${data.char_count} символов)`;
+        filePreview.classList.remove('hidden');
+        
+    } catch (error) {
+        console.error('Ошибка загрузки файла:', error);
+        alert('Ошибка: ' + error.message);
+        e.target.value = '';
+    }
+}
+
+function clearFile() {
+    attachedFileText = null;
+    document.getElementById('file-input').value = '';
+    document.getElementById('file-preview').classList.add('hidden');
+}
+
 async function sendMessage() {
     const input = document.getElementById('message-input');
     const message = input.value.trim();
     
-    if (!message) return;
+    if (!message && !attachedFileText) return;
     
-    // Очищаем поле
+    // Формируем финальное сообщение с файлом
+    let fullMessage = message;
+    if (attachedFileText) {
+        fullMessage = message 
+            ? `${message}\n\n[СОДЕРЖИМОЕ ФАЙЛА]\n${attachedFileText}\n[КОНЕЦ ФАЙЛА]`
+            : `[СОДЕРЖИМОЕ ФАЙЛА]\n${attachedFileText}\n[КОНЕЦ ФАЙЛА]`;
+    }
+    
+    // Очищаем поле и файл
     input.value = '';
     input.style.height = 'auto';
+    clearFile();
     
     // Добавляем сообщение пользователя
-    appendMessage('user', message);
+    appendMessage('user', message || '📎 Файл');
     showTypingIndicator();
     
     // Отправляем на сервер
@@ -466,7 +517,7 @@ async function sendMessage() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                message: message,
+                message: fullMessage,
                 chat_id: currentChatId,
                 thinking: thinkingEnabled,
                 search: searchProvider,
@@ -740,6 +791,31 @@ async function openSettings() {
         document.getElementById('ollama-host-input').value = config.ollama_host || 'http://localhost:11434';
         document.getElementById('api-key-input').value = config.api_key || '';
         
+        // Контекст (log2 для слайдера)
+        const numCtx = config.num_ctx || 8192;
+        const logVal = Math.round(Math.log2(numCtx));
+        document.getElementById('num-ctx-slider').value = logVal;
+        document.getElementById('num-ctx-value').textContent = numCtx;
+        
+        // Temperature
+        const temp = config.temperature || 0.7;
+        document.getElementById('temperature-slider').value = Math.round(temp * 10);
+        document.getElementById('temperature-value').textContent = temp;
+        
+        // TTS
+        document.getElementById('tts-steps-slider').value = config.tts_steps || 64;
+        document.getElementById('tts-steps-value').textContent = config.tts_steps || 64;
+        document.getElementById('tts-temp-slider').value = Math.round((config.tts_temperature || 1.0) * 10);
+        document.getElementById('tts-temp-value').textContent = (config.tts_temperature || 1.0).toFixed(1);
+        
+        // Memory
+        document.getElementById('memory-context-slider').value = config.memory_max_context || 20;
+        document.getElementById('memory-context-value').textContent = config.memory_max_context || 20;
+        document.getElementById('memory-search-slider').value = config.memory_search_results || 3;
+        document.getElementById('memory-search-value').textContent = config.memory_search_results || 3;
+        document.getElementById('memory-threshold-slider').value = Math.round((config.memory_threshold || 0.3) * 10);
+        document.getElementById('memory-threshold-value').textContent = (config.memory_threshold || 0.3).toFixed(1);
+        
         onProviderChange();
         await loadModelsForProvider(config.provider || 'ollama');
         
@@ -751,11 +827,91 @@ async function openSettings() {
     } catch (error) {
         console.error('Ошибка загрузки настроек:', error);
     }
+    
+    // Инициализация табов
+    initSettingsTabs();
+    initSliders();
 }
 
 function closeSettings() {
     const modal = document.getElementById('settings-modal');
     modal.classList.add('hidden');
+}
+
+function initSettingsTabs() {
+    document.querySelectorAll('.settings-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.settings-tab-content').forEach(c => c.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+        });
+    });
+}
+
+function initSliders() {
+    // Контекст: log2 слайдер
+    const ctxSlider = document.getElementById('num-ctx-slider');
+    const ctxValue = document.getElementById('num-ctx-value');
+    if (ctxSlider) {
+        ctxSlider.addEventListener('input', () => {
+            ctxValue.textContent = Math.pow(2, parseInt(ctxSlider.value));
+        });
+    }
+    
+    // Temperature LLM
+    const tempSlider = document.getElementById('temperature-slider');
+    const tempValue = document.getElementById('temperature-value');
+    if (tempSlider) {
+        tempSlider.addEventListener('input', () => {
+            tempValue.textContent = (parseInt(tempSlider.value) / 10).toFixed(1);
+        });
+    }
+    
+    // TTS Steps
+    const ttsStepsSlider = document.getElementById('tts-steps-slider');
+    const ttsStepsValue = document.getElementById('tts-steps-value');
+    if (ttsStepsSlider) {
+        ttsStepsSlider.addEventListener('input', () => {
+            ttsStepsValue.textContent = ttsStepsSlider.value;
+        });
+    }
+    
+    // TTS Temperature
+    const ttsTempSlider = document.getElementById('tts-temp-slider');
+    const ttsTempValue = document.getElementById('tts-temp-value');
+    if (ttsTempSlider) {
+        ttsTempSlider.addEventListener('input', () => {
+            ttsTempValue.textContent = (parseInt(ttsTempSlider.value) / 10).toFixed(1);
+        });
+    }
+    
+    // Memory Context
+    const memCtxSlider = document.getElementById('memory-context-slider');
+    const memCtxValue = document.getElementById('memory-context-value');
+    if (memCtxSlider) {
+        memCtxSlider.addEventListener('input', () => {
+            memCtxValue.textContent = memCtxSlider.value;
+        });
+    }
+    
+    // Memory Search
+    const memSearchSlider = document.getElementById('memory-search-slider');
+    const memSearchValue = document.getElementById('memory-search-value');
+    if (memSearchSlider) {
+        memSearchSlider.addEventListener('input', () => {
+            memSearchValue.textContent = memSearchSlider.value;
+        });
+    }
+    
+    // Memory Threshold
+    const memThreshSlider = document.getElementById('memory-threshold-slider');
+    const memThreshValue = document.getElementById('memory-threshold-value');
+    if (memThreshSlider) {
+        memThreshSlider.addEventListener('input', () => {
+            memThreshValue.textContent = (parseInt(memThreshSlider.value) / 10).toFixed(1);
+        });
+    }
 }
 
 function onProviderChange() {
@@ -820,6 +976,13 @@ async function saveSettings() {
     const model = document.getElementById('model-select').value;
     const ollamaHost = document.getElementById('ollama-host-input').value;
     const apiKey = document.getElementById('api-key-input').value;
+    const numCtx = Math.pow(2, parseInt(document.getElementById('num-ctx-slider').value));
+    const temperature = parseInt(document.getElementById('temperature-slider').value) / 10;
+    const ttsSteps = parseInt(document.getElementById('tts-steps-slider').value);
+    const ttsTemperature = parseInt(document.getElementById('tts-temp-slider').value) / 10;
+    const memoryMaxContext = parseInt(document.getElementById('memory-context-slider').value);
+    const memorySearchResults = parseInt(document.getElementById('memory-search-slider').value);
+    const memoryThreshold = parseInt(document.getElementById('memory-threshold-slider').value) / 10;
     
     try {
         const response = await fetch(`${API_BASE}/api/config`, {
@@ -830,6 +993,13 @@ async function saveSettings() {
                 model,
                 ollama_host: ollamaHost,
                 api_key: apiKey,
+                num_ctx: numCtx,
+                temperature: temperature,
+                tts_steps: ttsSteps,
+                tts_temperature: ttsTemperature,
+                memory_max_context: memoryMaxContext,
+                memory_search_results: memorySearchResults,
+                memory_threshold: memoryThreshold,
             }),
         });
         
