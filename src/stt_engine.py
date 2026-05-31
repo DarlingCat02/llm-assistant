@@ -123,9 +123,15 @@ class STTEngine:
             # Переносим на устройство
             input_features = input_features.to(self._device)
             
+            # Форсируем русский язык
+            forced_decoder_ids = self._processor.get_decoder_prompt_ids(language="russian", task="transcribe")
+
             # Генерируем
             with torch.no_grad():
-                predicted_ids = self._model.generate(input_features)
+                predicted_ids = self._model.generate(
+                    input_features,
+                    forced_decoder_ids=forced_decoder_ids
+                )
             
             # Декодируем
             transcription = self._processor.batch_decode(

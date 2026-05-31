@@ -301,8 +301,8 @@ class Assistant:
 
         from src.web_search import DuckDuckGoSearchTool, DDG_TOOL_DEFINITION
         from src.agent_tools import (
-            FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION,
-            file_create, app_open, file_open,
+            FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION,
+            file_create, app_open, file_open, browser_open,
         )
 
         self._ddg_tool_def = DDG_TOOL_DEFINITION
@@ -310,6 +310,7 @@ class Assistant:
         self._llm.register_tool("file_create", file_create)
         self._llm.register_tool("app_open", app_open)
         self._llm.register_tool("file_open", file_open)
+        self._llm.register_tool("browser_open", browser_open)
 
         try:
             self._search_tool = DuckDuckGoSearchTool()
@@ -385,8 +386,8 @@ class Assistant:
             self._logger.debug("RAG пропущен (приветствие/короткое сообщение)")
 
         # 2. Подготовка инструментов
-        from src.agent_tools import FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION
-        tools = [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION]
+        from src.agent_tools import FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION
+        tools = [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION]
         
         if search and search == "ddg" and self._search_tool:
             tools.append(self._ddg_tool_def)

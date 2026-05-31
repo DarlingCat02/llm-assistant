@@ -121,6 +121,25 @@ FILE_OPEN_DEFINITION = {
     }
 }
 
+BROWSER_OPEN_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "browser_open",
+        "description": "Открыть сайт/URL в браузере. "
+                       "Используй когда пользователь просит открыть веб-сайт, страницу, ссылку.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL или название сайта (например: youtube.com, github.com)"
+                }
+            },
+            "required": ["url"]
+        }
+    }
+}
+
 
 # === Tool Implementations ===
 
@@ -150,7 +169,7 @@ async def file_create(path: str, content: str) -> str:
 
 
 async def app_open(name: str) -> str:
-    """Открыть приложение."""
+    """Открыть приложение или сайт."""
     config = _load_apps_config()
     
     # Проверяем заблокированные
@@ -160,24 +179,25 @@ async def app_open(name: str) -> str:
     
     app_path = _find_app(name)
     
-    if not app_path:
-        # Попробуем запустить как есть (через PATH)
-        app_path = name
+    if app_path:
+        try:
+            if os.path.isabs(app_path) and os.path.exists(app_path):
+                if os.path.isdir(app_path) or app_path.lower().endswith(".lnk"):
+                    os.startfile(app_path)
+                else:
+                    subprocess.Popen([app_path], cwd=os.path.dirname(app_path))
+            else:
+                subprocess.Popen([app_path], shell=True)
+            
+            logger.info(f"Приложение запущено: {name} ({app_path})")
+            return f"Открыто: {name}"
+        except Exception as e:
+            logger.error(f"Ошибка запуска {name}: {e}")
+            return f"Ошибка запуска {name}: {e}"
     
-    try:
-        # Если путь абсолютный и существует — запускаем
-        if os.path.isabs(app_path) and os.path.exists(app_path):
-            subprocess.Popen([app_path], cwd=os.path.dirname(app_path))
-        else:
-            # Иначе запускаем через PATH (Windows сам найдёт)
-            subprocess.Popen([app_path], shell=True)
-        
-        logger.info(f"Приложение запущено: {name} ({app_path})")
-        return f"Открыто: {name}"
-    
-    except Exception as e:
-        logger.error(f"Ошибка запуска {name}: {e}")
-        return f"Ошибка запуска {name}: {e}"
+    # Если приложение не найдено — открываем как сайт
+    logger.info(f"Приложение не найдено, открываю как сайт: {name}")
+    return await browser_open(name)
 
 
 async def file_open(path: str) -> str:
@@ -193,3 +213,26 @@ async def file_open(path: str) -> str:
     except Exception as e:
         logger.error(f"Ошибка открытия файла: {e}")
         return f"Ошибка: {e}"
+
+
+async def browser_open(url: str) -> str:
+    """Открыть сайт в браузере."""
+    # Добавляем https:// если нет протокола
+    if not url.startswith("http://") and not url.startswith("https://"):
+        if "." not in url:
+            url = url + ".com"
+        url = "https://" + url
+
+    config = _load_apps_config()
+    browser_name = config.get("default_browser", "")
+
+    if browser_name:
+        browser_path = _find_app(browser_name)
+        if browser_path and os.path.exists(browser_path):
+            subprocess.Popen([browser_path, url])
+            logger.info(f"Сайт открыт в {browser_name}: {url}")
+            return f"Открыт сайт: {url}"
+
+    os.startfile(url)
+    logger.info(f"Сайт открыт в браузере по умолчанию: {url}")
+    return f"Открыт сайт: {url}"
