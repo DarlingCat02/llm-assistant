@@ -12,6 +12,15 @@ venv/
 # TTS debug output
 debug_tts/
 
+# Screenshots (generated)
+screenshots/
+
+# Voices (TTS voice files)
+voices/
+
+# User-specific app config
+apps.json
+
 # Node modules (Tauri)
 llm-assistant-tauri/node_modules/
 
@@ -25,3 +34,7 @@ llm-assistant-tauri/src-tauri/Cargo.lock
 # Installer logs
 install.log
 ffmpeg/
+
+# Python bytecode
+*.py[cod]
+*$py.class

@@ -91,12 +91,12 @@
                 </div>
                 <div class="input-row">
                     <button id="voice-btn" class="btn-icon voice-btn" title="Голосовой ввод (Ctrl+Num0)">🎤</button>
-                    <label id="attach-btn" class="btn-icon attach-btn" title="Прикрепить файл (txt, pdf, docx)">
+                    <label id="attach-btn" class="btn-icon attach-btn" title="Прикрепить файл или изображение">
                         📎
-                        <input type="file" id="file-input" accept=".txt,.pdf,.docx" style="display:none">
+                        <input type="file" id="file-input" accept=".txt,.pdf,.docx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tiff" multiple style="display:none">
                     </label>
                     <div id="file-preview" class="file-preview hidden">
-                        <span id="file-name"></span>
+                        <div id="file-previews"></div>
                         <button id="file-remove" class="file-remove">✕</button>
                     </div>
                     <textarea 

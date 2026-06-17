@@ -80,6 +80,7 @@ class ChatMessage(BaseModel):
     chat_id: Optional[int] = None
     thinking: bool = Field(default=False, description="Включить режим рассуждения")
     search: str = Field(default="", description="Провайдер поиска: ddg / searxng")
+    images: list[str] = Field(default_factory=list, description="Список base64-encoded изображений")
 
 
 class ChatResponseMessage(BaseModel):

@@ -18,11 +18,18 @@ import logging
 import sys
 import os
 import tempfile
+import base64
+import io
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 # Загружаем .env в переменные окружения для поисковых инструментов
 load_dotenv()
@@ -293,34 +300,76 @@ async def clear_chat_messages(chat_id: int):
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Загрузить файл и извлечь из него текст."""
-    allowed_types = [
+    """Загрузить файл (документ или изображение) и извлечь данные."""
+    document_types = [
         "text/plain",
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/msword",
     ]
+    image_types = [
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/webp",
+        "image/gif",
+        "image/bmp",
+        "image/tiff",
+    ]
+    allowed_types = document_types + image_types
     
     if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail=f"Формат {file.content_type} не поддерживается. Используйте: txt, pdf, docx")
+        raise HTTPException(status_code=400, detail=f"Формат {file.content_type} не поддерживается. Используйте: txt, pdf, docx, png, jpg, webp, gif, bmp, tiff")
     
     try:
-        # Сохраняем во временный файл
+        content = await file.read()
+        
+        # Обработка изображений — кодируем в base64
+        if file.content_type in image_types:
+            import base64
+            import io
+            from PIL import Image
+            
+            # Открываем изображение для получения размеров
+            img = Image.open(io.BytesIO(content))
+            width, height = img.size
+            
+            # Опционально: ресайз больших изображений (макс 1024px по большей стороне)
+            max_dim = 1024
+            if max(width, height) > max_dim:
+                ratio = max_dim / max(width, height)
+                new_size = (int(width * ratio), int(height * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                # Сохраняем обратно в bytes
+                buf = io.BytesIO()
+                img.save(buf, format=img.format or "PNG")
+                content = buf.getvalue()
+            
+            image_base64 = base64.b64encode(content).decode('utf-8')
+            
+            return {
+                "filename": file.filename,
+                "type": "image",
+                "base64": image_base64,
+                "mime_type": file.content_type,
+                "width": img.width,
+                "height": img.height,
+            }
+        
+        # Документы — сохраняем во временный файл и извлекаем текст
         ext = file.filename.split(".")[-1] if "." in file.filename else "txt"
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-            content = await file.read()
             tmp.write(content)
             tmp_path = tmp.name
         
-        # Извлекаем текст
         from src.file_processor import extract_text
         text = await extract_text(tmp_path, file.content_type)
         
-        # Удаляем временный файл
         os.unlink(tmp_path)
         
         return {
             "filename": file.filename,
+            "type": "document",
             "text": text,
             "char_count": len(text),
         }
@@ -372,6 +421,7 @@ async def chat(request: ChatMessage):
             thinking=request.thinking,
             search=request.search,
             chat_history=chat_history,
+            images=request.images,
         )
         response_text = llm_response.content
         used_tokens = llm_response.prompt_tokens

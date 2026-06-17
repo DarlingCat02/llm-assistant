@@ -452,6 +452,65 @@ body {
     display: none;
 }
 
+#file-previews {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-width: 300px;
+}
+
+.file-preview-item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 4px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    min-width: 60px;
+    max-width: 100px;
+}
+
+.file-preview-item img {
+    width: 60px;
+    height: 45px;
+    object-fit: cover;
+    border-radius: 4px;
+}
+
+.file-preview-item .file-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 90px;
+    font-size: 10px;
+}
+
+.file-preview-item .file-remove {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent-danger);
+    color: white;
+    border: none;
+    cursor: pointer;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.file-preview.hidden {
+    display: none;
+}
+
 .file-remove {
     background: none;
     border: none;

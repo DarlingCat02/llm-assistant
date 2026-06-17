@@ -254,6 +254,17 @@ class GUIConfig(BaseConfig):
     model_config = SettingsConfigDict(env_prefix="GUI_")
 
 
+class ScreenConfig(BaseConfig):
+    """Конфигурация скриншотов."""
+    
+    enabled: bool = Field(default=True, description="Включить авто-скриншоты по триггерам")
+    save_path: str = Field(default="./screenshots", description="Папка для сохранения скриншотов")
+    monitor: int = Field(default=0, description="Монитор (0=все, 1,2...=конкретный)")
+    triggers: str = Field(default="экран,скриншот,смотри на экран,покажи экран,что на экране,сделай скриншот", description="Триггеры через запятую")
+    
+    model_config = SettingsConfigDict(env_prefix="SCREENSHOT_")
+
+
 # === Основная конфигурация ===
 
 class Config(BaseSettings):
@@ -293,6 +304,10 @@ class Config(BaseSettings):
     gui: GUIConfig = Field(
         default_factory=GUIConfig,
         description="Настройки GUI",
+    )
+    screen: ScreenConfig = Field(
+        default_factory=ScreenConfig,
+        description="Настройки скриншотов",
     )
     
     model_config = SettingsConfigDict(

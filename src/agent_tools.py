@@ -236,3 +236,80 @@ async def browser_open(url: str) -> str:
     os.startfile(url)
     logger.info(f"Сайт открыт в браузере по умолчанию: {url}")
     return f"Открыт сайт: {url}"
+
+
+# === Screen Capture Tool ===
+
+SCREENSHOT_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "capture_screen",
+        "description": "Сделать скриншот экрана и вернуть как base64. "
+                       "Используй когда пользователь просит посмотреть на экран, "
+                       "показать что на экране, сделать скриншот, что на экране.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "monitor": {"type": "integer", "default": 0, "description": "Номер монитора (0 = все мониторы, 1, 2... = конкретный)"},
+                "save_path": {"type": "string", "description": "Папка для сохранения (опционально)"}
+            },
+        }
+    }
+}
+
+
+async def capture_screen(monitor: int = 0, save_path: str = "") -> str:
+    """Сделать скриншот экрана и вернуть base64 (JPEG quality=90, max 1024px)."""
+    try:
+        import mss
+        import base64
+        import io
+        import os
+        from datetime import datetime
+        from PIL import Image
+        
+        with mss.mss() as sct:
+            if monitor == 0:
+                # Все мониторы объединены
+                screenshot = sct.grab(sct.monitors[0])
+            else:
+                if monitor >= len(sct.monitors):
+                    return f"Монитор {monitor} не найден. Доступно: {len(sct.monitors) - 1}"
+                screenshot = sct.grab(sct.monitors[monitor])
+            
+            # Конвертировать mss screenshot в PIL Image
+            img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
+            
+            # Ресайз если нужно (макс 1024px по большей стороне)
+            max_dim = 1024
+            if max(img.size) > max_dim:
+                ratio = max_dim / max(img.size)
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+            
+            # Сохранить как JPEG quality=90 (экономия токенов)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=90, optimize=True)
+            img_bytes = buf.getvalue()
+            b64 = base64.b64encode(img_bytes).decode('utf-8')
+            mime_type = "image/jpeg"
+            
+            # Сохранить на диск если указан путь
+            if save_path:
+                os.makedirs(save_path, exist_ok=True)
+                filename = f"screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                filepath = os.path.join(save_path, filename)
+                with open(filepath, 'wb') as f:
+                    f.write(img_bytes)
+                logger.info(f"Скриншот сохранён: {filepath}")
+            
+            logger.info(f"Скриншот сделан: monitor={monitor}, size={len(img_bytes)} bytes, dims={img.size}")
+            # Возвращаем base64 строку для передачи в images массив
+            return b64
+            
+    except ImportError:
+        logger.error("mss не установлен. Установите: pip install mss")
+        return "Ошибка: mss не установлен. Выполните: pip install mss"
+    except Exception as e:
+        logger.error(f"Ошибка скриншота: {e}")
+        return f"Ошибка скриншота: {e}"

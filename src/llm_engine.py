@@ -114,12 +114,13 @@ class LLMEngine:
             "- Указывай конкретные цифры и факты из результатов\n"
             "- НЕ отвечай на вопросы о времени/дате/температуре без предварительного поиска\n\n"
             "АГЕНТНЫЕ ВОЗМОЖНОСТИ:\n"
-            "- У тебя есть инструменты для работы с файлами и приложениями\n"
+            "- У тебя есть инструменты для работы с файлами, приложениями и экраном\n"
             "- file_create(path, content) — создать файл\n"
             "- app_open(name) — открыть приложение. Название бери ТОЧНО как сказал пользователь, НЕ ПЕРЕВОДИ на английский\n"
             "- browser_open(url) — открыть сайт в браузере (youtube.com, vk.com, github.com и т.д.)\n"
             "- file_open(path) — открыть файл ассоциированным приложением\n"
-            "- Используй эти инструменты когда пользователь просит создать файл, открыть приложение, сайт или файл"
+            "- capture_screen(monitor, save_path) — сделать скриншот экрана. Используй когда пользователь просит посмотреть на экран, показать что на экране, сделать скриншот\n"
+            "- Используй эти инструменты когда пользователь просит создать файл, открыть приложение, сайт, файл или посмотреть на экран"
         )
         
         self._tools: dict[str, Callable] = {}
@@ -241,12 +242,26 @@ class LLMEngine:
         """Получить копию истории диалога."""
         return self._conversation_history.copy()
     
+    def _format_user_content(self, text: str, images: list[str] | None = None) -> list[dict] | str:
+        """Форматировать контент пользователя для OpenAI Vision API."""
+        if not images:
+            return text
+        
+        content = [{"type": "text", "text": text}]
+        for img_b64 in images:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+            })
+        return content
+
     async def _build_messages(
         self,
         user_message: str,
         additional_context: list[str] | None = None,
         thinking: bool = False,
         chat_history: list[dict] | None = None,
+        images: list[str] | None = None,
     ) -> tuple[list[dict], bool]:
         """Построить список сообщений для отправки."""
         messages = []
@@ -271,9 +286,13 @@ class LLMEngine:
         for msg in history:
             messages.append(msg if isinstance(msg, dict) else msg.to_dict())
         
-        messages.append(
-            Message(role=MessageRole.USER, content=user_message).to_dict()
-        )
+        # Форматируем user message с изображениями для OpenAI Vision API
+        user_content = self._format_user_content(user_message, images)
+        user_msg_dict = {
+            "role": MessageRole.USER.value,
+            "content": user_content
+        }
+        messages.append(user_msg_dict)
         
         return messages, thinking
 
@@ -285,6 +304,7 @@ class LLMEngine:
         thinking: bool = False,
         tools: list[dict] | None = None,
         chat_history: list[dict] | None = None,
+        images: list[str] | None = None,
     ) -> LLMResponse:
         """
         Сгенерировать ответ на сообщение пользователя.
@@ -295,6 +315,7 @@ class LLMEngine:
             stream: Если True, возвращать токены по мере генерации
             thinking: Включить режим рассуждения (для Qwen3)
             tools: Список определений инструментов (OpenAI tool format)
+            images: Список base64-encoded изображений
 
         Returns:
             LLMResponse: Ответ от модели.
@@ -303,7 +324,7 @@ class LLMEngine:
             raise RuntimeError("LLM Engine не инициализирован. Вызовите initialize().")
 
         messages, thinking_enabled = await self._build_messages(
-            user_message, additional_context, thinking, chat_history
+            user_message, additional_context, thinking, chat_history, images
         )
 
         payload = {

@@ -302,7 +302,8 @@ class Assistant:
         from src.web_search import DuckDuckGoSearchTool, DDG_TOOL_DEFINITION
         from src.agent_tools import (
             FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION,
-            file_create, app_open, file_open, browser_open,
+            SCREENSHOT_DEFINITION,
+            file_create, app_open, file_open, browser_open, capture_screen,
         )
 
         self._ddg_tool_def = DDG_TOOL_DEFINITION
@@ -311,6 +312,7 @@ class Assistant:
         self._llm.register_tool("app_open", app_open)
         self._llm.register_tool("file_open", file_open)
         self._llm.register_tool("browser_open", browser_open)
+        self._llm.register_tool("capture_screen", capture_screen)
 
         try:
             self._search_tool = DuckDuckGoSearchTool()
@@ -319,7 +321,7 @@ class Assistant:
         except Exception as e:
             self._logger.warning(f"Не удалось инициализировать DuckDuckGo: {e}")
 
-        self._logger.info("Агентные инструменты зарегистрированы: file_create, app_open, file_open")
+        self._logger.info("Агентные инструменты зарегистрированы: file_create, app_open, file_open, browser_open, capture_screen")
     
     def _get_api_headers(self) -> dict:
         """Получить заголовки для API-запросов."""
@@ -355,7 +357,7 @@ class Assistant:
                 f"Длительность: {duration}"
             )
     
-    async def process_message(self, user_message: str, thinking: bool = False, search: str = "", chat_history: list[dict] | None = None) -> LLMResponse:
+    async def process_message(self, user_message: str, thinking: bool = False, search: str = "", chat_history: list[dict] | None = None, images: list[str] | None = None) -> LLMResponse:
         """
         Обработать сообщение пользователя.
 
@@ -364,6 +366,7 @@ class Assistant:
             thinking: Включить режим рассуждения (для Qwen3).
             search: Включить поиск в интернете.
             chat_history: История сообщений чата (список dict'ов с role/content).
+            images: Список base64-encoded изображений.
 
         Returns:
             LLMResponse: Ответ ассистента с контентом и метаданными.
@@ -372,6 +375,33 @@ class Assistant:
             raise RuntimeError("Ассистент не инициализирован")
 
         self._message_count += 1
+
+        # Авто-детекция триггера для скриншота экрана
+        if images is None:
+            images = []
+        
+        screen_config = self._config.screen
+        if screen_config.enabled:
+            screenshot_triggers = [t.strip() for t in screen_config.triggers.split(",") if t.strip()]
+            
+            msg_lower = user_message.lower()
+            needs_screenshot = any(trigger in msg_lower for trigger in screenshot_triggers)
+            
+            if needs_screenshot:
+                self._logger.info(f"Обнаружен триггер скриншота: '{user_message[:50]}...'")
+                try:
+                    from src.agent_tools import capture_screen
+                    screenshot_b64 = await capture_screen(
+                        monitor=screen_config.monitor,
+                        save_path=screen_config.save_path
+                    )
+                    if screenshot_b64 and not screenshot_b64.startswith("Ошибка"):
+                        images.append(screenshot_b64)
+                        self._logger.info("Автоматический скриншот добавлен к запросу")
+                    else:
+                        self._logger.warning(f"Не удалось сделать скриншот: {screenshot_b64}")
+                except Exception as e:
+                    self._logger.error(f"Ошибка авто-скриншота: {e}")
 
         # 1. Умный поиск контекста в памяти (RAG)
         context = []
@@ -387,8 +417,8 @@ class Assistant:
             self._logger.debug("RAG пропущен (приветствие/короткое сообщение)")
 
         # 2. Подготовка инструментов
-        from src.agent_tools import FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION
-        tools = [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION]
+        from src.agent_tools import FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION
+        tools = [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION]
         
         if search and search == "ddg" and self._search_tool:
             tools.append(self._ddg_tool_def)
@@ -412,6 +442,7 @@ class Assistant:
             thinking=thinking,
             tools=tools,
             chat_history=chat_history,
+            images=images,
         )
 
         answer = response.content

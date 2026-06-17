@@ -93,6 +93,39 @@ function initEventListeners() {
     // Файлы
     document.getElementById('file-input').addEventListener('change', handleFileSelect);
     document.getElementById('file-remove').addEventListener('click', clearFile);
+    
+    // Удаление отдельных файлов из превью (делегирование событий)
+    document.getElementById('file-previews').addEventListener('click', (e) => {
+        if (e.target.classList.contains('file-remove')) {
+            const index = parseInt(e.target.dataset.index);
+            if (!isNaN(index)) {
+                attachedFiles.splice(index, 1);
+                // Перерендерим превью
+                const previewsContainer = document.getElementById('file-previews');
+                previewsContainer.innerHTML = '';
+                attachedFiles.forEach((f, i) => {
+                    const item = document.createElement('div');
+                    item.className = 'file-preview-item';
+                    if (f.type === 'image') {
+                        item.innerHTML = `
+                            <img src="data:${f.mime};base64,${f.base64}" alt="${f.name}">
+                            <span class="file-name">${f.name}</span>
+                            <button class="file-remove" data-index="${i}">✕</button>
+                        `;
+                    } else {
+                        item.innerHTML = `
+                            <span class="file-name">📄 ${f.name} (${f.charCount} симв.)</span>
+                            <button class="file-remove" data-index="${i}">✕</button>
+                        `;
+                    }
+                    document.getElementById('file-previews').appendChild(item);
+                });
+                if (!attachedFiles.length) {
+                    document.getElementById('file-preview').classList.add('hidden');
+                }
+            }
+        }
+    });
     document.getElementById('search-ddg-toggle').addEventListener('change', (e) => {
         if (e.target.checked) {
             document.getElementById('search-searxng-toggle').checked = false;
@@ -455,41 +488,81 @@ async function clearChat() {
 
 // === Сообщения ===
 
-let attachedFileText = null;
+let attachedFiles = []; // {type: 'document'|'image', name, text?, base64?, mime, width, height}
 
 async function handleFileSelect(e) {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
     
+    const previewsContainer = document.getElementById('file-previews');
     const filePreview = document.getElementById('file-preview');
-    const fileName = document.getElementById('file-name');
     
-    try {
-        const formData = new FormData();
-        formData.append('file', file);
-        
-        const response = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: formData });
-        
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.detail || 'Ошибка загрузки');
+    for (const file of files) {
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            const response = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: formData });
+            
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.detail || 'Ошибка загрузки');
+            }
+            
+            const data = await response.json();
+            
+            if (data.type === 'image') {
+                attachedFiles.push({
+                    type: 'image',
+                    name: file.name,
+                    base64: data.base64,
+                    mime: data.mime_type,
+                    width: data.width,
+                    height: data.height
+                });
+                
+                // Создаем превью
+                const item = document.createElement('div');
+                item.className = 'file-preview-item';
+                item.innerHTML = `
+                    <img src="data:${data.mime};base64,${data.base64}" alt="${file.name}">
+                    <span class="file-name">${file.name}</span>
+                    <button class="file-remove" data-index="${attachedFiles.length - 1}">✕</button>
+                `;
+                previewsContainer.appendChild(item);
+            } else {
+                attachedFiles.push({
+                    type: 'document',
+                    name: file.name,
+                    text: data.text,
+                    charCount: data.char_count
+                });
+                
+                // Создаем превью для документа
+                const item = document.createElement('div');
+                item.className = 'file-preview-item';
+                item.innerHTML = `
+                    <span class="file-name">📄 ${file.name} (${data.char_count} симв.)</span>
+                    <button class="file-remove" data-index="${attachedFiles.length - 1}">✕</button>
+                `;
+                previewsContainer.appendChild(item);
+            }
+            
+            filePreview.classList.remove('hidden');
+            
+        } catch (error) {
+            console.error('Ошибка загрузки файла:', error);
+            alert('Ошибка: ' + error.message);
         }
-        
-        const data = await response.json();
-        attachedFileText = data.text;
-        fileName.textContent = `📎 ${file.name} (${data.char_count} символов)`;
-        filePreview.classList.remove('hidden');
-        
-    } catch (error) {
-        console.error('Ошибка загрузки файла:', error);
-        alert('Ошибка: ' + error.message);
-        e.target.value = '';
     }
+    
+    e.target.value = '';
 }
 
 function clearFile() {
-    attachedFileText = null;
+    attachedFiles = [];
     document.getElementById('file-input').value = '';
+    document.getElementById('file-previews').innerHTML = '';
     document.getElementById('file-preview').classList.add('hidden');
 }
 
@@ -497,23 +570,44 @@ async function sendMessage() {
     const input = document.getElementById('message-input');
     const message = input.value.trim();
     
-    if (!message && !attachedFileText) return;
+    if (!message && !attachedFiles.length) return;
     
-    // Формируем финальное сообщение с файлом
+    // Формируем финальное сообщение с файлами
     let fullMessage = message;
-    if (attachedFileText) {
+    const docTexts = attachedFiles
+        .filter(f => f.type === 'document')
+        .map(f => `[ФАЙЛ: ${f.name}]\n${f.text}\n[КОНЕЦ ФАЙЛА]`)
+        .join('\n\n');
+    
+    if (docTexts) {
         fullMessage = message 
-            ? `${message}\n\n[СОДЕРЖИМОЕ ФАЙЛА]\n${attachedFileText}\n[КОНЕЦ ФАЙЛА]`
-            : `[СОДЕРЖИМОЕ ФАЙЛА]\n${attachedFileText}\n[КОНЕЦ ФАЙЛА]`;
+            ? `${message}\n\n${docTexts}`
+            : docTexts;
     }
     
-    // Очищаем поле и файл
+    // Собираем base64 изображений для отправки
+    const imageBases = attachedFiles
+        .filter(f => f.type === 'image')
+        .map(f => f.base64);
+    
+    // Сохраняем информацию о файлах для UI ДО очистки
+    const filesCount = attachedFiles.length;
+    const hasImages = imageBases.length > 0;
+    const hasDocs = docTexts.length > 0;
+    
+    // Очищаем поле и файлы
     input.value = '';
     input.style.height = 'auto';
+    
+    // Сохраняем текущие файлы для отправки
+    const imagesToSend = [...imageBases];
+    const docsToSend = attachedFiles.filter(f => f.type === 'document');
     clearFile();
     
-    // Добавляем сообщение пользователя
-    appendMessage('user', message || '📎 Файл');
+    // Добавляем сообщение пользователя (используем сохранённое количество)
+    appendMessage('user', message || (filesCount > 0 ? `📎 ${filesCount} файл(ов)` : '')
+        ? `${message}\n\n${hasDocs ? '📄 Документы: ' + docsToSend.map(f => f.name).join(', ') : ''}${hasImages ? (hasDocs ? ', ' : '') + '🖼️ Изображения: ' + imageBases.length : ''}`
+        : (filesCount > 0 ? `📎 ${filesCount} файл(ов)` : ''));
     showTypingIndicator();
     
     // Отправляем на сервер
@@ -532,6 +626,7 @@ async function sendMessage() {
                 chat_id: currentChatId,
                 thinking: thinkingEnabled,
                 search: searchProvider,
+                images: imagesToSend,
             }),
         });
         
