@@ -198,128 +198,6 @@ class DummyTTSEngine(ITTSEngine):
         logger.info("Dummy TTS Engine закрыт")
 
 
-class Pyttsx3Engine(ITTSEngine):
-    """
-    TTS движок на основе pyttsx3.
-    
-    Оффлайн TTS с использованием системных голосов.
-    Работает без интернета, но качество зависит от ОС.
-    
-    Для активации:
-    1. Установить: pip install pyttsx3
-    2. Раскомментировать использование в TTSEngine factory
-    """
-    
-    def __init__(self, voice_name: str | None = None, rate: int = 150):
-        """
-        Инициализировать pyttsx3 движок.
-        
-        Args:
-            voice_name: Имя голоса (None = голос по умолчанию)
-            rate: Скорость речи (слова в минуту)
-        """
-        self._voice_name = voice_name
-        self._rate = rate
-        self._engine = None
-        self._initialized = False
-        
-        # Кэш аудио (хеш текста -> audio data)
-        self._cache: dict[str, bytes] = {}
-    
-    async def initialize(self) -> None:
-        """Инициализировать pyttsx3."""
-        import pyttsx3
-        
-        # pyttsx3 не асинхронный, запускаем в executor
-        loop = asyncio.get_event_loop()
-        self._engine = await loop.run_in_executor(
-            None,
-            lambda: pyttsx3.init(),
-        )
-        
-        # Настраиваем голос
-        if self._voice_name:
-            self._engine.setProperty("voice", self._voice_name)
-        self._engine.setProperty("rate", self._rate)
-        
-        self._initialized = True
-        logger.info(f"Pyttsx3 TTS Engine инициализирован, голос: {self._voice_name or 'default'}")
-    
-    async def speak(self, text: str) -> AudioResult:
-        """Озвучить текст через системные динамики."""
-        if not self._initialized or not self._engine:
-            return AudioResult(
-                success=False,
-                error="TTS Engine не инициализирован",
-            )
-        
-        loop = asyncio.get_event_loop()
-        
-        try:
-            # Блокирующий вызов в executor
-            await loop.run_in_executor(None, lambda: self._engine.say(text))
-            await loop.run_in_executor(None, lambda: self._engine.runAndWait())
-            
-            return AudioResult(
-                success=True,
-                duration_ms=len(text) * 50,  # Примерная длительность
-            )
-        except Exception as e:
-            logger.error(f"Ошибка TTS: {e}")
-            return AudioResult(
-                success=False,
-                error=str(e),
-            )
-    
-    async def synthesize(self, text: str) -> AudioResult:
-        """
-        Синтезировать аудио.
-        
-        Примечание: pyttsx3 не поддерживает прямой экспорт в bytes,
-        только воспроизведение или сохранение в файл.
-        """
-        logger.warning("Pyttsx3 не поддерживает synthesize(), используйте save_to_file()")
-        return AudioResult(
-            success=False,
-            error="Pyttsx3 не поддерживает синтез в bytes",
-        )
-    
-    async def save_to_file(self, text: str, file_path: str | Path) -> AudioResult:
-        """Сохранить аудио в файл."""
-        if not self._initialized or not self._engine:
-            return AudioResult(
-                success=False,
-                error="TTS Engine не инициализирован",
-            )
-        
-        loop = asyncio.get_event_loop()
-        file_path = Path(file_path)
-        
-        try:
-            # pyttsx3 не имеет прямого save, эмулируем через say
-            # Для реального сохранения нужно использовать другие библиотеки
-            logger.warning("Pyttsx3 требует доработки для save_to_file")
-            
-            return AudioResult(
-                success=False,
-                error="Pyttsx3 требует доработки для сохранения в файл",
-            )
-        except Exception as e:
-            logger.error(f"Ошибка сохранения TTS: {e}")
-            return AudioResult(
-                success=False,
-                error=str(e),
-            )
-    
-    async def close(self) -> None:
-        """Освободить ресурсы."""
-        if self._engine:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, lambda: self._engine.stop())
-        self._initialized = False
-        logger.info("Pyttsx3 TTS Engine закрыт")
-
-
 class OmniVoiceEngine(ITTSEngine):
     """
     TTS движок на основе OmniVoice.
@@ -330,7 +208,8 @@ class OmniVoiceEngine(ITTSEngine):
     
     def __init__(self, model_path: str = None):
         if model_path is None:
-            model_path = "E:\\My_Python_Projects\\OpenCode_test\\local_assistant\\llm-assistant-tauri\\src-tauri\\target\\release\\OmniVoice"
+            base_dir = Path(__file__).parent.parent
+            model_path = str(base_dir / "llm-assistant-tauri" / "src-tauri" / "target" / "release" / "OmniVoice")
         self._model_path = model_path
         self._model = None
         self._device = "cuda"
@@ -347,7 +226,7 @@ class OmniVoiceEngine(ITTSEngine):
         self._ref_text_cache: dict[str, str] = {}
         
         # Папка с голосами
-        self._voices_dir = Path("E:\\My_Python_Projects\\OpenCode_test\\local_assistant\\voices")
+        self._voices_dir = Path(__file__).parent.parent / "voices"
     
     def set_voice_config(self, mode: str = "instruct", 
                          instruct: str = "female",
@@ -444,14 +323,23 @@ class OmniVoiceEngine(ITTSEngine):
             import os
             
             # Добавляем FFmpeg в PATH для авто-транскрипции референса
-            ffmpeg_bin = r"F:\ffmpeg\bin"
-            if os.path.isdir(ffmpeg_bin) and ffmpeg_bin not in os.environ.get("PATH", ""):
-                os.environ["PATH"] = ffmpeg_bin + ";" + os.environ.get("PATH", "")
-                try:
-                    os.add_dll_directory(ffmpeg_bin)
-                except Exception:
-                    pass
-                logger.info(f"FFmpeg добавлен в PATH: {ffmpeg_bin}")
+            # 1. Проверяем системный ffmpeg
+            import shutil
+            ffmpeg_found = shutil.which("ffmpeg") is not None
+            if not ffmpeg_found:
+                # 2. Пробуем локальную папку ffmpeg/ в проекте
+                local_ffmpeg = Path(__file__).parent.parent / "ffmpeg"
+                # Также проверяем альтернативный личный путь (для обратной совместимости)
+                fallback_ffmpeg = Path(r"F:\ffmpeg\bin")
+                for ffmpeg_bin in [str(local_ffmpeg), str(fallback_ffmpeg)]:
+                    if os.path.isdir(ffmpeg_bin) and ffmpeg_bin not in os.environ.get("PATH", ""):
+                        os.environ["PATH"] = ffmpeg_bin + ";" + os.environ.get("PATH", "")
+                        try:
+                            os.add_dll_directory(ffmpeg_bin)
+                        except Exception:
+                            pass
+                        logger.info(f"FFmpeg добавлен в PATH: {ffmpeg_bin}")
+                        break
             
             # Офлайн режим - использовать только локальные файлы
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -477,7 +365,7 @@ class OmniVoiceEngine(ITTSEngine):
                 self._device = "cpu"
             
             # Загружаем локальную Whisper для кеширования транскрипций
-            whisper_path = "E:\\My_Python_Projects\\OpenCode_test\\local_assistant\\llm-assistant-tauri\\src-tauri\\target\\release\\openai_whisper-large-v3-turbo"
+            whisper_path = str(Path(__file__).parent.parent / "llm-assistant-tauri" / "src-tauri" / "target" / "release" / "openai_whisper-large-v3-turbo")
             try:
                 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
                 logger.info(f"Загрузка локальной Whisper для кеширования: {whisper_path}")
@@ -674,9 +562,9 @@ class OmniVoiceEngine(ITTSEngine):
             
             # Также сохраняем в постоянную папку для проверки
             import datetime
-            debug_path = f"E:\\My_Python_Projects\\OpenCode_test\\local_assistant\\debug_tts\\tts_{datetime.datetime.now().strftime('%H%M%S')}.wav"
-            import os
-            os.makedirs(os.path.dirname(debug_path), exist_ok=True)
+            debug_dir = Path(__file__).parent.parent / "debug_tts"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            debug_path = str(debug_dir / f"tts_{datetime.datetime.now().strftime('%H%M%S')}.wav")
             
             # Сохраняем 24kHz аудио
             sf.write(temp_path, audio_np, 24000)
@@ -789,27 +677,18 @@ class TTSEngine:
         """
         Инициализировать TTS движок.
         
-        Выбирает реализацию:
-        - Если TTS_ENABLED=false: DummyTTSEngine
-        - Если установлен pyttsx3: Pyttsx3Engine
-        - Иначе: DummyTTSEngine
+        Если TTS_ENABLED=false: DummyTTSEngine.
+        Реальный TTS (OmniVoice) загружается через enable_omnivoice() из API.
         """
         if self._initialized:
             return
         
         if not self._config.enabled:
-            # TTS отключён — используем заглушку
             self._engine = DummyTTSEngine()
             logger.info("TTS отключён в конфигурации, используется заглушка")
         else:
-            # Пытаемся использовать pyttsx3
-            try:
-                import pyttsx3
-                self._engine = Pyttsx3Engine(voice_name=self._config.model)
-                logger.info(f"Pyttsx3 доступен, используется для TTS (модель: {self._config.model})")
-            except ImportError:
-                logger.warning("pyttsx3 не установлен, используется заглушка")
-                self._engine = DummyTTSEngine()
+            logger.info("TTS включён, будет загружен при первом запросе через API")
+            self._engine = DummyTTSEngine()
         
         await self._engine.initialize()
         self._initialized = True

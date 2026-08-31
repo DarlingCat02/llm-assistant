@@ -98,9 +98,25 @@ class STTEngine:
         try:
             import torch
             import librosa
+            import os
+            import shutil
+            # Убедиться что ffmpeg доступен (как в tts_engine)
+            if shutil.which("ffmpeg") is None:
+                local_ffmpeg = Path(__file__).parent.parent / "ffmpeg"
+                fallback_ffmpeg = Path(r"F:\ffmpeg\bin")
+                for fb in [str(local_ffmpeg), str(fallback_ffmpeg)]:
+                    if os.path.isdir(fb) and fb not in os.environ.get("PATH", ""):
+                        os.environ["PATH"] = fb + ";" + os.environ.get("PATH", "")
+                        break
             
             # Загружаем аудио
             audio, sr = librosa.load(audio_path, sr=16000)
+            
+            logger.debug(f"Аудио загружено: shape={audio.shape}, sr={sr}, duration={len(audio)/sr:.2f}s")
+            if len(audio) == 0:
+                raise ValueError("Аудио пустое (0 samples) — запись слишком короткая или повреждена")
+            if len(audio) < 1600:  # <0.1 сек
+                logger.warning(f"Очень короткое аудио: {len(audio)} samples ({len(audio)/sr:.2f}s), возможно тишина")
             
             # Если стерео - конвертируем в моно
             if len(audio.shape) > 1:
@@ -143,7 +159,7 @@ class STTEngine:
             return transcription.strip()
             
         except Exception as e:
-            logger.error(f"Ошибка распознавания: {e}")
+            logger.error(f"Ошибка распознавания: {e}", exc_info=True)
             raise
     
     async def transcribe_bytes(self, audio_bytes: bytes, format: str = "webm") -> str:

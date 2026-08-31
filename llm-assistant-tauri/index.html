@@ -188,12 +188,13 @@
                     <label for="ollama-host-input">Хост:</label>
                     <input type="text" id="ollama-host-input" class="settings-input" value="http://localhost:11434">
                 </div>
-                <div class="settings-section">
+                <div class="settings-section" id="num-ctx-section">
                     <label>Контекст: <span id="num-ctx-value">8192</span> токенов</label>
                     <input type="range" id="num-ctx-slider" class="settings-slider" min="9" max="15" value="13" step="1">
                     <div class="slider-labels">
                         <span>512</span><span>1K</span><span>2K</span><span>4K</span><span>8K</span><span>16K</span><span>32K</span>
                     </div>
+                    <div id="num-ctx-hint" class="settings-hint hidden" style="margin-top:6px;color:var(--text-secondary);font-size:12px;">⚠️ Для LM Studio настраивайте модель и контекст в самом LM Studio (перезагрузите модель там) и перезапустите приложение.</div>
                 </div>
                 <div class="settings-section">
                     <label>Temperature: <span id="temperature-value">0.7</span></label>
@@ -221,20 +222,14 @@
             <!-- Memory Tab -->
             <div class="settings-tab-content" id="tab-memory">
                 <div class="settings-section">
-                    <label>Макс. сообщений в контексте: <span id="memory-context-value">20</span></label>
-                    <div class="slider-hint">Сколько последних сообщений помнит ассистент</div>
-                    <input type="range" id="memory-context-slider" class="settings-slider" min="5" max="100" value="20" step="5">
-                    <div class="slider-labels"><span>5</span><span>20</span><span>50</span><span>100</span></div>
-                </div>
-                <div class="settings-section">
                     <label>Результатов поиска в памяти: <span id="memory-search-value">3</span></label>
-                    <div class="slider-hint">Сколько записей искать в базе знаний</div>
+                    <div class="slider-hint">Сколько записей из памяти добавлять в контекст. Каждая запись ≈150 токенов. 3 × ≈450 токенов</div>
                     <input type="range" id="memory-search-slider" class="settings-slider" min="1" max="10" value="3" step="1">
                     <div class="slider-labels"><span>1</span><span>5</span><span>10</span></div>
                 </div>
                 <div class="settings-section">
                     <label>Порог схожести: <span id="memory-threshold-value">0.3</span></label>
-                    <div class="slider-hint">Насколько точно искать совпадения (0 = всё, 1 = только точные)</div>
+                    <div class="slider-hint">Фильтр релевантности RAG. 0.0 — находит всё подряд (шум), 0.3 — баланс, 0.6+ — только точные совпадения (часто пусто). Если «не нашёл в памяти» — понизьте до 0.2</div>
                     <input type="range" id="memory-threshold-slider" class="settings-slider" min="0" max="10" value="3" step="1">
                     <div class="slider-labels"><span>0.0</span><span>0.5</span><span>1.0</span></div>
                 </div>

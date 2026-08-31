@@ -896,6 +896,20 @@ body {
     margin-bottom: 6px;
 }
 
+.settings-hint {
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.settings-hint.hidden {
+    display: none !important;
+}
+
+.settings-slider:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
 .settings-buttons {
     display: flex;
     gap: 10px;

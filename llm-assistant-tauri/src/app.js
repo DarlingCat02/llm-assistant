@@ -930,19 +930,24 @@ async function openSettings() {
         document.getElementById('tts-temp-value').textContent = (config.tts_temperature || 1.0).toFixed(1);
         
         // Memory
-        document.getElementById('memory-context-slider').value = config.memory_max_context || 20;
-        document.getElementById('memory-context-value').textContent = config.memory_max_context || 20;
         document.getElementById('memory-search-slider').value = config.memory_search_results || 3;
         document.getElementById('memory-search-value').textContent = config.memory_search_results || 3;
         document.getElementById('memory-threshold-slider').value = Math.round((config.memory_threshold || 0.3) * 10);
         document.getElementById('memory-threshold-value').textContent = (config.memory_threshold || 0.3).toFixed(1);
         
-        onProviderChange();
-        await loadModelsForProvider(config.provider || 'ollama');
+        await onProviderChange();
         
-        // Выбрать текущую модель
+        // Выбрать текущую модель (после загрузки списка)
         const modelSelect = document.getElementById('model-select');
         if (config.model) {
+            // Если модели нет в списке — добавим её как (текущая)
+            const exists = Array.from(modelSelect.options).some(o => o.value === config.model);
+            if (!exists) {
+                const opt = document.createElement('option');
+                opt.value = config.model;
+                opt.textContent = config.model + ' (текущая)';
+                modelSelect.prepend(opt);
+            }
             modelSelect.value = config.model;
         }
     } catch (error) {
@@ -1007,15 +1012,6 @@ function initSliders() {
         });
     }
     
-    // Memory Context
-    const memCtxSlider = document.getElementById('memory-context-slider');
-    const memCtxValue = document.getElementById('memory-context-value');
-    if (memCtxSlider) {
-        memCtxSlider.addEventListener('input', () => {
-            memCtxValue.textContent = memCtxSlider.value;
-        });
-    }
-    
     // Memory Search
     const memSearchSlider = document.getElementById('memory-search-slider');
     const memSearchValue = document.getElementById('memory-search-value');
@@ -1035,11 +1031,13 @@ function initSliders() {
     }
 }
 
-function onProviderChange() {
+async function onProviderChange() {
     const provider = document.getElementById('provider-select').value;
     const apiKeySection = document.getElementById('api-key-section');
     const ollamaHostSection = document.getElementById('ollama-host-input').parentElement;
     const hostInput = document.getElementById('ollama-host-input');
+    const ctxSlider = document.getElementById('num-ctx-slider');
+    const ctxHint = document.getElementById('num-ctx-hint');
     
     if (provider === 'openrouter') {
         apiKeySection.classList.remove('hidden');
@@ -1059,8 +1057,21 @@ function onProviderChange() {
             hostInput.value = 'http://localhost:11434';
         }
     }
+
+    // Для LM Studio контекст и модель — только чтение (меняются в LM Studio)
+    const isLmStudio = provider === 'lm_studio';
+    const modelSelect = document.getElementById('model-select');
+    if (ctxSlider) ctxSlider.disabled = isLmStudio;
+    if (modelSelect) modelSelect.disabled = isLmStudio;
+    if (ctxHint) {
+        ctxHint.textContent = isLmStudio
+            ? '⚠️ Для LM Studio настраивайте модель и контекст в самом LM Studio (перезагрузите модель там) и перезапустите приложение.'
+            : 'ℹ️ Для Ollama применится сразу.';
+        ctxHint.classList.remove('hidden');
+        if (!isLmStudio) ctxHint.classList.add('hidden');
+    }
     
-    loadModelsForProvider(provider);
+    await loadModelsForProvider(provider);
 }
 
 async function loadModelsForProvider(provider) {
@@ -1094,14 +1105,15 @@ async function loadModelsForProvider(provider) {
 
 async function saveSettings() {
     const provider = document.getElementById('provider-select').value;
-    const model = document.getElementById('model-select').value;
+    const modelSelect = document.getElementById('model-select');
+    const model = modelSelect.disabled ? null : modelSelect.value;
     const ollamaHost = document.getElementById('ollama-host-input').value;
     const apiKey = document.getElementById('api-key-input').value;
-    const numCtx = Math.pow(2, parseInt(document.getElementById('num-ctx-slider').value));
+    const ctxSlider = document.getElementById('num-ctx-slider');
+    const numCtx = ctxSlider.disabled ? null : Math.pow(2, parseInt(ctxSlider.value));
     const temperature = parseInt(document.getElementById('temperature-slider').value) / 10;
     const ttsSteps = parseInt(document.getElementById('tts-steps-slider').value);
     const ttsTemperature = parseInt(document.getElementById('tts-temp-slider').value) / 10;
-    const memoryMaxContext = parseInt(document.getElementById('memory-context-slider').value);
     const memorySearchResults = parseInt(document.getElementById('memory-search-slider').value);
     const memoryThreshold = parseInt(document.getElementById('memory-threshold-slider').value) / 10;
     
@@ -1118,7 +1130,6 @@ async function saveSettings() {
                 temperature: temperature,
                 tts_steps: ttsSteps,
                 tts_temperature: ttsTemperature,
-                memory_max_context: memoryMaxContext,
                 memory_search_results: memorySearchResults,
                 memory_threshold: memoryThreshold,
             }),

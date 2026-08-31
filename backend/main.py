@@ -44,7 +44,6 @@ from config import get_config, Config
 from backend.database import ChatDatabase
 from backend.api import (
     memory_router,
-    voice_router,
     manager,
     ChatMessage,
     ChatResponseMessage,
@@ -114,6 +113,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _assistant = Assistant(_config)
         await _assistant.initialize()
         logger.info("Ассистент инициализирован для API")
+        # Для LM Studio — синхронизируем модель с реально загруженной в LM Studio (один раз при старте)
+        if _config.llm.provider.value == "lm_studio":
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    resp = await client.get(f"{_config.llm.host}/api/v0/models")
+                    if resp.status_code == 200:
+                        for m in resp.json().get("data", []):
+                            if m.get("state") == "loaded":
+                                loaded_id = m.get("id")
+                                if loaded_id and loaded_id != _config.llm.model:
+                                    logger.info(f"Синхронизация модели LM Studio: {_config.llm.model} -> {loaded_id} (загружена в LM Studio)")
+                                    _config.llm.model = loaded_id
+                                    if _assistant and _assistant._llm:
+                                        _assistant._llm._config.model = loaded_id
+                                break
+            except Exception as e:
+                logger.debug(f"Не удалось синхронизировать модель LM Studio: {e}")
     except Exception as e:
         logger.warning(f"Не удалось инициализировать ассистента: {e}")
         logger.warning("API чата будет недоступно, но веб-интерфейс работает")
@@ -185,9 +202,8 @@ async def handle_options(request: Request, call_next):
 # === Монтирование роутов ===
 
 app.include_router(memory_router)
-app.include_router(voice_router)
 
-# Добавляем WebSocket роут напрямую к app (не через voice_router)
+# Добавляем WebSocket роут напрямую к app
 # Это помогает обойти проверку origin
 @app.websocket("/ws/events")
 async def global_websocket_endpoint(websocket: WebSocket):
@@ -406,13 +422,27 @@ async def chat(request: ChatMessage):
     # Сохраняем сообщение пользователя
     await _db.add_message(chat_id, "user", request.message)
 
-    # Загружаем историю чата для контекста
+    # Загружаем историю чата для контекста (последние 30 сообщений, без дубля текущего)
     history_messages = await _db.get_chat_history(chat_id)
+    # Исключаем последнее сообщение (текущее user), т.к. оно уже передаётся как user_message отдельно
+    if history_messages and history_messages[-1].role == "user" and history_messages[-1].content == request.message:
+        history_messages = history_messages[:-1]
+    # Ограничиваем историю чтобы не раздувать промпт (57 сообщений → 1968 токенов, было медленно)
+    MAX_HISTORY = 30
+    if len(history_messages) > MAX_HISTORY:
+        history_messages = history_messages[-MAX_HISTORY:]
     chat_history = [
         {"role": msg.role, "content": msg.content}
         for msg in history_messages
         if msg.role in ("user", "assistant")
     ]
+
+    # Для LM Studio — подменяем модель на реально загруженную (1 запрос в 30с, чтобы не грузить вторую)
+    if _config and _config.llm.provider.value == "lm_studio":
+        loaded = await get_lmstudio_loaded_model()
+        if loaded and _assistant and _assistant._llm and loaded != _assistant._llm._config.model:
+            logger.info(f"Подмена модели {_assistant._llm._config.model} -> {loaded} (загружена в LM Studio)")
+            _assistant._llm._config.model = loaded
 
     # Получаем ответ от ассистента
     try:
@@ -441,7 +471,7 @@ async def chat(request: ChatMessage):
         "content": response_text,
     })
 
-    max_ctx = getattr(get_config().llm, 'num_ctx', 8192)
+    max_ctx = await get_effective_context_length()
 
     return ChatResponseMessage(
         response=response_text,
@@ -450,6 +480,39 @@ async def chat(request: ChatMessage):
         used_context_tokens=used_tokens,
         max_context_tokens=max_ctx,
     )
+
+
+_cached_lm_model: str | None = None
+_cached_lm_model_time: float = 0.0
+
+async def get_lmstudio_loaded_model() -> str | None:
+    """Вернуть id загруженной модели в LM Studio (кеш 30с), чтобы не грузить вторую."""
+    global _cached_lm_model, _cached_lm_model_time
+    import time
+    now = time.monotonic()
+    if _cached_lm_model is not None and (now - _cached_lm_model_time) < 30.0:
+        return _cached_lm_model
+    try:
+        cfg = get_config().llm
+        if cfg.provider.value != "lm_studio":
+            return None
+        import httpx
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{cfg.host}/api/v0/models")
+            if resp.status_code == 200:
+                for m in resp.json().get("data", []):
+                    if m.get("state") == "loaded":
+                        _cached_lm_model = m.get("id")
+                        _cached_lm_model_time = now
+                        return _cached_lm_model
+    except:
+        pass
+    return None
+
+async def get_effective_context_length() -> int:
+    """Вернуть лимит контекста из конфига (для LM Studio — тоже из .env, без лишних запросов)."""
+    cfg = get_config().llm
+    return int(getattr(cfg, 'num_ctx', 8192))
 
 
 @app.get("/api/status")
@@ -468,19 +531,22 @@ async def get_status():
         stats["memory_entries"] = memory_stats.get("total_entries", 0)
     
     thinking_supported = await _config.llm.check_thinking_support() if _config else False
+    effective_ctx = await get_effective_context_length() if _config else 8192
     
     return {
         "status": "ok",
         "provider": _config.llm.provider.value if _config else "unknown",
         "model": _config.llm.model if _config else "unknown",
         "supports_thinking": thinking_supported,
+        "loaded_context_length": effective_ctx,
+        "max_context_length": effective_ctx,
         **stats,
     }
 
 
 @app.get("/api/config")
 async def get_current_config():
-    """Получить текущую конфигурацию."""
+    """Получить текущую конфигурацию. Для LM Studio — возвращает реально загруженную модель."""
     if not _config:
         return {
             "provider": "ollama", "model": "", "ollama_host": "http://localhost:11434",
@@ -506,8 +572,8 @@ async def get_current_config():
 
 @app.put("/api/config")
 async def update_config(request: dict):
-    """Обновить конфигурацию (сохраняется в .env файл)."""
-    from config import get_config, save_config
+    """Обновить конфигурацию (сохраняется в .env файл). При смене модели/контекста для LM Studio — автозагрузка."""
+    from config import get_config, save_config, reload_config
     
     provider = request.get("provider", "ollama")
     model = request.get("model", "")
@@ -520,6 +586,17 @@ async def update_config(request: dict):
     memory_max_context = request.get("memory_max_context")
     memory_search_results = request.get("memory_search_results")
     memory_threshold = request.get("memory_threshold")
+
+    # Запомним предыдущую модель/контекст для определения смены
+    try:
+        prev_cfg = get_config()
+        prev_model = prev_cfg.llm.model
+        prev_provider = prev_cfg.llm.provider.value
+        prev_ctx = prev_cfg.llm.num_ctx
+    except:
+        prev_model = ""
+        prev_provider = ""
+        prev_ctx = None
     
     save_config(
         provider=provider,
@@ -534,20 +611,114 @@ async def update_config(request: dict):
         memory_search_results=memory_search_results,
         memory_threshold=memory_threshold,
     )
+    # Hot-swap без рестарта
+    try:
+        new_cfg = reload_config()
+        global _config
+        _config = new_cfg
+        if _assistant:
+            _assistant._config = new_cfg
+            if _assistant._llm:
+                _assistant._llm._config = new_cfg.llm
+                # Пересоздать http клиент с новым host/api_key если сменился
+                try:
+                    await _assistant._llm.close()
+                except:
+                    pass
+                _assistant._llm._initialized = False
+                await _assistant._llm.initialize()
+    except Exception as e:
+        logger.warning(f"Hot-swap config failed: {e}")
+
+    # Для LM Studio — только сохранение, без автозагрузки (меняется в самом LM Studio, read-only в UI)
+    load_result = None
+    if False and provider == "lm_studio" and model and (model != prev_model or (num_ctx and num_ctx != prev_ctx)):
+        try:
+            import httpx
+            base = ollama_host.rstrip("/") if ollama_host else "http://localhost:1234"
+            if not base.startswith("http"):
+                base = "http://" + base
+            # Выгрузить старые загруженные модели перед загрузкой новой (чтобы не копились :2, :3)
+            # Если та же модель с тем же контекстом уже загружена — пропускаем выгрузку
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    r = await client.get(f"{base}/api/v0/models")
+                    if r.status_code == 200:
+                        data = r.json()
+                        target_ctx = None
+                        try:
+                            target_ctx = int(num_ctx) if num_ctx else None
+                        except:
+                            pass
+                        already_ok = False
+                        for m in data.get("data", []):
+                            if m.get("state") == "loaded" and m.get("id") == model:
+                                if target_ctx is None or m.get("loaded_context_length") == target_ctx:
+                                    already_ok = True
+                                    break
+                        if not already_ok:
+                            for m in data.get("data", []):
+                                if m.get("state") == "loaded":
+                                    try:
+                                        await client.post(f"{base}/api/v1/models/unload", json={"instance_id": m.get("id")}, timeout=10.0)
+                                        logger.info(f"Выгружена старая модель: {m.get('id')}")
+                                    except Exception as ue:
+                                        logger.debug(f"Не удалось выгрузить {m.get('id')}: {ue}")
+            except Exception as e:
+                logger.debug(f"Ошибка при выгрузке старых моделей: {e}")
+            payload = {"model": model}
+            if num_ctx:
+                try:
+                    payload["context_length"] = int(num_ctx)
+                except:
+                    pass
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                resp = await client.post(f"{base}/api/v1/models/load", json=payload)
+                if resp.status_code in (200, 204):
+                    load_result = {"ok": True}
+                else:
+                    try:
+                        data = resp.json()
+                    except:
+                        data = {"raw": resp.text[:500]}
+                    if resp.status_code == 400 and "already loaded" in str(data).lower():
+                        load_result = {"ok": True, "already_loaded": True}
+                    else:
+                        load_result = {"ok": False, "status": resp.status_code, "detail": data}
+        except Exception as e:
+            load_result = {"ok": False, "error": str(e)}
+
+    if load_result is not None:
+        if load_result.get("ok"):
+            return {"status": "ok", "message": "Конфигурация сохранена и модель загружена в LM Studio", "load": load_result}
+        else:
+            return {"status": "ok", "message": "Конфигурация сохранена, но автозагрузка в LM Studio не удалась — загрузите вручную", "load": load_result, "warning": True}
     
-    return {"status": "ok", "message": "Конфигурация сохранена в .env"}
+    return {"status": "ok", "message": "Конфигурация сохранена (hot-swap без рестарта)"}
 
 
 @app.post("/api/tts/toggle")
-async def toggle_tts(enabled: bool):
+async def toggle_tts(request: Request):
     """
     Переключить TTS (OmniVoice) вкл/выкл.
     
+    Принимает raw JSON bool (true/false) или объект {"enabled": true}.
     При enabled=True - загружает OmniVoice в память.
     При enabled=False - выгружает OmniVoice из памяти.
     """
     if not _assistant:
         raise HTTPException(status_code=503, detail="Ассистент не инициализирован")
+    
+    try:
+        body = await request.json()
+    except:
+        body = False
+    if isinstance(body, bool):
+        enabled = body
+    elif isinstance(body, dict):
+        enabled = bool(body.get("enabled", body.get("value", False)))
+    else:
+        enabled = bool(body)
     
     if enabled:
         success = await _assistant._tts.enable_omnivoice()
@@ -627,7 +798,7 @@ async def get_voices():
     """Получить список доступных голосов для клонирования."""
     from pathlib import Path
     
-    voices_dir = Path("E:/My_Python_Projects/OpenCode_test/local_assistant/voices")
+    voices_dir = Path(__file__).parent.parent / "voices"
     voices = []
     
     if voices_dir.exists():
@@ -709,8 +880,12 @@ async def get_models(provider: str = "ollama", host: str = "http://localhost:114
     
     elif provider == "lm_studio":
         try:
+            # Уважать host параметр (как для ollama)
+            base = host.rstrip("/") if host else "http://localhost:1234"
+            if not base.startswith("http"):
+                base = "http://" + base
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get("http://localhost:1234/v1/models")
+                resp = await client.get(f"{base}/v1/models")
                 if resp.status_code == 200:
                     data = resp.json()
                     models = [m["id"] for m in data.get("data", [])]
@@ -732,6 +907,90 @@ async def get_models(provider: str = "ollama", host: str = "http://localhost:114
         }
     
     return {"models": []}
+
+
+@app.post("/api/models/load")
+async def load_model(request: dict):
+    """Загрузить модель в провайдере (LM Studio: POST /api/v1/models/load). Выгружает предыдущую если нужно."""
+    provider = request.get("provider", "lm_studio")
+    model = request.get("model", "")
+    host = request.get("host", "http://localhost:1234")
+    context_length = request.get("context_length") or request.get("num_ctx")
+
+    if not model:
+        raise HTTPException(status_code=400, detail="model не указан")
+
+    if provider == "lm_studio":
+        base = host.rstrip("/") if host else "http://localhost:1234"
+        if not base.startswith("http"):
+            base = "http://" + base
+        # Выгрузить предыдущие загруженные модели (чтобы не копились :2, :3 инстансы)
+        # Логика: если уже загружена та же модель с тем же контекстом — ничего не делаем,
+        # иначе выгружаем все загруженные (особенно ту же модель с другим контекстом)
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{base}/api/v0/models")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    target_ctx = None
+                    try:
+                        target_ctx = int(context_length) if context_length else None
+                    except:
+                        pass
+                    # Проверить already loaded с тем же контекстом
+                    already_ok = False
+                    for m in data.get("data", []):
+                        if m.get("state") == "loaded" and m.get("id") == model:
+                            loaded_ctx = m.get("loaded_context_length")
+                            if target_ctx is None or loaded_ctx == target_ctx:
+                                already_ok = True
+                                break
+                    if already_ok:
+                        logger.info(f"Модель {model} уже загружена с контекстом {target_ctx}, пропускаем выгрузку")
+                    else:
+                        # Выгружаем все загруженные (и ту же модель с другим контекстом, и другие модели)
+                        for m in data.get("data", []):
+                            if m.get("state") == "loaded":
+                                inst_id = m.get("id")
+                                # Не выгружаем саму цель если она уже загружена с правильным контекстом (выше уже проверили)
+                                # Иначе выгружаем всё
+                                try:
+                                    await client.post(f"{base}/api/v1/models/unload", json={"instance_id": inst_id}, timeout=10.0)
+                                    logger.info(f"Выгружена предыдущая модель: {inst_id}")
+                                except Exception as ue:
+                                    logger.debug(f"Не удалось выгрузить {inst_id}: {ue}")
+        except Exception as e:
+            logger.debug(f"Ошибка при выгрузке старых моделей: {e}")
+
+        payload = {"model": model}
+        if context_length:
+            try:
+                payload["context_length"] = int(context_length)
+            except:
+                pass
+        # Попытка загрузить
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                resp = await client.post(f"{base}/api/v1/models/load", json=payload)
+                if resp.status_code in (200, 204):
+                    return {"ok": True, "provider": provider, "model": model, "context_length": context_length}
+                # LM Studio может вернуть 400 если уже загружена — считаем ok
+                try:
+                    data = resp.json()
+                except:
+                    data = {"raw": resp.text[:500]}
+                if resp.status_code == 400 and "already loaded" in str(data).lower():
+                    return {"ok": True, "provider": provider, "model": model, "already_loaded": True}
+                return {"ok": False, "status": resp.status_code, "detail": data}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"LM Studio load failed: {e}")
+    elif provider == "ollama":
+        # Ollama грузит лениво, отдельная команда не нужна — hot-swap через payload.model
+        return {"ok": True, "provider": provider, "model": model, "jit": True}
+    else:
+        return {"ok": True, "provider": provider, "model": model}
 
 
 # === STT (Speech-to-Text) ===
@@ -784,8 +1043,13 @@ async def stt_transcribe(file: UploadFile = File(...)):
         return {"text": text, "success": True}
         
     except Exception as e:
-        logger.error(f"Ошибка STT: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка распознавания: {str(e)}")
+        logger.error(f"Ошибка STT: {e}", exc_info=True)
+        # Если ошибка пустая — показать repr и traceback для диагностики
+        detail = str(e) or repr(e) or e.__class__.__name__
+        if not detail.strip():
+            import traceback
+            detail = traceback.format_exc()[-500:]
+        raise HTTPException(status_code=500, detail=f"Ошибка распознавания: {detail}")
 
 
 # === Запуск ===

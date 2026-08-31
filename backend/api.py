@@ -112,12 +112,6 @@ class MemoryAddRequest(BaseModel):
     entry_type: str = Field(default="user_fact", pattern="^[a-z_]+$")
 
 
-class VoiceRequest(BaseModel):
-    """Модель запроса для голосового ввода."""
-    text: str = Field(default="", max_length=10000)
-    chat_id: Optional[int] = None
-
-
 # === Роуты для памяти ===
 
 memory_router = APIRouter(prefix="/api/memory", tags=["Memory"])
@@ -230,27 +224,6 @@ async def delete_memory_entry(
     return {"status": "ok", "message": f"Запись {entry_id} удалена"}
 
 
-# === Роуты для голоса (будущее) ===
-
-voice_router = APIRouter(prefix="/api/voice", tags=["Voice"])
-
-
-@voice_router.post("")
-async def voice_input(
-    request: VoiceRequest,
-    assistant=None,  # Будет injected
-):
-    """
-    Обработать голосовой ввод.
-    
-    TODO: Реализовать когда будет voice_service.py
-    """
-    raise HTTPException(
-        status_code=501,
-        detail="Голосовой ввод пока не реализован",
-    )
-
-
 # === WebSocket для real-time событий ===
 
 class ConnectionManager:
@@ -314,4 +287,4 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # WebSocket роут перенесён в main.py для обхода проверки origin
-# @voice_router.websocket("/ws/events") - удалено
+

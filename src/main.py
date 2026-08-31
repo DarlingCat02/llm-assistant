@@ -838,8 +838,6 @@ def _run_gui_mode(assistant: Assistant) -> None:
     
     if framework == "customtkinter":
         _run_customtkinter_gui(assistant)
-    elif framework == "flet":
-        _run_flet_gui(assistant)
     else:
         logger.warning(f"Неизвестный GUI фреймворк: {framework}. Запуск консольного режима.")
         asyncio.run(assistant.run())
@@ -858,100 +856,6 @@ def _run_customtkinter_gui(assistant: Assistant) -> None:
     from src.gui_ctk import run_gui
     logger.info("Запуск CustomTkinter GUI")
     run_gui(assistant)
-
-
-def _run_flet_gui(assistant: Assistant) -> None:
-    """
-    Запустить GUI на Flet в отдельном процессе.
-    
-    Args:
-        assistant: Инициализированный экземпляр Assistant.
-    """
-    import multiprocessing as mp
-    
-    # Сериализуем данные для передачи в процесс
-    config_dict = {
-        'llm_provider': assistant._config.llm.provider.value,
-        'llm_host': assistant._config.llm.host,
-        'llm_api_key': assistant._config.llm.api_key,
-        'llm_model': assistant._config.llm.model,
-        'llm_num_ctx': assistant._config.llm.num_ctx,
-        'llm_temperature': assistant._config.llm.temperature,
-        'chroma_persist_dir': assistant._config.chroma.persist_dir,
-        'chroma_collection': assistant._config.chroma.collection_name,
-        'memory_max_context': assistant._config.memory.max_context_messages,
-        'memory_search_results': assistant._config.memory.search_results,
-        'memory_similarity_threshold': assistant._config.memory.similarity_threshold,
-        'tts_enabled': assistant._config.tts.enabled,
-        'gui_title': assistant._config.gui.title,
-        'gui_theme': assistant._config.gui.theme,
-        'gui_width': assistant._config.gui.width,
-        'gui_height': assistant._config.gui.height,
-    }
-
-    # Запускаем GUI в отдельном процессе
-    gui_process = mp.Process(target=_flet_gui_process_entry, args=(config_dict,))
-    gui_process.start()
-    gui_process.join()
-
-
-def _flet_gui_process_entry(config_dict: dict) -> None:
-    """
-    Точка входа для GUI процесса Flet.
-
-    Создаёт новый Assistant и запускает GUI.
-
-    Args:
-        config_dict: Словарь конфигурации.
-    """
-    import flet as ft
-    from config import Config, LLMConfig, LLMProvider, ChromaConfig, MemoryConfig, TTSConfig, GUIConfig
-    from src.main import Assistant
-    from src.gui import create_gui_page
-
-    provider = LLMProvider(config_dict['llm_provider'])
-    
-    config = Config(
-        llm=LLMConfig(
-            provider=provider,
-            host=config_dict['llm_host'],
-            api_key=config_dict['llm_api_key'],
-            model=config_dict['llm_model'],
-            num_ctx=config_dict['llm_num_ctx'],
-            temperature=config_dict['llm_temperature'],
-        ),
-        chroma=ChromaConfig(
-            persist_dir=config_dict['chroma_persist_dir'],
-            collection_name=config_dict['chroma_collection'],
-        ),
-        memory=MemoryConfig(
-            max_context_messages=config_dict['memory_max_context'],
-            search_results=config_dict['memory_search_results'],
-            similarity_threshold=config_dict['memory_similarity_threshold'],
-        ),
-        tts=TTSConfig(
-            enabled=config_dict['tts_enabled'],
-        ),
-        gui=GUIConfig(
-            title=config_dict['gui_title'],
-            theme=config_dict['gui_theme'],
-            width=config_dict['gui_width'],
-            height=config_dict['gui_height'],
-        ),
-    )
-
-    # Создаём и инициализируем ассистента в новом event loop
-    async def create_assistant():
-        assistant = Assistant(config)
-        await assistant.initialize()
-        return assistant
-
-    import asyncio
-    assistant = asyncio.run(create_assistant())
-
-    # Создаём и запускаем GUI
-    page_handler = create_gui_page(assistant)
-    ft.run(page_handler)
 
 
 if __name__ == "__main__":
