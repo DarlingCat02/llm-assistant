@@ -4,7 +4,9 @@
   "sidebar.newChat": "Новый чат",
   "sidebar.memory": "Память",
   "sidebar.status": "Статус",
+  "sidebar.terminal": "Терминал",
   "sidebar.settings": "Настройки",
+  "terminal.title": "Терминал бэкенда",
   "chat.select": "Выберите чат",
   "chat.clear": "Очистить чат",
   "chat.delete": "Удалить чат",
@@ -60,6 +62,8 @@
   "settings.memory": "Память",
   "settings.language": "Язык / Language",
   "settings.language.hint": "Язык интерфейса. По умолчанию — английский при первом запуске.",
+  "settings.showConsole": "Показывать внешнее окно консоли (требует перезапуска)",
+  "settings.showConsole.hint": "Если выключено (по умолчанию), бэкенд работает скрыто, логи — во встроенном Терминале.",
   "settings.provider": "Провайдер:",
   "settings.provider.ollama": "Ollama (локально)",
   "settings.provider.lmstudio": "LM Studio (локально)",
@@ -86,6 +90,7 @@
   "settings.save": "Сохранить",
   "settings.cancel": "Отмена",
   "settings.saved": "Настройки сохранены! Перезапустите приложение для применения.",
+  "settings.savedNoRestart": "Настройки сохранены!",
   "settings.saveError": "Ошибка сохранения настроек",
   "settings.current": " (текущая)",
   "confirm.deleteChat": "Удалить этот чат?",
@@ -110,6 +115,6 @@
   "voice.tts.error": "Ошибка TTS:",
   "voice.loaded": "Загружено голосов для клонирования:",
   "voice.loadError": "Ошибка загрузки голосов:",
-  "status.connected": "🟢 Статус",
-  "status.disconnected": "🔴 Статус"
+  "status.connected": "Статус",
+  "status.disconnected": "Статус"
 }

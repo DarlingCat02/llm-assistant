@@ -24,6 +24,7 @@ Local AI assistant with voice input/output, web search, **Vision-Language (VL) c
 - 🖼️ **Vision-Language (VL)** — image analysis, OCR, screenshot description
 - 🖥️ **Auto screenshot** — triggered by phrases ("look at screen", "screenshot", etc.) with automatic analysis
 - 🌐 **Language switch** — English / Russian interface (General → Language), default English on first launch
+- 🖥️ **Terminal** — built-in backend log viewer (bottom panel 40vh), external console hidden by default (toggle in General)
 
 ## Requirements
 
@@ -487,6 +488,7 @@ MIT
 - 🖼️ **Vision-Language (VL) возможности** — анализ изображений, OCR, описание скриншотов
 - 🖥️ **Авто-скриншот экрана** — по триггерам ("посмотри на экран", "скриншот" и др.) с автоматическим анализом
 - 🌐 **Переключение языка** — английский / русский интерфейс (Общие → Язык), по умолчанию английский при первом запуске
+- 🖥️ **Терминал** — встроенный просмотр логов бэкенда (панель снизу 40vh), внешняя консоль скрыта по умолчанию (переключатель в Общих)
 
 ## Требования
 

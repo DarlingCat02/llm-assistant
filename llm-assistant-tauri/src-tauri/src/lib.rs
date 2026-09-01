@@ -1,10 +1,27 @@
 use log::{info, error};
-use std::process::Command;
-use std::sync::Mutex;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use tauri::{Manager, AppHandle, Emitter};
 
 struct AppState {
     python_process: Option<std::process::Child>,
+    logs: Arc<Mutex<Vec<String>>>,
+}
+
+fn get_show_console(project_dir: &std::path::Path) -> bool {
+    let env_path = project_dir.join(".env");
+    if let Ok(content) = std::fs::read_to_string(env_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.starts_with("GENERAL_SHOW_BACKEND_CONSOLE") {
+                if let Some(val) = line.split('=').nth(1) {
+                    return val.trim().to_lowercase() == "true";
+                }
+            }
+        }
+    }
+    false
 }
 
 impl Drop for AppState {
@@ -19,6 +36,20 @@ impl Drop for AppState {
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+#[tauri::command]
+fn get_backend_logs(state: tauri::State<Mutex<AppState>>) -> Vec<String> {
+    state.lock().map(|s| s.logs.lock().map(|l| l.clone()).unwrap_or_default()).unwrap_or_default()
+}
+
+#[tauri::command]
+fn clear_backend_logs(state: tauri::State<Mutex<AppState>>) {
+    if let Ok(s) = state.lock() {
+        if let Ok(mut logs) = s.logs.lock() {
+            logs.clear();
+        }
+    }
 }
 
 fn stop_python_backend(app_handle: &AppHandle) {
@@ -77,22 +108,76 @@ fn start_python_backend(app_handle: AppHandle) {
         }
     };
     
-    let child = Command::new(&python)
-        .args(["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"])
+    let show_console = get_show_console(project_dir);
+    let mut cmd = Command::new(&python);
+    cmd.args(["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"])
         .current_dir(project_dir)
-        .spawn();
-    
-    match child {
-        Ok(process) => {
-            info!("Python backend started with PID: {}", process.id());
-            app_handle.manage(Mutex::new(AppState {
-                python_process: Some(process),
-            }));
-        }
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    if !show_console {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) => {
             error!("Failed to start Python: {}", e);
+            return;
+        }
+    };
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let pid = child.id();
+    let logs = Arc::new(Mutex::new(Vec::<String>::new()));
+    let logs_clone = logs.clone();
+    let handle_clone = app_handle.clone();
+    // stdout thread
+    if let Some(out) = stdout {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(out);
+            for line in reader.lines().map_while(Result::ok) {
+                {
+                    let mut l = logs_clone.lock().unwrap();
+                    l.push(line.clone());
+                    if l.len() > 2000 { l.remove(0); }
+                }
+                let _ = handle_clone.emit("backend-log", line.clone());
+                println!("{}", line);
+            }
+        });
+    }
+    let logs_clone2 = logs.clone();
+    let handle_clone2 = app_handle.clone();
+    if let Some(err) = stderr {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(err);
+            for line in reader.lines().map_while(Result::ok) {
+                {
+                    let mut l = logs_clone2.lock().unwrap();
+                    l.push(line.clone());
+                    if l.len() > 2000 { l.remove(0); }
+                }
+                let _ = handle_clone2.emit("backend-log", line.clone());
+                eprintln!("{}", line);
+            }
+        });
+    }
+    info!("Python backend started with PID: {} (show_console={})", pid, show_console);
+    // Manage state (if already managed, replace)
+    if app_handle.try_state::<Mutex<AppState>>().is_some() {
+        if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
+            if let Ok(mut s) = state.lock() {
+                s.python_process = Some(child);
+                s.logs = logs;
+                return;
+            }
         }
     }
+    app_handle.manage(Mutex::new(AppState {
+        python_process: Some(child),
+        logs,
+    }));
 }
 
 fn setup_global_shortcuts(app: &AppHandle) {
@@ -160,7 +245,7 @@ pub fn run() {
                 stop_python_backend(window.app_handle());
             }
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![greet, get_backend_logs, clear_backend_logs])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

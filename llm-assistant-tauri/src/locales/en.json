@@ -4,7 +4,9 @@
   "sidebar.newChat": "New chat",
   "sidebar.memory": "Memory",
   "sidebar.status": "Status",
+  "sidebar.terminal": "Terminal",
   "sidebar.settings": "Settings",
+  "terminal.title": "Backend Terminal",
   "chat.select": "Select a chat",
   "chat.clear": "Clear chat",
   "chat.delete": "Delete chat",
@@ -60,6 +62,8 @@
   "settings.memory": "Memory",
   "settings.language": "Language",
   "settings.language.hint": "Interface language. Default is English on first launch.",
+  "settings.showConsole": "Show external console window (requires restart)",
+  "settings.showConsole.hint": "If disabled (default), backend runs hidden and logs appear in the in-app Terminal.",
   "settings.provider": "Provider:",
   "settings.provider.ollama": "Ollama (local)",
   "settings.provider.lmstudio": "LM Studio (local)",
@@ -86,6 +90,7 @@
   "settings.save": "Save",
   "settings.cancel": "Cancel",
   "settings.saved": "Settings saved! Restart the app to apply.",
+  "settings.savedNoRestart": "Settings saved!",
   "settings.saveError": "Failed to save settings",
   "settings.current": " (current)",
   "confirm.deleteChat": "Delete this chat?",
@@ -110,6 +115,6 @@
   "voice.tts.error": "TTS error:",
   "voice.loaded": "Loaded voices for cloning:",
   "voice.loadError": "Failed to load voices:",
-  "status.connected": "🟢 Status",
-  "status.disconnected": "🔴 Status"
+  "status.connected": "Status",
+  "status.disconnected": "Status"
 }

@@ -269,6 +269,7 @@ class GeneralConfig(BaseConfig):
     """Общие настройки (язык интерфейса)."""
     
     language: str = Field(default="en", description="Язык интерфейса: en / ru")
+    show_backend_console: bool = Field(default=False, description="Show external backend console window")
     
     @field_validator("language")
     @classmethod
@@ -397,6 +398,7 @@ def save_config(
     memory_search_results: int = None,
     memory_threshold: float = None,
     language: str = None,
+    show_backend_console: bool | None = None,
 ) -> None:
     """
     Сохранить конфигурацию в .env файл.
@@ -462,6 +464,9 @@ def save_config(
     
     if language is not None:
         env_vars["GENERAL_LANGUAGE"] = language.lower().strip()
+
+    if show_backend_console is not None:
+        env_vars["GENERAL_SHOW_BACKEND_CONSOLE"] = "true" if show_backend_console else "false"
     
     # Записываем обратно
     with open(env_path, "w", encoding="utf-8") as f:

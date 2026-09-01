@@ -20,9 +20,10 @@
             </div>
             
             <div class="sidebar-footer">
-                <button id="memory-btn" class="btn-secondary" data-i18n="sidebar.memory">🧠 Память</button>
-                <button id="status-btn" class="btn-secondary" data-i18n="sidebar.status">📊 Статус</button>
-                <button id="settings-btn" class="btn-secondary" data-i18n="sidebar.settings">⚙️ Настройки</button>
+                <button id="memory-btn" class="btn-secondary" data-i18n="sidebar.memory">Memory</button>
+                <button id="status-btn" class="btn-secondary" data-i18n="sidebar.status">Status</button>
+                <button id="terminal-btn" class="btn-secondary" data-i18n="sidebar.terminal">Terminal</button>
+                <button id="settings-btn" class="btn-secondary" data-i18n="sidebar.settings">Settings</button>
             </div>
         </aside>
         
@@ -142,6 +143,19 @@
                 <!-- Результаты поиска -->
             </div>
         </aside>
+
+        <!-- Terminal panel (bottom) -->
+        <div id="terminal-panel" class="terminal-panel hidden">
+            <div class="terminal-header">
+                <span data-i18n="terminal.title">Backend Terminal</span>
+                <div>
+                    <button id="terminal-copy-btn" class="btn-icon" title="Copy">📋</button>
+                    <button id="terminal-clear-btn" class="btn-icon" title="Clear">🧹</button>
+                    <button id="terminal-close-btn" class="btn-icon" title="Close">✕</button>
+                </div>
+            </div>
+            <pre id="terminal-log"></pre>
+        </div>
     </div>
     
     <!-- Модальное окно статуса -->
@@ -174,6 +188,13 @@
                         <option value="ru">Русский</option>
                     </select>
                     <div class="slider-hint" data-i18n="settings.language.hint">Interface language. Default is English on first launch.</div>
+                </div>
+                <div class="settings-section">
+                    <label class="settings-checkbox" style="display:flex;align-items:center;gap:8px;">
+                        <input type="checkbox" id="show-console-toggle">
+                        <span data-i18n="settings.showConsole">Show external console window (requires restart)</span>
+                    </label>
+                    <div class="slider-hint" data-i18n="settings.showConsole.hint">If disabled (default), backend runs hidden and logs appear in the in-app Terminal.</div>
                 </div>
             </div>
 
@@ -255,6 +276,7 @@
         </div>
     </div>
     
+    <div id="toast-container" aria-live="polite"></div>
     <script type="module" src="/src/app.js"></script>
 </body>
 </html>

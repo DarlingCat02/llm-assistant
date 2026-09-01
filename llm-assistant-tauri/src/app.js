@@ -12,6 +12,7 @@ import { initI18n, t, setLanguage, getLang } from './i18n.js';
 const API_BASE = 'http://127.0.0.1:8000';
 let currentChatId = null;
 let ws = null;
+let initialSettings = null;
 
 // === Tauri Hotkeys ===
 let isTauri = false;
@@ -213,6 +214,24 @@ function initEventListeners() {
     document.getElementById('close-settings-btn').addEventListener('click', closeSettings);
     document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
     document.getElementById('provider-select').addEventListener('change', onProviderChange);
+    const termBtn = document.getElementById('terminal-btn');
+    if (termBtn) termBtn.addEventListener('click', toggleTerminalPanel);
+    const termClose = document.getElementById('terminal-close-btn');
+    if (termClose) termClose.addEventListener('click', () => document.getElementById('terminal-panel').classList.add('hidden'));
+    const termClear = document.getElementById('terminal-clear-btn');
+    if (termClear) termClear.addEventListener('click', clearTerminal);
+    const termCopy = document.getElementById('terminal-copy-btn');
+    if (termCopy) termCopy.addEventListener('click', copyTerminal);
+    // Listen for backend logs from Rust
+    if (isTauri) {
+        import('@tauri-apps/api/event').then(({ listen }) => {
+            listen('backend-log', (e) => appendTerminal(e.payload));
+        }).catch(()=>{});
+        // Load existing logs
+        import('@tauri-apps/api/core').then(({ invoke }) => {
+            invoke('get_backend_logs').then(lines => lines.forEach(appendTerminal)).catch(()=>{});
+        }).catch(()=>{});
+    }
     const langSel = document.getElementById('lang-select');
     if (langSel) {
         langSel.value = getLang();
@@ -908,6 +927,53 @@ function hideStatus() {
     }
 }
 
+function showToast(message, type = 'success', duration = 3000) {
+    const container = document.getElementById('toast-container');
+    if (!container) { alert(message); return; }
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `<span>${escapeHtml(message)}</span><button class="toast-close">✕</button>`;
+    const closeBtn = toast.querySelector('.toast-close');
+    let timer = setTimeout(() => {
+        toast.style.animation = 'toastOut 0.3s forwards';
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+    closeBtn.addEventListener('click', () => {
+        clearTimeout(timer);
+        toast.remove();
+    });
+    container.appendChild(toast);
+}
+
+// === Terminal ===
+function toggleTerminalPanel() {
+    const panel = document.getElementById('terminal-panel');
+    if (panel) panel.classList.toggle('hidden');
+}
+function appendTerminal(line) {
+    const pre = document.getElementById('terminal-log');
+    if (!pre) return;
+    pre.textContent += line + '\n';
+    // limit
+    const lines = pre.textContent.split('\n');
+    if (lines.length > 2000) pre.textContent = lines.slice(-2000).join('\n');
+    pre.scrollTop = pre.scrollHeight;
+}
+async function clearTerminal() {
+    const pre = document.getElementById('terminal-log');
+    if (pre) pre.textContent = '';
+    try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('clear_backend_logs');
+    } catch {}
+}
+async function copyTerminal() {
+    const pre = document.getElementById('terminal-log');
+    if (pre) {
+        try { await navigator.clipboard.writeText(pre.textContent); } catch {}
+    }
+}
+
 // === Настройки ===
 async function openSettings() {
     const modal = document.getElementById('settings-modal');
@@ -919,12 +985,11 @@ async function openSettings() {
         const config = await response.json();
         
         const langSel = document.getElementById('lang-select');
-        if (langSel && config.language) {
-            langSel.value = config.language;
-            if (config.language !== getLang()) {
-                await setLanguage(config.language);
-            }
+        if (langSel) {
+            langSel.value = getLang();
         }
+        const consoleToggle = document.getElementById('show-console-toggle');
+        if (consoleToggle) consoleToggle.checked = !!config.show_backend_console;
         
         document.getElementById('provider-select').value = config.provider || 'ollama';
         document.getElementById('ollama-host-input').value = config.ollama_host || 'http://localhost:11434';
@@ -952,6 +1017,9 @@ async function openSettings() {
         document.getElementById('memory-search-value').textContent = config.memory_search_results || 3;
         document.getElementById('memory-threshold-slider').value = Math.round((config.memory_threshold || 0.3) * 10);
         document.getElementById('memory-threshold-value').textContent = (config.memory_threshold || 0.3).toFixed(1);
+
+        // Save initial for restart check
+        initialSettings = { ...config };
         
         await onProviderChange();
         
@@ -1135,6 +1203,26 @@ async function saveSettings() {
     const memorySearchResults = parseInt(document.getElementById('memory-search-slider').value);
     const memoryThreshold = parseInt(document.getElementById('memory-threshold-slider').value) / 10;
     const language = document.getElementById('lang-select') ? document.getElementById('lang-select').value : getLang();
+    const showConsole = document.getElementById('show-console-toggle') ? document.getElementById('show-console-toggle').checked : false;
+
+    // Apply language immediately so alert is in chosen language
+    if (language !== getLang()) {
+        await setLanguage(language);
+    }
+
+    // Determine if restart is actually needed
+    let needsRestart = false;
+    if (initialSettings) {
+        if (provider !== initialSettings.provider) needsRestart = true;
+        if (ollamaHost !== initialSettings.ollama_host) needsRestart = true;
+        if (model !== null && model !== initialSettings.model) needsRestart = true;
+        if (numCtx !== null && numCtx !== initialSettings.num_ctx) needsRestart = true;
+        if (showConsole !== !!initialSettings.show_backend_console) needsRestart = true;
+        // apiKey change also needs restart for some providers, but is hot-swapped, so not required
+    } else {
+        // Fallback: if we have no initial, assume restart only for provider/host/model/numCtx/showConsole
+        needsRestart = false;
+    }
     
     try {
         const response = await fetch(`${API_BASE}/api/config`, {
@@ -1152,18 +1240,19 @@ async function saveSettings() {
                 memory_search_results: memorySearchResults,
                 memory_threshold: memoryThreshold,
                 language: language,
+                show_backend_console: showConsole,
             }),
         });
         
         if (response.ok) {
-            alert(t('settings.saved'));
+            showToast(t(needsRestart ? 'settings.saved' : 'settings.savedNoRestart'), needsRestart ? 'warning' : 'success', 3000);
             closeSettings();
         } else {
-            alert(t('settings.saveError'));
+            showToast(t('settings.saveError'), 'error', 3000);
         }
     } catch (error) {
         console.error('Ошибка сохранения:', error);
-        alert(t('settings.saveError'));
+        showToast(t('settings.saveError'), 'error', 3000);
     }
 }
 

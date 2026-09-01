@@ -592,6 +592,7 @@ async def get_current_config():
             "tts_steps": 64, "tts_temperature": 1.0,
             "memory_max_context": 20, "memory_search_results": 3, "memory_threshold": 0.3,
             "language": "en",
+            "show_backend_console": False,
         }
     
     return {
@@ -607,6 +608,7 @@ async def get_current_config():
         "memory_search_results": _config.memory.search_results,
         "memory_threshold": _config.memory.similarity_threshold,
         "language": _config.general.language,
+        "show_backend_console": _config.general.show_backend_console,
     }
 
 
@@ -615,10 +617,11 @@ async def update_config(request: dict):
     """Обновить конфигурацию (сохраняется в .env файл). При смене модели/контекста для LM Studio — автозагрузка."""
     from config import get_config, save_config, reload_config
     
-    provider = request.get("provider", "ollama")
-    model = request.get("model", "")
-    ollama_host = request.get("ollama_host", "http://localhost:11434")
-    api_key = request.get("api_key", "")
+    # Use None as default for partial updates (e.g. language-only from i18n.js)
+    provider = request.get("provider")
+    model = request.get("model")
+    ollama_host = request.get("ollama_host")
+    api_key = request.get("api_key")
     num_ctx = request.get("num_ctx")
     temperature = request.get("temperature")
     tts_steps = request.get("tts_steps")
@@ -627,6 +630,11 @@ async def update_config(request: dict):
     memory_search_results = request.get("memory_search_results")
     memory_threshold = request.get("memory_threshold")
     language = request.get("language")
+    show_backend_console = request.get("show_backend_console")
+    if show_backend_console is not None:
+        show_backend_console = bool(show_backend_console)
+        if isinstance(request.get("show_backend_console"), str):
+            show_backend_console = request.get("show_backend_console").lower() == "true"
 
     # Запомним предыдущую модель/контекст для определения смены
     try:
@@ -652,6 +660,7 @@ async def update_config(request: dict):
         memory_search_results=memory_search_results,
         memory_threshold=memory_threshold,
         language=language,
+        show_backend_console=show_backend_console,
     )
     # Hot-swap without restart
     try:

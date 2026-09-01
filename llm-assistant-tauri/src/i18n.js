@@ -61,14 +61,8 @@ export async function setLanguage(lang) {
   document.documentElement.lang = lang;
   await loadTranslations(lang);
   applyTranslations();
-  // Persist to backend .env
-  try {
-    await fetch('http://127.0.0.1:8000/api/config', {
-      method: 'PUT',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({language: lang})
-    });
-  } catch {}
+  // Language is persisted via Settings -> Save (PUT /api/config with full config)
+  // No immediate PUT here to avoid partial-update bug on old backend
   // Re-apply dynamic parts
   try {
     // Update placeholders that were set via JS
