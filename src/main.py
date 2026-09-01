@@ -35,6 +35,14 @@ from config import get_config, Config, setup_logging as config_setup_logging
 from src.llm_engine import LLMEngine, Message, MessageRole, LLMResponse
 from src.memory_manager import MemoryManager
 from src.tts_engine import TTSEngine
+try:
+    from src.i18n import t
+except ImportError:
+    try:
+        from i18n import t
+    except ImportError:
+        def t(key, lang=None, **kwargs):
+            return key
 
 # Логгер модуля
 logger = logging.getLogger(__name__)
@@ -131,7 +139,7 @@ class Assistant:
         2. Memory Manager (загрузка ChromaDB)
         3. TTS Engine (опционально)
         """
-        self._logger.info("Инициализация ассистента...")
+        self._logger.info("Initializing assistant...")
         self._start_time = datetime.now()
         
         # 1. LLM Engine
@@ -149,13 +157,13 @@ class Assistant:
         self._tts = TTSEngine(config=self._config.tts)
         await self._tts.initialize()
         
-        # Регистрируем инструменты (Function Calling заглушка)
+        # Register tools (Function Calling stub)
         await self._register_tools()
         
         self._logger.info(
-            f"Ассистент готов. Модель: {self._config.llm.model}, "
-            f"Провайдер: {self._config.llm.provider.value}, "
-            f"Память: {self._config.chroma.persist_dir}"
+            f"Assistant ready. Model: {self._config.llm.model}, "
+            f"Provider: {self._config.llm.provider.value}, "
+            f"Memory: {self._config.chroma.persist_dir}"
         )
     
     def _should_search_memory(self, message: str) -> bool:
@@ -306,7 +314,19 @@ class Assistant:
             file_create, app_open, file_open, browser_open, capture_screen,
         )
 
-        self._ddg_tool_def = DDG_TOOL_DEFINITION
+        # Language-aware tool definition
+        try:
+            _lang = get_config().general.language
+        except Exception:
+            _lang = "en"
+        if _lang == "ru":
+            self._ddg_tool_def = DDG_TOOL_DEFINITION
+        else:
+            try:
+                from src.web_search import DDG_TOOL_DEFINITION_EN
+                self._ddg_tool_def = DDG_TOOL_DEFINITION_EN
+            except ImportError:
+                self._ddg_tool_def = DDG_TOOL_DEFINITION
         self._llm.register_tool("web_search_ddg", self._execute_web_search_ddg)
         self._llm.register_tool("file_create", file_create)
         self._llm.register_tool("app_open", app_open)
@@ -317,11 +337,11 @@ class Assistant:
         try:
             self._search_tool = DuckDuckGoSearchTool()
             await self._search_tool.initialize()
-            self._logger.info("DuckDuckGo поиск готов")
+            self._logger.info("DuckDuckGo search ready")
         except Exception as e:
-            self._logger.warning(f"Не удалось инициализировать DuckDuckGo: {e}")
+            self._logger.warning(f"Failed to initialize DuckDuckGo: {e}")
 
-        self._logger.info("Агентные инструменты зарегистрированы: file_create, app_open, file_open, browser_open, capture_screen")
+        self._logger.info("Agent tools registered: file_create, app_open, file_open, browser_open, capture_screen")
     
     def _get_api_headers(self) -> dict:
         """Получить заголовки для API-запросов."""
@@ -339,7 +359,7 @@ class Assistant:
             return
         self._closed = True
         
-        self._logger.info("Завершение работы ассистента...")
+        self._logger.info("Shutting down assistant...")
         
         if self._tts:
             await self._tts.close()
@@ -353,8 +373,8 @@ class Assistant:
         if self._start_time:
             duration = datetime.now() - self._start_time
             self._logger.info(
-                f"Сессия завершена. Сообщений: {self._message_count}, "
-                f"Длительность: {duration}"
+                f"Session completed. Messages: {self._message_count}, "
+                f"Duration: {duration}"
             )
     
     async def process_message(self, user_message: str, thinking: bool = False, search: str = "", chat_history: list[dict] | None = None, images: list[str] | None = None) -> LLMResponse:
@@ -372,70 +392,92 @@ class Assistant:
             LLMResponse: Ответ ассистента с контентом и метаданными.
         """
         if not self._llm or not self._memory:
-            raise RuntimeError("Ассистент не инициализирован")
+            lang = get_config().general.language
+            raise RuntimeError(t("api.assistant_not_init", lang=lang))
 
         self._message_count += 1
 
-        # Авто-детекция триггера для скриншота экрана
+        # Auto-detection for screenshot trigger
         if images is None:
             images = []
         
         screen_config = self._config.screen
         if screen_config.enabled:
-            screenshot_triggers = [t.strip() for t in screen_config.triggers.split(",") if t.strip()]
+            screenshot_triggers = [tr.strip() for tr in screen_config.triggers.split(",") if tr.strip()]
             
             msg_lower = user_message.lower()
             needs_screenshot = any(trigger in msg_lower for trigger in screenshot_triggers)
             
             if needs_screenshot:
-                self._logger.info(f"Обнаружен триггер скриншота: '{user_message[:50]}...'")
+                self._logger.info(f"Screenshot trigger detected: '{user_message[:50]}...'")
                 try:
                     from src.agent_tools import capture_screen
                     screenshot_b64 = await capture_screen(
                         monitor=screen_config.monitor,
                         save_path=screen_config.save_path
                     )
-                    if screenshot_b64 and not screenshot_b64.startswith("Ошибка"):
+                    if screenshot_b64 and not screenshot_b64.startswith("Ошибка") and not screenshot_b64.startswith("Error"):
                         images.append(screenshot_b64)
-                        self._logger.info("Автоматический скриншот добавлен к запросу")
+                        self._logger.info("Auto screenshot added to request")
                     else:
-                        self._logger.warning(f"Не удалось сделать скриншот: {screenshot_b64}")
+                        self._logger.warning(f"Failed to capture screenshot: {screenshot_b64}")
                 except Exception as e:
-                    self._logger.error(f"Ошибка авто-скриншота: {e}")
+                    self._logger.error(f"Auto-screenshot error: {e}")
 
-        # 1. Умный поиск контекста в памяти (RAG)
+        # 1. Smart memory search (RAG)
         context = []
         if self._should_search_memory(user_message):
-            self._logger.debug(f"Поиск контекста для: {user_message[:50]}...")
+            self._logger.debug(f"Searching context for: {user_message[:50]}...")
             context = await self._memory.search_context(user_message)
 
             if context:
-                self._logger.info(f"Найдено {len(context)} записей в памяти")
+                self._logger.info(f"Found {len(context)} memory entries")
             else:
-                self._logger.debug("Контекст не найден")
+                self._logger.debug("No context found")
         else:
-            self._logger.debug("RAG пропущен (приветствие/короткое сообщение)")
+            self._logger.debug("RAG skipped (greeting/short message)")
 
-        # 2. Подготовка инструментов
-        from src.agent_tools import FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION
-        tools = [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION]
+        # 2. Prepare tools (language-aware)
+        try:
+            _tool_lang = get_config().general.language
+        except Exception:
+            _tool_lang = "en"
+        if _tool_lang == "ru":
+            from src.agent_tools import FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION
+            tools = [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION]
+        else:
+            try:
+                from src.agent_tools import FILE_CREATE_DEFINITION_EN as FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION_EN as APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION_EN as FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION_EN as BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION_EN as SCREENSHOT_DEFINITION
+                tools = [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION]
+            except ImportError:
+                from src.agent_tools import FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION
+                tools = [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION]
         
         if search and search == "ddg" and self._search_tool:
-            tools.append(self._ddg_tool_def)
+            # Language-aware DDG definition (fresh, not cached)
+            try:
+                from src.web_search import DDG_TOOL_DEFINITION as DDG_RU, DDG_TOOL_DEFINITION_EN as DDG_EN
+                ddg_def = DDG_RU if _tool_lang == "ru" else DDG_EN
+            except ImportError:
+                ddg_def = self._ddg_tool_def
+            tools.append(ddg_def)
 
-        # 2.1. Если поиск включён — всегда ищем в интернете
+        # 2.1. If search enabled — always search web
         if search and search == "ddg" and self._search_tool:
             web_results = await self._search_tool.search(user_message, max_results=7)
 
             if web_results and not web_results.startswith("["):
-                search_context = f"\n\n=== РЕЗУЛЬТАТЫ ПОИСКА В ИНТЕРНЕТЕ ===\n{web_results}\n=== КОНЕЦ РЕЗУЛЬТАТОВ ==="
+                if _tool_lang == "ru":
+                    search_context = f"\n\n=== РЕЗУЛЬТАТЫ ПОИСКА В ИНТЕРНЕТЕ ===\n{web_results}\n=== КОНЕЦ РЕЗУЛЬТАТОВ ==="
+                else:
+                    search_context = f"\n\n=== WEB SEARCH RESULTS ===\n{web_results}\n=== END OF RESULTS ==="
                 context.append(search_context)
-                self._logger.info("Результаты поиска добавлены в контекст")
+                self._logger.info("Search results added to context")
             else:
-                self._logger.warning(f"Поиск не дал результатов: {web_results}")
+                self._logger.warning(f"Search returned no results: {web_results}")
 
-        # 3. Генерация ответа через LLM
-        self._logger.debug("Генерация ответа...")
+        # 3. Generate response via LLM
+        self._logger.debug("Generating response...")
         response: LLMResponse = await self._llm.generate(
             user_message=user_message,
             additional_context=context,
@@ -447,21 +489,25 @@ class Assistant:
 
         answer = response.content
 
-        # 4. Озвучка ответа (если включено)
+        # 4. Speak answer (if enabled)
         if self._tts and self._config.tts.enabled:
-            self._logger.debug("Озвучка ответа...")
+            self._logger.debug("Speaking answer...")
             await self._tts.speak(answer)
 
-        # 5. Извлечение фактов (только если сообщение содержит факты)
+        # 5. Extract facts (only if message contains facts)
         if self._looks_like_new_fact(user_message):
             await self._extract_and_save_facts(user_message, answer)
 
         return response
 
     async def _execute_web_search_ddg(self, query: str) -> str:
-        """Поиск через DuckDuckGo (callback для LLM)."""
+        """Search via DuckDuckGo (callback for LLM)."""
         if not self._search_tool:
-            return "[DuckDuckGo поиск недоступен]"
+            try:
+                lang = get_config().general.language
+            except Exception:
+                lang = "en"
+            return "[DuckDuckGo search unavailable]" if lang == "en" else "[DuckDuckGo поиск недоступен]"
         return await self._search_tool.search(query, max_results=7)
 
     def process_message_sync(self, user_message: str, thinking: bool = False) -> str:
@@ -471,24 +517,25 @@ class Assistant:
         import httpx
         
         if not self._llm or not self._memory:
-            raise RuntimeError("Ассистент не инициализирован")
+            lang = get_config().general.language
+            raise RuntimeError(t("api.assistant_not_init", lang=lang))
 
         self._message_count += 1
 
-        # 1. Умный поиск контекста в памяти (RAG)
+        # 1. Smart memory search (RAG)
         context = []
         if self._should_search_memory(user_message):
             context = asyncio.run(self._memory.search_context(user_message))
             
             if context:
-                self._logger.info(f"Найдено {len(context)} записей в памяти")
+                self._logger.info(f"Found {len(context)} memory entries")
             else:
-                self._logger.debug("Контекст не найден")
+                self._logger.debug("No context found")
         else:
-            self._logger.debug("RAG пропущен (приветствие/короткое сообщение)")
+            self._logger.debug("RAG skipped (greeting/short message)")
 
-        # 2. Генерация ответа через LLM
-        self._logger.debug("Генерация ответа...")
+        # 2. Generate response via LLM
+        self._logger.debug("Generating response...")
         
         answer = ""
         with httpx.Client(
@@ -496,7 +543,15 @@ class Assistant:
             timeout=60.0,
             headers=self._get_api_headers(),
         ) as sync_client:
-            system_prompt = self._llm._system_prompt
+            # Language-aware system prompt
+            try:
+                lang = get_config().general.language
+            except Exception:
+                lang = "en"
+            if hasattr(self._llm, "_get_system_prompt"):
+                system_prompt = self._llm._get_system_prompt()
+            else:
+                system_prompt = self._llm._system_prompt
             history = self._llm.get_history()
             
             messages = [
@@ -505,9 +560,13 @@ class Assistant:
             
             if context:
                 context_text = "\n\n".join(context)
+                if lang == "ru":
+                    ctx = f"=== КОНТЕКСТ ИЗ ПАМЯТИ ===\n{context_text}\n=== КОНЕЦ КОНТЕКСТА ==="
+                else:
+                    ctx = f"=== MEMORY CONTEXT ===\n{context_text}\n=== END OF CONTEXT ==="
                 messages.append({
                     "role": "system",
-                    "content": f"=== КОНТЕКСТ ИЗ ПАМЯТИ ===\n{context_text}\n=== КОНЕЦ КОНТЕКСТА ==="
+                    "content": ctx
                 })
             
             for msg in history:
@@ -562,8 +621,13 @@ class Assistant:
             user_message: Сообщение пользователя.
             assistant_response: Ответ ассистента.
         """
-        # Промпт для извлечения фактов
-        fact_extraction_prompt = f"""
+        # Prompt for fact extraction (language-aware)
+        try:
+            _fact_lang = get_config().general.language
+        except Exception:
+            _fact_lang = "en"
+        if _fact_lang == "ru":
+            fact_extraction_prompt = f"""
 Проанализируй диалог и извлеки ВАЖНЫЕ факты о пользователе.
 Сохраняй только личную информацию и предпочтения.
 
@@ -590,6 +654,34 @@ Assistant: {assistant_response}
 
 Не сохраняй обычные вопросы и ответы типа 'привет', 'как дела', 'спасибо'.
 """
+        else:
+            fact_extraction_prompt = f"""
+Analyze the dialog and extract IMPORTANT facts about the user.
+Save only personal information and preferences.
+
+Dialog:
+User: {user_message}
+Assistant: {assistant_response}
+
+If there are important facts, return them as JSON list:
+["Fact 1", "Fact 2"]
+
+If no important facts, return empty list: []
+
+RULES:
+- Keep names, nicknames, titles in original (do not translate or transliterate)
+- "Darling Cat" → "Darling Cat", not translation
+- "Barcelona" → "Barcelona", not translation
+- "Python" → "Python", not translation
+
+Examples of important facts:
+- "User name is Darling Cat"
+- "Favorite color is red"
+- "User lives in Tokyo"
+- "User works with Python"
+
+Do not save ordinary questions and answers like 'hello', 'how are you', 'thanks'.
+"""
         
         try:
             import httpx
@@ -602,8 +694,9 @@ Assistant: {assistant_response}
             )
             
             try:
+                sys_prompt = "Ты помощник для извлечения фактов. Возвращай ТОЛЬКО JSON список фактов или пустой список." if _fact_lang == "ru" else "You are a helper for fact extraction. Return ONLY JSON list of facts or empty list."
                 messages = [
-                    {"role": "system", "content": "Ты помощник для извлечения фактов. Возвращай ТОЛЬКО JSON список фактов или пустой список."},
+                    {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": fact_extraction_prompt},
                 ]
                 
@@ -625,17 +718,17 @@ Assistant: {assistant_response}
                 facts = json.loads(facts_text.strip())
                 
                 if isinstance(facts, list) and facts:
-                    # Сохраняем каждый факт
+                    # Save each fact
                     for fact in facts:
                         if fact and len(fact.strip()) > 5:
                             await self._memory.save_fact(fact.strip(), category="personal")
-                            self._logger.info(f"Сохранён факт: {fact[:50]}...")
+                            self._logger.info(f"Saved fact: {fact[:50]}...")
                 
             finally:
                 sync_client.close()
                 
         except Exception as e:
-            self._logger.debug(f"Не удалось извлечь факты: {e}")
+            self._logger.debug(f"Failed to extract facts: {e}")
 
     async def run(self) -> None:
         """
@@ -650,43 +743,47 @@ Assistant: {assistant_response}
         Завершается по команде 'quit' или Ctrl+C.
         """
         if not self._llm:
-            raise RuntimeError("Ассистент не инициализирован. Вызовите initialize().")
+            lang = get_config().general.language
+            raise RuntimeError(t("api.assistant_not_init", lang=lang))
         
         self._running = True
         self._print_welcome()
         
         try:
             while self._running:
-                # Читаем ввод пользователя
+                # Read user input
                 try:
                     user_input = await self._get_input()
                 except EOFError:
                     # Ctrl+D
                     break
                 
-                # Обрабатываем команды
+                # Handle commands
                 command_result = await self._handle_command(user_input)
                 if command_result:
                     print(command_result)
-                    if command_result == "exit":
+                    lang = get_config().general.language
+                    if command_result == "exit" or command_result == t("cli.exit", lang=lang):
                         break
                     continue
                 
-                # Пропускаем пустые сообщения
+                # Skip empty messages
                 if not user_input.strip():
                     continue
                 
-                # Обрабатываем сообщение
-                print("\n🤖 Ассистент печатает...", end="\r")
+                # Handle message
+                lang = get_config().general.language
+                print(t("cli.thinking", lang=lang), end="\r")
                 answer = await self.process_message(user_input.strip())
                 print(" " * 50, end="\r")
                 
-                # Выводим ответ
+                # Display answer
                 print(f"\n🤖 {answer.content}\n")
         
         except KeyboardInterrupt:
             # Ctrl+C
-            print("\n\nПрервано пользователем")
+            lang = get_config().general.language
+            print(t("cli.interrupted", lang=lang))
         finally:
             await self.close()
     
@@ -699,11 +796,13 @@ Assistant: {assistant_response}
         Returns:
             str: Введённая строка.
         """
-        # В Windows input() блокирующий, используем sync
+        # In Windows input() is blocking, use sync
         loop = asyncio.get_event_loop()
+        lang = get_config().general.language
+        prompt = t("cli.prompt", lang=lang)
         return await loop.run_in_executor(
             None,
-            lambda: input("👤 Вы: "),
+            lambda: input(prompt),
         )
     
     async def _handle_command(self, text: str) -> Optional[str]:
@@ -726,12 +825,14 @@ Assistant: {assistant_response}
         
         if text_lower in ("quit", "exit", "q", "выход"):
             self._running = False
-            return "exit"
+            lang = get_config().general.language
+            return t("cli.exit", lang=lang)
         
         elif text_lower in ("clear", "c", "очистить"):
             if self._llm:
                 self._llm.clear_history()
-            return "🧹 История диалога очищена"
+            lang = get_config().general.language
+            return t("cli.cleared", lang=lang)
         
         elif text_lower in ("help", "h", "помощь"):
             return self._get_help_text()
@@ -743,45 +844,49 @@ Assistant: {assistant_response}
     
     def _print_welcome(self) -> None:
         """Вывести приветственное сообщение."""
+        lang = get_config().general.language
+        tts_state = t("cli.tts_state_on", lang=lang) if self._config.tts.enabled else t("cli.tts_state_off", lang=lang)
         print("\n" + "=" * 60)
-        print("🤖 LOCAL AI ASSISTANT")
+        print(t("cli.welcome.title", lang=lang))
         print("=" * 60)
-        print(f"Модель: {self._config.llm.model}")
-        print(f"Провайдер: {self._config.llm.provider.value}")
-        print(f"Память: {self._config.chroma.persist_dir}")
-        print(f"TTS: {'ВКЛ' if self._config.tts.enabled else 'ВЫКЛ'}")
+        print(t("cli.welcome.model", lang=lang, model=self._config.llm.model))
+        print(t("cli.welcome.provider", lang=lang, provider=self._config.llm.provider.value))
+        print(t("cli.welcome.memory", lang=lang, dir=self._config.chroma.persist_dir))
+        print(t("cli.welcome.tts", lang=lang, state=tts_state))
         print("-" * 60)
-        print("Команды: help (помощь), clear (очистить), stats (статистика), quit (выход)")
+        print(t("cli.welcome.commands", lang=lang))
         print("=" * 60 + "\n")
     
     def _get_help_text(self) -> str:
         """Получить текст справки."""
-        return """
-📖 СПРАВКА
-
-Команды:
-  quit, exit, q     - Выход из ассистента
-  clear, c          - Очистить историю диалога
-  stats, s          - Показать статистику
-  help, h           - Эта справка
-
-Просто введите сообщение для начала диалога.
-"""
+        lang = get_config().general.language
+        lines = [
+            "",
+            t("cli.help.title", lang=lang),
+            "",
+            t("cli.help.commands", lang=lang),
+            t("cli.help.quit", lang=lang),
+            t("cli.help.clear", lang=lang),
+            t("cli.help.stats", lang=lang),
+            t("cli.help.help", lang=lang),
+            "",
+            t("cli.help.hint", lang=lang),
+            "",
+        ]
+        return "\n".join(lines)
     
     async def _get_stats_text(self) -> str:
         """Получить текст статистики."""
-        stats = {
-            "Сообщений в сессии": self._message_count,
-            "Время работы": str(datetime.now() - self._start_time) if self._start_time else "N/A",
-        }
+        lang = get_config().general.language
+        lines = ["" + t("cli.stats.title", lang=lang)]
+        lines.append(t("cli.stats.messages", lang=lang, count=self._message_count))
+        duration = str(datetime.now() - self._start_time) if self._start_time else "N/A"
+        lines.append(t("cli.stats.uptime", lang=lang, duration=duration))
         
         if self._memory:
             memory_stats = await self._memory.get_stats()
-            stats["Записей в памяти"] = memory_stats.get("total_entries", "N/A")
-        
-        lines = ["\n📊 СТАТИСТИКА"]
-        for key, value in stats.items():
-            lines.append(f"  {key}: {value}")
+            mem_count = memory_stats.get("total_entries", "N/A")
+            lines.append(t("cli.stats.memory", lang=lang, count=mem_count))
         
         return "\n".join(lines)
 
@@ -796,33 +901,33 @@ async def main() -> None:
     # Загружаем конфигурацию
     config = get_config()
 
-    # Настраиваем логирование
+    # Setup logging
     logger = setup_logging(config)
-    logger.info("Запуск Local AI Assistant...")
+    logger.info("Starting Local AI Assistant...")
 
-    # Создаём и инициализируем ассистента
+    # Create and initialize assistant
     assistant = Assistant(config)
 
     try:
         await assistant.initialize()
 
-        # Выбираем режим: GUI или консоль
+        # Choose mode: GUI or console
         if config.gui.enabled:
-            logger.info(f"Запуск GUI режима: {config.gui.title}")
-            # Запускаем GUI в отдельном потоке
+            logger.info(f"Starting GUI mode: {config.gui.title}")
+            # Run GUI in separate thread
             _run_gui_mode(assistant)
         else:
-            logger.info("Запуск консольного режима")
+            logger.info("Starting console mode")
             await assistant.run()
 
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}", exc_info=True)
+        logger.error(f"Critical error: {e}", exc_info=True)
         raise
     finally:
-        # Гарантируем закрытие ресурсов
+        # Ensure resources are closed
         await assistant.close()
 
-    logger.info("Приложение завершено")
+    logger.info("Application completed")
 
 
 def _run_gui_mode(assistant: Assistant) -> None:
@@ -839,7 +944,7 @@ def _run_gui_mode(assistant: Assistant) -> None:
     if framework == "customtkinter":
         _run_customtkinter_gui(assistant)
     else:
-        logger.warning(f"Неизвестный GUI фреймворк: {framework}. Запуск консольного режима.")
+        logger.warning(f"Unknown GUI framework: {framework}. Starting console mode.")
         asyncio.run(assistant.run())
 
 
@@ -854,13 +959,14 @@ def _run_customtkinter_gui(assistant: Assistant) -> None:
         assistant: Инициализированный экземпляр Assistant.
     """
     from src.gui_ctk import run_gui
-    logger.info("Запуск CustomTkinter GUI")
+    logger.info("Starting CustomTkinter GUI")
     run_gui(assistant)
 
 
 if __name__ == "__main__":
-    # Запускаем асинхронный цикл
+    # Run async loop
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n\nДо свидания!")
+        lang = get_config().general.language
+        print(t("cli.bye", lang=lang))

@@ -165,8 +165,8 @@ class ChromaStorage(IStorage):
         )
         
         logger.info(
-            f"ChromaDB инициализирован: {persist_path}, "
-            f"коллекция: {self._config.collection_name}"
+            f"ChromaDB initialized: {persist_path}, "
+            f"collection: {self._config.collection_name}"
         )
     
     async def add(self, entry: MemoryEntry) -> None:
@@ -193,7 +193,7 @@ class ChromaStorage(IStorage):
             metadatas=[entry.metadata],
         )
         
-        logger.debug(f"Память сохранена: {entry.id}")
+        logger.debug(f"Memory saved: {entry.id}")
     
     async def search(
         self,
@@ -245,7 +245,7 @@ class ChromaStorage(IStorage):
                         )
                     )
         
-        logger.debug(f"Найдено {len(entries)} записей в памяти")
+        logger.debug(f"Found {len(entries)} memory entries")
         return entries
     
     async def delete(self, entry_id: str) -> bool:
@@ -255,7 +255,7 @@ class ChromaStorage(IStorage):
         
         try:
             self._collection.delete(ids=[entry_id])
-            logger.debug(f"Память удалена: {entry_id}")
+            logger.debug(f"Memory deleted: {entry_id}")
             return True
         except Exception:
             return False
@@ -346,7 +346,7 @@ class MemoryManager:
         # Загружаем модель эмбеддингов
         # all-MiniLM-L6-v2: легковесная модель (80MB), работает на CPU
         
-        logger.info("Загрузка модели эмбеддингов...")
+        logger.info("Loading embedding model...")
         from sentence_transformers import SentenceTransformer
         
         # local_files_only=True — самый надёжный способ отключить запросы к HuggingFace
@@ -355,7 +355,7 @@ class MemoryManager:
             device="cpu",
             local_files_only=True,
         )
-        logger.info("Модель эмбеддингов загружена")
+        logger.info("Embedding model loaded")
 
         # Инициализируем хранилище
         self._storage = ChromaStorage(
@@ -370,7 +370,7 @@ class MemoryManager:
 
         self._initialized = True
         count = await self._storage.count()
-        logger.info(f"Memory Manager инициализирован, записей в памяти: {count}")
+        logger.info(f"Memory Manager initialized, entries: {count}")
 
     async def _load_existing_hashes(self) -> None:
         """
@@ -392,9 +392,9 @@ class MemoryManager:
             for entry_id in all_ids:
                 self._seen_hashes.add(entry_id)
             
-            logger.debug(f"Загружено {len(self._seen_hashes)} существующих ID для дедупликации")
+            logger.debug(f"Loaded {len(self._seen_hashes)} existing IDs for deduplication")
         except Exception as e:
-            logger.warning(f"Не удалось загрузить существующие ID: {e}")
+            logger.warning(f"Failed to load existing IDs: {e}")
     
     async def close(self) -> None:
         """
@@ -405,7 +405,7 @@ class MemoryManager:
         self._initialized = False
         self._storage = None
         self._embedding_model = None
-        logger.info("Memory Manager закрыт")
+        logger.info("Memory Manager closed")
     
     def _generate_id(self, text: str) -> str:
         """
@@ -446,7 +446,7 @@ class MemoryManager:
         # Проверяем на дубликаты
         entry_hash = self._generate_id(text)
         if entry_hash in self._seen_hashes:
-            logger.debug(f"Дубликат памяти пропущен: {entry_hash}")
+            logger.debug(f"Duplicate memory skipped: {entry_hash}")
             return False
         
         # Создаём запись
@@ -463,7 +463,7 @@ class MemoryManager:
         await self._storage.add(entry)
         self._seen_hashes.add(entry_hash)
         
-        logger.info(f"Память сохранена: {entry_type}, {len(text)} символов")
+        logger.info(f"Memory saved: {entry_type}, {len(text)} chars")
         return True
     
     async def save_dialog(
@@ -592,4 +592,4 @@ class MemoryManager:
                 self._storage._collection.delete(ids=all_ids)
         
         self._seen_hashes.clear()
-        logger.warning("Память полностью очищена")
+        logger.warning("Memory completely cleared")

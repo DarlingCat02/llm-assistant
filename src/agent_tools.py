@@ -13,7 +13,7 @@ APPS_CONFIG_PATH = Path(__file__).parent.parent / "apps.json"
 def _load_apps_config() -> dict:
     """Загрузить конфиг приложений."""
     if not APPS_CONFIG_PATH.exists():
-        logger.warning(f"apps.json не найден: {APPS_CONFIG_PATH}")
+        logger.warning(f"apps.json not found: {APPS_CONFIG_PATH}")
         return {"apps": [], "default_save_folder": "", "blocked_apps": []}
     
     with open(APPS_CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -83,6 +83,29 @@ FILE_CREATE_DEFINITION = {
     }
 }
 
+FILE_CREATE_DEFINITION_EN = {
+    "type": "function",
+    "function": {
+        "name": "file_create",
+        "description": "Create file with specified content. "
+                       "Use when user asks to create/write a file.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to file (e.g.: notes.txt, C:\\docs\\file.txt)"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "File content"
+                }
+            },
+            "required": ["path", "content"]
+        }
+    }
+}
+
 APP_OPEN_DEFINITION = {
     "type": "function",
     "function": {
@@ -95,6 +118,25 @@ APP_OPEN_DEFINITION = {
                 "name": {
                     "type": "string",
                     "description": "Название приложения (например: notepad, telegram, chrome)"
+                }
+            },
+            "required": ["name"]
+        }
+    }
+}
+
+APP_OPEN_DEFINITION_EN = {
+    "type": "function",
+    "function": {
+        "name": "app_open",
+        "description": "Open/launch application on computer. "
+                       "Use when user asks to open/launch an application.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Application name (e.g.: notepad, telegram, chrome)"
                 }
             },
             "required": ["name"]
@@ -121,6 +163,25 @@ FILE_OPEN_DEFINITION = {
     }
 }
 
+FILE_OPEN_DEFINITION_EN = {
+    "type": "function",
+    "function": {
+        "name": "file_open",
+        "description": "Open file with associated application. "
+                       "Use when user asks to open a specific file.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to file"
+                }
+            },
+            "required": ["path"]
+        }
+    }
+}
+
 BROWSER_OPEN_DEFINITION = {
     "type": "function",
     "function": {
@@ -133,6 +194,25 @@ BROWSER_OPEN_DEFINITION = {
                 "url": {
                     "type": "string",
                     "description": "URL или название сайта (например: youtube.com, github.com)"
+                }
+            },
+            "required": ["url"]
+        }
+    }
+}
+
+BROWSER_OPEN_DEFINITION_EN = {
+    "type": "function",
+    "function": {
+        "name": "browser_open",
+        "description": "Open site/URL in browser. "
+                       "Use when user asks to open a website, page, link.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL or site name (e.g.: youtube.com, github.com)"
                 }
             },
             "required": ["url"]
@@ -160,11 +240,11 @@ async def file_create(path: str, content: str) -> str:
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
         
-        logger.info(f"Файл создан: {path}")
+        logger.info(f"File created: {path}")
         return f"Файл создан: {path} ({len(content)} символов)"
     
     except Exception as e:
-        logger.error(f"Ошибка создания файла: {e}")
+        logger.error(f"File creation error: {e}")
         return f"Ошибка: {e}"
 
 
@@ -189,14 +269,14 @@ async def app_open(name: str) -> str:
             else:
                 subprocess.Popen([app_path], shell=True)
             
-            logger.info(f"Приложение запущено: {name} ({app_path})")
+            logger.info(f"Application launched: {name} ({app_path})")
             return f"Открыто: {name}"
         except Exception as e:
-            logger.error(f"Ошибка запуска {name}: {e}")
+            logger.error(f"Failed to launch {name}: {e}")
             return f"Ошибка запуска {name}: {e}"
     
     # Если приложение не найдено — открываем как сайт
-    logger.info(f"Приложение не найдено, открываю как сайт: {name}")
+    logger.info(f"Application not found, opening as website: {name}")
     return await browser_open(name)
 
 
@@ -207,11 +287,11 @@ async def file_open(path: str) -> str:
             return f"Файл не найден: {path}"
         
         os.startfile(path)
-        logger.info(f"Файл открыт: {path}")
+        logger.info(f"File opened: {path}")
         return f"Файл открыт: {path}"
     
     except Exception as e:
-        logger.error(f"Ошибка открытия файла: {e}")
+        logger.error(f"File open error: {e}")
         return f"Ошибка: {e}"
 
 
@@ -230,11 +310,11 @@ async def browser_open(url: str) -> str:
         browser_path = _find_app(browser_name)
         if browser_path and os.path.exists(browser_path):
             subprocess.Popen([browser_path, url])
-            logger.info(f"Сайт открыт в {browser_name}: {url}")
+            logger.info(f"Site opened in {browser_name}: {url}")
             return f"Открыт сайт: {url}"
 
     os.startfile(url)
-    logger.info(f"Сайт открыт в браузере по умолчанию: {url}")
+    logger.info(f"Site opened in default browser: {url}")
     return f"Открыт сайт: {url}"
 
 
@@ -256,6 +336,31 @@ SCREENSHOT_DEFINITION = {
         }
     }
 }
+
+SCREENSHOT_DEFINITION_EN = {
+    "type": "function",
+    "function": {
+        "name": "capture_screen",
+        "description": "Take a screenshot and return as base64. "
+                       "Use when user asks to look at screen, "
+                       "show what's on screen, take screenshot, what's on screen.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "monitor": {"type": "integer", "default": 0, "description": "Monitor number (0 = all monitors, 1, 2... = specific)"},
+                "save_path": {"type": "string", "description": "Folder to save (optional)"}
+            },
+        }
+    }
+}
+
+def get_agent_tool_definitions(lang: str = "en") -> list[dict]:
+    """Return agent tool definitions translated for given language."""
+    lang = lang if lang in ("en", "ru") else "en"
+    if lang == "ru":
+        return [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION]
+    else:
+        return [FILE_CREATE_DEFINITION_EN, APP_OPEN_DEFINITION_EN, FILE_OPEN_DEFINITION_EN, BROWSER_OPEN_DEFINITION_EN, SCREENSHOT_DEFINITION_EN]
 
 
 async def capture_screen(monitor: int = 0, save_path: str = "") -> str:
@@ -301,15 +406,15 @@ async def capture_screen(monitor: int = 0, save_path: str = "") -> str:
                 filepath = os.path.join(save_path, filename)
                 with open(filepath, 'wb') as f:
                     f.write(img_bytes)
-                logger.info(f"Скриншот сохранён: {filepath}")
+                logger.info(f"Screenshot saved: {filepath}")
             
-            logger.info(f"Скриншот сделан: monitor={monitor}, size={len(img_bytes)} bytes, dims={img.size}")
+            logger.info(f"Screenshot captured: monitor={monitor}, size={len(img_bytes)} bytes, dims={img.size}")
             # Возвращаем base64 строку для передачи в images массив
             return b64
             
     except ImportError:
-        logger.error("mss не установлен. Установите: pip install mss")
+        logger.error("mss not installed. Install: pip install mss")
         return "Ошибка: mss не установлен. Выполните: pip install mss"
     except Exception as e:
-        logger.error(f"Ошибка скриншота: {e}")
+        logger.error(f"Screenshot error: {e}")
         return f"Ошибка скриншота: {e}"

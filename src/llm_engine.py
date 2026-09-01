@@ -20,12 +20,21 @@ import httpx
 
 from config import get_config, LLMConfig, LLMProvider
 
+try:
+    from src.i18n import t
+except ImportError:
+    try:
+        from i18n import t
+    except ImportError:
+        def t(key, lang=None, **kwargs):  # fallback
+            return key
+
 
 logger = logging.getLogger(__name__)
 
 
 class MessageRole(str, Enum):
-    """Роли сообщений в диалоге."""
+    """Роли messages в диалоге."""
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
@@ -91,6 +100,57 @@ class LLMEngine:
         print(response.content)
     """
     
+    # System prompts EN/RU (also stored in src/i18n.py as system_prompt_en / system_prompt_ru)
+    _system_prompt_ru = (
+        "Ты — AI-ассистент. Отвечай кратко и по делу.\n\n"
+        "ПРАВИЛА:\n"
+        "1. Отвечай ТОЛЬКО на русском языке, без вставок английских слов\n"
+        "2. Отвечай прямо, без лишних слов и эмоций\n"
+        "3. Не повторяй и не перефразируй сообщение пользователя\n"
+        "4. Если не знаешь — скажи честно\n"
+        "5. Используй контекст из памяти\n\n"
+        "ПРАВИЛА РАБОТЫ С ПОИСКОМ:\n"
+        "- ТЫ НЕ ЗНАЕШЬ ТЕКУЩУЮ ДАТУ, ВРЕМЯ, ПОГОДУ, КУРСЫ ВАЛЮТ — у тебя нет актуальных данных\n"
+        "- ВСЕГДА используй web_search для: времени, даты, погоды, курсов, новостей, актуальных цен\n"
+        "- Если тебе вернулись результаты поиска — ОБЯЗАТЕЛЬНО используй их для ответа\n"
+        "- НЕ придумывай данные из головы — опирайся ТОЛЬКО на результаты поиска\n"
+        "- Указывай конкретные цифры и факты из результатов\n"
+        "- НЕ отвечай на вопросы о времени/дате/температуре без предварительного поиска\n\n"
+        "АГЕНТНЫЕ ВОЗМОЖНОСТИ:\n"
+        "- У тебя есть инструменты для работы с файлами, приложениями и экраном\n"
+        "- file_create(path, content) — создать файл\n"
+        "- app_open(name) — открыть приложение. Название бери ТОЧНО как сказал пользователь, НЕ ПЕРЕВОДИ на английский\n"
+        "- browser_open(url) — открыть сайт в браузере (youtube.com, vk.com, github.com и т.д.)\n"
+        "- file_open(path) — открыть файл ассоциированным приложением\n"
+        "- capture_screen(monitor, save_path) — сделать скриншот экрана. Используй когда пользователь просит посмотреть на экран, показать что на экране, сделать скриншот\n"
+        "- Используй эти инструменты когда пользователь просит создать файл, открыть приложение, сайт, файл или посмотреть на экран"
+    )
+
+    _system_prompt_en = (
+        "You are an AI assistant. Answer briefly and to the point.\n\n"
+        "RULES:\n"
+        "1. Answer ONLY in English, without inserting Russian words\n"
+        "2. Answer directly, without extra words and emotions\n"
+        "3. Do not repeat or paraphrase the user's message\n"
+        "4. If you don't know — say honestly\n"
+        "5. Use context from memory\n\n"
+        "SEARCH RULES:\n"
+        "- YOU DO NOT KNOW THE CURRENT DATE, TIME, WEATHER, EXCHANGE RATES — you have no up-to-date data\n"
+        "- ALWAYS use web_search for: time, date, weather, rates, news, current prices\n"
+        "- If search results were returned — BE SURE to use them for the answer\n"
+        "- DO NOT invent data — rely ONLY on search results\n"
+        "- Provide specific numbers and facts from results\n"
+        "- DO NOT answer questions about time/date/temperature without prior search\n\n"
+        "AGENT CAPABILITIES:\n"
+        "- You have tools to work with files, applications and screen\n"
+        "- file_create(path, content) — create file\n"
+        "- app_open(name) — open application. Take the name EXACTLY as the user said, DO NOT TRANSLATE\n"
+        "- browser_open(url) — open site in browser (youtube.com, github.com etc.)\n"
+        "- file_open(path) — open file with associated application\n"
+        "- capture_screen(monitor, save_path) — take a screenshot. Use when the user asks to look at the screen, show what's on the screen, take a screenshot\n"
+        "- Use these tools when the user asks to create a file, open an app, site, file or look at the screen"
+    )
+
     def __init__(self, config: LLMConfig | None = None):
         self._config = config or get_config().llm
         self._client: httpx.AsyncClient | None = None
@@ -98,32 +158,106 @@ class LLMEngine:
         
         self._conversation_history: list[Message] = []
         
-        self._system_prompt = (
-            "Ты — AI-ассистент. Отвечай кратко и по делу.\n\n"
-            "ПРАВИЛА:\n"
-            "1. Отвечай ТОЛЬКО на русском языке, без вставок английских слов\n"
-            "2. Отвечай прямо, без лишних слов и эмоций\n"
-            "3. Не повторяй и не перефразируй сообщение пользователя\n"
-            "4. Если не знаешь — скажи честно\n"
-            "5. Используй контекст из памяти\n\n"
-            "ПРАВИЛА РАБОТЫ С ПОИСКОМ:\n"
-            "- ТЫ НЕ ЗНАЕШЬ ТЕКУЩУЮ ДАТУ, ВРЕМЯ, ПОГОДУ, КУРСЫ ВАЛЮТ — у тебя нет актуальных данных\n"
-            "- ВСЕГДА используй web_search для: времени, даты, погоды, курсов, новостей, актуальных цен\n"
-            "- Если тебе вернулись результаты поиска — ОБЯЗАТЕЛЬНО используй их для ответа\n"
-            "- НЕ придумывай данные из головы — опирайся ТОЛЬКО на результаты поиска\n"
-            "- Указывай конкретные цифры и факты из результатов\n"
-            "- НЕ отвечай на вопросы о времени/дате/температуре без предварительного поиска\n\n"
-            "АГЕНТНЫЕ ВОЗМОЖНОСТИ:\n"
-            "- У тебя есть инструменты для работы с файлами, приложениями и экраном\n"
-            "- file_create(path, content) — создать файл\n"
-            "- app_open(name) — открыть приложение. Название бери ТОЧНО как сказал пользователь, НЕ ПЕРЕВОДИ на английский\n"
-            "- browser_open(url) — открыть сайт в браузере (youtube.com, vk.com, github.com и т.д.)\n"
-            "- file_open(path) — открыть файл ассоциированным приложением\n"
-            "- capture_screen(monitor, save_path) — сделать скриншот экрана. Используй когда пользователь просит посмотреть на экран, показать что на экране, сделать скриншот\n"
-            "- Используй эти инструменты когда пользователь просит создать файл, открыть приложение, сайт, файл или посмотреть на экран"
-        )
+        # Language-aware system prompt
+        try:
+            _lang = get_config().general.language
+        except Exception:
+            _lang = "en"
+        # Prefer i18n keys if available, fallback to class constants
+        try:
+            lang = _lang
+            if lang == "ru":
+                self._system_prompt = t("system_prompt_ru", lang=lang)
+                if self._system_prompt == "system_prompt_ru":
+                    self._system_prompt = self._system_prompt_ru
+            else:
+                self._system_prompt = t("system_prompt_en", lang=lang)
+                if self._system_prompt == "system_prompt_en":
+                    self._system_prompt = self._system_prompt_en
+        except Exception:
+            self._system_prompt = self._system_prompt_ru if _lang == "ru" else self._system_prompt_en
+        # Keep instance copies for dynamic switching
+        self._system_prompt_ru = self.__class__._system_prompt_ru
+        self._system_prompt_en = self.__class__._system_prompt_en
         
         self._tools: dict[str, Callable] = {}
+
+    def _get_system_prompt(self) -> str:
+        """Get system prompt based on current language setting."""
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        # Try i18n first, fallback to class constants
+        try:
+            key = "system_prompt_ru" if lang == "ru" else "system_prompt_en"
+            prompt = t(key, lang=lang)
+            if prompt != key and len(prompt) > 20:
+                return prompt
+        except Exception:
+            pass
+        return self._system_prompt_ru if lang == "ru" else self._system_prompt_en
+
+    def refresh_system_prompt(self) -> None:
+        """Update system prompt when language changes."""
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        self._system_prompt = self._get_system_prompt()
+        logger.debug(f"System prompt refreshed for language: {lang}")
+
+    def get_system_prompt(self) -> str:
+        """Public getter that always returns current language prompt."""
+        return self._get_system_prompt()
+
+    def _get_tool_definitions_for_lang(self, lang: str) -> list[dict] | None:
+        """Return tool definitions translated for given language (for LLM Function Calling)."""
+        # Tool descriptions for LLM — EN for EN mode, RU for RU mode
+        lang = lang if lang in ("en", "ru") else "en"
+        try:
+            # Import here to avoid circular
+            from src.agent_tools import (
+                FILE_CREATE_DEFINITION,
+                APP_OPEN_DEFINITION,
+                FILE_OPEN_DEFINITION,
+                BROWSER_OPEN_DEFINITION,
+                SCREENSHOT_DEFINITION,
+                FILE_CREATE_DEFINITION_EN,
+                APP_OPEN_DEFINITION_EN,
+                FILE_OPEN_DEFINITION_EN,
+                BROWSER_OPEN_DEFINITION_EN,
+                SCREENSHOT_DEFINITION_EN,
+            )
+            from src.web_search import DDG_TOOL_DEFINITION, DDG_TOOL_DEFINITION_EN
+            if lang == "ru":
+                return [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION, DDG_TOOL_DEFINITION]
+            else:
+                return [FILE_CREATE_DEFINITION_EN, APP_OPEN_DEFINITION_EN, FILE_OPEN_DEFINITION_EN, BROWSER_OPEN_DEFINITION_EN, SCREENSHOT_DEFINITION_EN, DDG_TOOL_DEFINITION_EN]
+        except ImportError:
+            # Fallback: try to patch descriptions dynamically if EN defs not available
+            try:
+                from src.agent_tools import FILE_CREATE_DEFINITION as fc, APP_OPEN_DEFINITION as ao, FILE_OPEN_DEFINITION as fo, BROWSER_OPEN_DEFINITION as bo, SCREENSHOT_DEFINITION as sc
+                from src.web_search import DDG_TOOL_DEFINITION as ddg
+                if lang == "en":
+                    # Patch copies with EN descriptions
+                    import copy
+                    def _patch(def_, en_desc):
+                        nd = copy.deepcopy(def_)
+                        nd["function"]["description"] = en_desc
+                        return nd
+                    return [
+                        _patch(fc, "Create file with specified content. Use when user asks to create/write a file."),
+                        _patch(ao, "Open/launch application on computer. Use when user asks to open/launch an application."),
+                        _patch(fo, "Open file with associated application. Use when user asks to open a specific file."),
+                        _patch(bo, "Open site/URL in browser. Use when user asks to open a website, page, link."),
+                        _patch(sc, "Take a screenshot and return as base64. Use when user asks to look at screen, show what's on screen, take screenshot, what's on screen."),
+                        _patch(ddg, "Search information on the internet via DuckDuckGo. Use when you need current data, news, facts or information not in your memory."),
+                    ]
+                else:
+                    return [fc, ao, fo, bo, sc, ddg]
+            except Exception:
+                return None
     
     async def initialize(self) -> None:
         """Инициализировать HTTP клиент и проверить доступность провайдера."""
@@ -163,14 +297,14 @@ class LLMEngine:
                 # Для OpenRouter делаем тестовый запрос
                 await self._check_openrouter_availability()
         except Exception as e:
-            logger.warning(f"Проверка провайдера: {e}")
+            logger.warning(f"Provider check: {e}")
             # Не блокируем запуск — может быть временная проблема
         
         self._initialized = True
         logger.info(
-            f"LLM Engine инициализирован: "
-            f"провайдер={self._config.provider.value}, "
-            f"модель={self._config.model}"
+            f"LLM Engine initialized: "
+            f"provider={self._config.provider.value}, "
+            f"model={self._config.model}"
         )
     
     async def _check_local_availability(self) -> None:
@@ -193,7 +327,7 @@ class LLMEngine:
                 resp = await self._client.get("/models")
                 resp.raise_for_status()
             
-            logger.info(f"Провайдер {self._config.provider.value} доступен: {self._config.host}")
+            logger.info(f"Provider {self._config.provider.value} available: {self._config.host}")
         except httpx.ConnectError:
             raise
     
@@ -202,9 +336,9 @@ class LLMEngine:
         try:
             resp = await self._client.get("/models")
             resp.raise_for_status()
-            logger.info("OpenRouter доступен")
+            logger.info("OpenRouter available")
         except httpx.HTTPError as e:
-            logger.warning(f"OpenRouter проверка: {e}")
+            logger.warning(f"OpenRouter check: {e}")
     
     async def close(self) -> None:
         """Закрыть HTTP клиент."""
@@ -212,17 +346,17 @@ class LLMEngine:
             await self._client.aclose()
             self._client = None
             self._initialized = False
-            logger.info("LLM Engine закрыт")
+            logger.info("LLM Engine closed")
     
     def set_system_prompt(self, prompt: str) -> None:
         """Установить системный промпт."""
         self._system_prompt = prompt
-        logger.debug(f"Системный промпт обновлён: {len(prompt)} символов")
+        logger.debug(f"System prompt updated: {len(prompt)} characters")
     
     def register_tool(self, name: str, func: Callable) -> None:
         """Зарегистрировать функцию для Function Calling."""
         self._tools[name] = func
-        logger.info(f"Зарегистрирован инструмент: {name}")
+        logger.info(f"Registered tool: {name}")
     
     def add_to_history(self, message: Message) -> None:
         """Добавить сообщение в историю диалога."""
@@ -231,12 +365,12 @@ class LLMEngine:
         max_messages = get_config().memory.max_context_messages
         if len(self._conversation_history) > max_messages:
             self._conversation_history = self._conversation_history[-max_messages:]
-            logger.debug(f"История обрезана до {max_messages} сообщений")
+            logger.debug(f"History truncated to {max_messages} messages")
     
     def clear_history(self) -> None:
         """Очистить историю диалога."""
         self._conversation_history.clear()
-        logger.info("История диалога очищена")
+        logger.info("Dialog history cleared")
     
     def get_history(self) -> list[Message]:
         """Получить копию истории диалога."""
@@ -263,21 +397,35 @@ class LLMEngine:
         chat_history: list[dict] | None = None,
         images: list[str] | None = None,
     ) -> tuple[list[dict], bool]:
-        """Построить список сообщений для отправки."""
+        """Построить список messages для отправки."""
         messages = []
         
+        # Language-aware system prompt (check language at generate time)
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        system_prompt = self._get_system_prompt()
         messages.append(
-            Message(role=MessageRole.SYSTEM, content=self._system_prompt).to_dict()
+            Message(role=MessageRole.SYSTEM, content=system_prompt).to_dict()
         )
         
         if additional_context:
             context_text = "\n\n".join(additional_context)
-            context_message = (
-                f"=== КОНТЕКСТ ИЗ ПАМЯТИ ===\n"
-                f"Следующая информация может быть полезна для ответа:\n\n"
-                f"{context_text}\n"
-                f"=== КОНЕЦ КОНТЕКСТА ==="
-            )
+            if lang == "ru":
+                context_message = (
+                    f"=== КОНТЕКСТ ИЗ ПАМЯТИ ===\n"
+                    f"Следующая информация может быть полезна для ответа:\n\n"
+                    f"{context_text}\n"
+                    f"=== КОНЕЦ КОНТЕКСТА ==="
+                )
+            else:
+                context_message = (
+                    f"=== MEMORY CONTEXT ===\n"
+                    f"The following information may be useful for the answer:\n\n"
+                    f"{context_text}\n"
+                    f"=== END OF CONTEXT ==="
+                )
             messages.append(
                 Message(role=MessageRole.SYSTEM, content=context_message).to_dict()
             )
@@ -321,7 +469,7 @@ class LLMEngine:
             LLMResponse: Ответ от модели.
         """
         if not self._initialized:
-            raise RuntimeError("LLM Engine не инициализирован. Вызовите initialize().")
+            raise RuntimeError("LLM Engine not initialized. Call initialize().")
 
         messages, thinking_enabled = await self._build_messages(
             user_message, additional_context, thinking, chat_history, images
@@ -348,12 +496,12 @@ class LLMEngine:
             del payload["temperature"]
 
         logger.debug(
-            f"Запрос к LLM: {len(messages)} сообщений, "
-            f"провайдер={self._config.provider.value}, "
-            f"модель={self._config.model}"
+            f"Request to LLM: {len(messages)} messages, "
+            f"provider={self._config.provider.value}, "
+            f"model={self._config.model}"
         )
         if tools:
-            logger.info(f"Инструменты: {[t['function']['name'] for t in tools]}")
+            logger.info(f"Tools: {[t['function']['name'] for t in tools]}")
 
         try:
             max_rounds = 5
@@ -367,7 +515,7 @@ class LLMEngine:
                     break
 
                 logger.info(
-                    f"Раунд {round_idx + 1}: LLM вызвала инструмент(ы): "
+                    f"Round {round_idx + 1}: LLM called tool(s): "
                     f"{[tc.name for tc in response.tool_calls]}"
                 )
 
@@ -402,29 +550,29 @@ class LLMEngine:
                     payload["stream"] = False
 
             if response.tool_calls:
-                logger.info(f"Инструменты выполнены за {round_idx + 1} раунд(ов)")
+                logger.info(f"Tools executed in {round_idx + 1} rounds")
 
             return response
 
         except httpx.HTTPError as e:
-            logger.error(f"Ошибка запроса к {self._config.provider.value}: {e}")
+            logger.error(f"Error requesting {self._config.provider.value}: {e}")
             raise
 
     async def _execute_tool(self, tool_call: ToolCall) -> str:
         """Выполнить вызов инструмента и вернуть результат."""
         if not hasattr(self, '_tools') or not self._tools:
-            return f"[Ошибка: инструмент '{tool_call.name}' не зарегистрирован]"
+            return f"[Error: инструмент '{tool_call.name}' не зарегистрирован]"
 
         tool_fn = self._tools.get(tool_call.name)
         if not tool_fn:
-            return f"[Ошибка: инструмент '{tool_call.name}' не найден]"
+            return f"[Error: инструмент '{tool_call.name}' не найден]"
 
         try:
             result = await tool_fn(**tool_call.arguments)
             return str(result)
         except Exception as e:
-            logger.error(f"Ошибка выполнения инструмента {tool_call.name}: {e}")
-            return f"[Ошибка выполнения инструмента {tool_call.name}: {e}]"
+            logger.error(f"Error executing tool {tool_call.name}: {e}")
+            return f"[Error executing tool {tool_call.name}: {e}]"
     
     async def _generate_single(self, payload: dict) -> LLMResponse:
         """Обычный режим (ждём полный ответ)."""
@@ -469,7 +617,7 @@ class LLMEngine:
             
             if tool_calls:
                 logger.info(
-                    f"LLM запросила вызов инструментов: "
+                    f"LLM requested tool calls: "
                     f"{[tc.name for tc in tool_calls]}"
                 )
         
@@ -496,8 +644,8 @@ class LLMEngine:
         )
         
         logger.debug(
-            f"Ответ LLM: {len(llm_response.content)} символов, "
-            f"модель={model}"
+            f"LLM response: {len(llm_response.content)} characters, "
+            f"model={model}"
         )
         
         return llm_response
@@ -542,7 +690,7 @@ class LLMEngine:
             done=True,
         )
         
-        logger.debug(f"Streaming ответ LLM: {len(llm_response.content)} символов")
+        logger.debug(f"Streaming LLM response: {len(llm_response.content)} characters")
         return llm_response
     
     async def generate_with_context(
@@ -551,7 +699,7 @@ class LLMEngine:
     ) -> LLMResponse:
         """Сгенерировать ответ с произвольным контекстом."""
         if not self._initialized:
-            raise RuntimeError("LLM Engine не инициализирован.")
+            raise RuntimeError("LLM Engine not initialized.")
         
         payload = {
             "model": self._config.model,

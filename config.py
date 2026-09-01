@@ -265,6 +265,22 @@ class ScreenConfig(BaseConfig):
     model_config = SettingsConfigDict(env_prefix="SCREENSHOT_")
 
 
+class GeneralConfig(BaseConfig):
+    """Общие настройки (язык интерфейса)."""
+    
+    language: str = Field(default="en", description="Язык интерфейса: en / ru")
+    
+    @field_validator("language")
+    @classmethod
+    def validate_language(cls, v: str) -> str:
+        v = v.lower().strip()
+        if v not in {"en", "ru"}:
+            raise ValueError(f"Invalid language: {v}. Allowed: en, ru")
+        return v
+    
+    model_config = SettingsConfigDict(env_prefix="GENERAL_")
+
+
 # === Основная конфигурация ===
 
 class Config(BaseSettings):
@@ -308,6 +324,10 @@ class Config(BaseSettings):
     screen: ScreenConfig = Field(
         default_factory=ScreenConfig,
         description="Настройки скриншотов",
+    )
+    general: GeneralConfig = Field(
+        default_factory=GeneralConfig,
+        description="Общие настройки",
     )
     
     model_config = SettingsConfigDict(
@@ -361,7 +381,7 @@ def setup_logging(config: Config | None = None) -> None:
     )
     
     logger = logging.getLogger(__name__)
-    logger.info(f"Логирование настроено: уровень {config.log.level}")
+    logger.info(f"Logging configured: level {config.log.level}")
 
 
 def save_config(
@@ -376,6 +396,7 @@ def save_config(
     memory_max_context: int = None,
     memory_search_results: int = None,
     memory_threshold: float = None,
+    language: str = None,
 ) -> None:
     """
     Сохранить конфигурацию в .env файл.
@@ -438,6 +459,9 @@ def save_config(
     
     if memory_threshold is not None:
         env_vars["MEMORY_SIMILARITY_THRESHOLD"] = str(memory_threshold)
+    
+    if language is not None:
+        env_vars["GENERAL_LANGUAGE"] = language.lower().strip()
     
     # Записываем обратно
     with open(env_path, "w", encoding="utf-8") as f:

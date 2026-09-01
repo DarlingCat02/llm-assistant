@@ -23,6 +23,31 @@ DDG_TOOL_DEFINITION = {
     }
 }
 
+DDG_TOOL_DEFINITION_EN = {
+    "type": "function",
+    "function": {
+        "name": "web_search_ddg",
+        "description": "Search information on the internet via DuckDuckGo. "
+                       "Use when you need current data, news, "
+                       "facts or information not in your memory.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query (in English or Russian)"
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
+
+def get_ddg_tool_definition(lang: str = "en") -> dict:
+    """Return DuckDuckGo tool definition translated for given language."""
+    lang = lang if lang in ("en", "ru") else "en"
+    return DDG_TOOL_DEFINITION if lang == "ru" else DDG_TOOL_DEFINITION_EN
+
 
 class DuckDuckGoSearchTool:
     def __init__(self):
@@ -35,9 +60,9 @@ class DuckDuckGoSearchTool:
             from ddgs import DDGS
             self._ddgs = DDGS()
             self._initialized = True
-            logger.info("WebSearchTool инициализирован (DuckDuckGo)")
+            logger.info("WebSearchTool initialized (DuckDuckGo)")
         except ImportError:
-            logger.warning("duckduckgo_search не установлен. Установите: pip install duckduckgo-search")
+            logger.warning("duckduckgo_search not installed. Install: pip install duckduckgo-search")
             raise
 
     async def search(self, query: str, max_results: int = 5) -> str:
@@ -57,7 +82,7 @@ class DuckDuckGoSearchTool:
         try:
             results = await loop.run_in_executor(None, _do_search)
         except Exception as e:
-            logger.error(f"Ошибка поиска: {e}")
+            logger.error(f"Search error: {e}")
             results = []
 
         if not results:
@@ -78,7 +103,7 @@ class DuckDuckGoSearchTool:
                     snippet = re.sub(r'<[^>]+>', '', snippets[i] if i < len(snippets) else '').strip()
                     results.append({"title": title, "href": url, "body": snippet})
             except Exception as e2:
-                logger.error(f"Fallback поиск тоже не удался: {e2}")
+                logger.error(f"Fallback search also failed: {e2}")
                 return "[Поиск не дал результатов]"
 
         if not results:

@@ -21,14 +21,35 @@ from pydantic import BaseModel, Field
 
 from backend.database import ChatDatabase, Chat, Message
 
+try:
+    from src.i18n import t
+except ImportError:
+    try:
+        from i18n import t
+    except ImportError:
+        def t(key, lang=None, **kwargs):
+            return key
+try:
+    from config import get_config
+except ImportError:
+    def get_config():
+        class _Cfg:
+            class general:
+                language = "en"
+        return _Cfg()
 
-# Глобальная функция для получения БД (будет установлена из main.py)
+
+# Global function to get DB (will be set from main.py)
 _db_getter = None
 
 def get_db():
-    """Получить БД через глобальный getter."""
+    """Get DB via global getter."""
     if _db_getter is None:
-        raise HTTPException(status_code=503, detail="База данных не инициализирована")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=503, detail=t("api.db_not_init", lang=lang))
     return _db_getter()
 
 def set_db_getter(getter):
@@ -158,7 +179,11 @@ async def add_memory_entry(
     assistant = get_assistant()
     
     if not assistant or not assistant._memory:
-        raise HTTPException(status_code=503, detail="Память не доступна")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=503, detail=t("api.memory_not_available", lang=lang))
 
     saved = await assistant._memory.save(
         text=request.text,
@@ -166,9 +191,17 @@ async def add_memory_entry(
     )
 
     if not saved:
-        return {"status": "skipped", "message": "Дубликат записи"}
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        return {"status": "skipped", "message": t("api.duplicate", lang=lang)}
 
-    return {"status": "ok", "message": "Запись добавлена"}
+    try:
+        lang = get_config().general.language
+    except Exception:
+        lang = "en"
+    return {"status": "ok", "message": t("api.added", lang=lang)}
 
 
 @memory_router.post("/search")
@@ -214,14 +247,26 @@ async def delete_memory_entry(
     assistant = get_assistant()
     
     if not assistant or not assistant._memory:
-        raise HTTPException(status_code=503, detail="Память не доступна")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=503, detail=t("api.memory_not_available", lang=lang))
 
     deleted = await assistant._memory._storage.delete(entry_id)
 
     if not deleted:
-        raise HTTPException(status_code=404, detail="Запись не найдена")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=404, detail=t("api.not_found", lang=lang))
 
-    return {"status": "ok", "message": f"Запись {entry_id} удалена"}
+    try:
+        lang = get_config().general.language
+    except Exception:
+        lang = "en"
+    return {"status": "ok", "message": t("api.deleted", lang=lang, id=entry_id)}
 
 
 # === WebSocket для real-time событий ===
@@ -233,24 +278,24 @@ class ConnectionManager:
         self._connections: list[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
-        """Принять подключение."""
-        # FastAPI проверяет origin, поэтому принимаем с явным разрешением
+        """Accept connection."""
+        # FastAPI checks origin, so accept with explicit allow
         try:
-            # Проверяем origin - разрешаем все для локальной разработки
+            # Check origin - allow all for local dev
             origin = websocket.headers.get("origin")
-            logger.debug(f"WebSocket подключение с origin: {origin}")
+            logger.debug(f"WebSocket connection with origin: {origin}")
             await websocket.accept()
             self._connections.append(websocket)
-            logger.info(f"WebSocket подключён. Всего подключений: {len(self._connections)}")
+            logger.info(f"WebSocket connected. Total connections: {len(self._connections)}")
         except Exception as e:
-            logger.warning(f"Не удалось принять WebSocket подключение: {e}")
+            logger.warning(f"Failed to accept WebSocket connection: {e}")
             raise
 
     def disconnect(self, websocket: WebSocket):
-        """Отключить клиента."""
+        """Disconnect client."""
         if websocket in self._connections:
             self._connections.remove(websocket)
-        logger.info(f"WebSocket отключён. Всего подключений: {len(self._connections)}")
+        logger.info(f"WebSocket disconnected. Total connections: {len(self._connections)}")
 
     async def broadcast(self, message: dict):
         """
@@ -272,16 +317,16 @@ class ConnectionManager:
 
     async def send_personal(self, websocket: WebSocket, message: dict):
         """
-        Отправить сообщение конкретному клиенту.
+        Send message to specific client.
 
         Args:
-            websocket: Подключение клиента.
-            message: Словарь для отправки.
+            websocket: Client connection.
+            message: Dict to send.
         """
         try:
             await websocket.send_json(message)
         except Exception as e:
-            logger.warning(f"Не удалось отправить сообщение: {e}")
+            logger.warning(f"Failed to send message: {e}")
 
 
 manager = ConnectionManager()

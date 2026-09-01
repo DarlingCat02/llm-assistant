@@ -10,7 +10,7 @@ struct AppState {
 impl Drop for AppState {
     fn drop(&mut self) {
         if let Some(mut process) = self.python_process.take() {
-            info!("Остановка Python процесса...");
+            info!("Stopping Python process...");
             let _ = process.kill();
         }
     }
@@ -25,7 +25,7 @@ fn stop_python_backend(app_handle: &AppHandle) {
     if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
         if let Ok(mut state) = state.lock() {
             if let Some(mut process) = state.python_process.take() {
-                info!("Остановка Python процесса...");
+                info!("Stopping Python process...");
                 let _ = process.kill();
             }
         }
@@ -33,7 +33,7 @@ fn stop_python_backend(app_handle: &AppHandle) {
 }
 
 fn start_python_backend(app_handle: AppHandle) {
-    info!("Запуск Python бэкенда...");
+    info!("Starting Python backend...");
     
     // На Windows пробуем разные варианты python
     let python_cmds = if cfg!(windows) {
@@ -62,7 +62,7 @@ fn start_python_backend(app_handle: AppHandle) {
         
         if let Ok(output) = test {
             if output.status.success() {
-                info!("Найден python: {}", cmd);
+                info!("Found python: {}", cmd);
                 python_cmd = Some(cmd.to_string());
                 break;
             }
@@ -72,7 +72,7 @@ fn start_python_backend(app_handle: AppHandle) {
     let python = match python_cmd {
         Some(cmd) => cmd,
         None => {
-            error!("Python не найден в системе");
+            error!("Python not found on system");
             return;
         }
     };
@@ -84,13 +84,13 @@ fn start_python_backend(app_handle: AppHandle) {
     
     match child {
         Ok(process) => {
-            info!("Python бэкенд запущен с PID: {}", process.id());
+            info!("Python backend started with PID: {}", process.id());
             app_handle.manage(Mutex::new(AppState {
                 python_process: Some(process),
             }));
         }
         Err(e) => {
-            error!("Ошибка запуска Python: {}", e);
+            error!("Failed to start Python: {}", e);
         }
     }
 }
@@ -104,36 +104,36 @@ fn setup_global_shortcuts(app: &AppHandle) {
     
     let app_handle = app.clone();
     if let Err(e) = app.global_shortcut().on_shortcut(voice_shortcut, move |_app, _shortcut, _event| {
-        info!("Горячая клавиша: Voice Input (Ctrl+Shift+V)");
+        info!("Hotkey: Voice Input (Ctrl+Shift+V)");
         if let Some(window) = app_handle.get_webview_window("main") {
             let _ = window.emit("hotkey-voice", ());
         }
     }) {
-        error!("Ошибка регистрации Ctrl+Shift+V: {:?}", e);
+        error!("Failed to register Ctrl+Shift+V: {:?}", e);
     }
     
     let app_handle2 = app.clone();
     if let Err(e) = app.global_shortcut().on_shortcut(live_shortcut, move |_app, _shortcut, _event| {
-        info!("Горячая клавиша: Live Mode (Ctrl+Shift+L)");
+        info!("Hotkey: Live Mode (Ctrl+Shift+L)");
         if let Some(window) = app_handle2.get_webview_window("main") {
             let _ = window.emit("hotkey-live", ());
         }
     }) {
-        error!("Ошибка регистрации Ctrl+Shift+L: {:?}", e);
+        error!("Failed to register Ctrl+Shift+L: {:?}", e);
     }
     
     // Ctrl+Num0 для голосового ввода
     let app_handle3 = app.clone();
     if let Err(e) = app.global_shortcut().on_shortcut(voice_num0_shortcut, move |_app, _shortcut, _event| {
-        info!("Горячая клавиша: Voice Input (Ctrl+Num0)");
+        info!("Hotkey: Voice Input (Ctrl+Num0)");
         if let Some(window) = app_handle3.get_webview_window("main") {
             let _ = window.emit("hotkey-voice", ());
         }
     }) {
-        error!("Ошибка регистрации Ctrl+Num0: {:?}", e);
+        error!("Failed to register Ctrl+Num0: {:?}", e);
     }
     
-    info!("Горячие клавиши зарегистрированы: Ctrl+Shift+V, Ctrl+Num0 (голос), Ctrl+Shift+L (live)");
+    info!("Global shortcuts registered: Ctrl+Shift+V, Ctrl+Num0 (voice), Ctrl+Shift+L (live)");
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -141,22 +141,22 @@ pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .init();
     
-    info!("Запуск Local AI Assistant...");
+    info!("Starting Local AI Assistant...");
     
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            info!("Настройка приложения...");
+            info!("Setting up application...");
             start_python_backend(app.handle().clone());
             setup_global_shortcuts(app.handle());
-            info!("Приложение готово!");
+            info!("Application ready!");
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
-                info!("Закрытие приложения...");
+                info!("Closing application...");
                 stop_python_backend(window.app_handle());
             }
         })

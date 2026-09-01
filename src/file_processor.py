@@ -31,7 +31,7 @@ async def extract_text(file_path: str, file_type: str) -> str:
             return f"[Формат {ext} не поддерживается]"
             
     except Exception as e:
-        logger.error(f"Ошибка извлечения текста из {file_type}: {e}")
+        logger.error(f"Text extraction error from {file_type}: {e}")
         return f"[Ошибка извлечения текста: {e}]"
 
 

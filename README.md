@@ -1,3 +1,471 @@
+<p align="center">
+  <a href="#english">English</a> &nbsp;|&nbsp; <a href="#russian">Русский</a>
+</p>
+
+<a id="english"></a>
+# Local AI Assistant
+
+Local AI assistant with voice input/output, web search, **Vision-Language (VL) capabilities** and agent skills for Windows.
+
+## Features
+
+- 🎙️ **Voice input (STT)** — local Whisper, Russian only
+- 🔊 **Voice output (TTS)** — OmniVoice synthesis and voice cloning
+- 🌐 **Web search** — DuckDuckGo (free, no API keys)
+- 📁 **Agent skills** — file creation, opening apps, websites and folders
+- 📎 **File attachments** — TXT, PDF, DOCX, **images (PNG, JPG, WebP, GIF, BMP, TIFF)** supported
+- 🖥️ **Desktop app** — Tauri (exe file)
+- 🧠 **Long-term memory** — ChromaDB
+- ⚡ **Fast** — runs on local models via Ollama / LM Studio
+- ⌨️ **Global hotkeys** — work outside the app window
+- 🎛️ **Customizable UI** — resizable sidebar, settings tabs
+- 🧵 **Per-chat context** — each chat has isolated history
+- 📊 **Context indicator** — shows used tokens / limit
+- 🖼️ **Vision-Language (VL)** — image analysis, OCR, screenshot description
+- 🖥️ **Auto screenshot** — triggered by phrases ("look at screen", "screenshot", etc.) with automatic analysis
+- 🌐 **Language switch** — English / Russian interface (General → Language), default English on first launch
+
+## Requirements
+
+- Windows 10/11
+- Python 3.11+
+- Ollama or LM Studio (for LLM)
+- GPU with 8GB+ VRAM (for OmniVoice + Whisper + VL)
+
+**For VL capabilities (recommended models in LM Studio):**
+- `qwen2.5-vl-3b-instruct` — optimal for 8-12GB VRAM
+- `qwen2.5-vl-7b-instruct` — better quality, ~10GB VRAM
+- `llava-v1.5-7b` / `llava-v1.6-mistral-7b` — alternatives
+- `bakllava-7b` — lightweight alternative
+
+**Important:** VL via API requires a model with vision encoder (qwen2.5-vl, llava, bakllava).
+Plain text-only models will not work. For some models you need to download the matching mmproj and put it into the model's folder in LM Studio.
+
+## From the author
+The code was written almost entirely with an agent, while I acted only as architect, tester and prompt engineer.
+I have long wanted to build my own assistant that could interact with the OS. An assistant that can maintain seamless (or almost seamless) dialogue, open folders and apps, have smart memory, and see the screen. The stack was designed in advance, and STT and TTS models were chosen as the best options I tested in Comfy UI.
+Initially it was conceived as a background assistant, but in the end with all capabilities enabled (STT + TTS) VRAM usage can reach 7-10 GB, which already sounds quite substantial.
+But it can still be used with full functionality for standard OS interactions, even while playing light VRAM games. So it works well as an assistant. Without TTS the situation looks even more favorable.
+However I have no ideas yet how to reduce VRAM consumption. Since I want to use high-quality STT and TTS (especially TTS) models and I haven't found an OmniVoice analog with lower VRAM usage that matches its quality. It is not the most flexible model to configure, but it is good out of the box.
+I personally use and recommend 2B-7B models with different quantization. Just browse Hugging Face and pick modern models (e.g. Qwen 3.5, Qwen 3.6, Gemma etc.).
+The project is under active development. As new models, ideas and tools appear, the stack will evolve. The architecture will also be gradually improved and refactored.
+
+## Quick start
+
+### 1. Install LLM provider
+
+**Option A: Ollama**
+```bash
+ollama pull llama3.2:3b
+```
+
+**Option B: LM Studio**
+- Download from https://lmstudio.ai
+- Load a model (e.g. Qwen 3.5 4B)
+- Start the server
+
+### 2. Configure .env
+
+```env
+# For Ollama:
+LLM_PROVIDER=ollama
+LLM_MODEL=llama3.2:3b
+LLM_HOST=http://localhost:11434
+
+# For LM Studio:
+LLM_PROVIDER=lm_studio
+LLM_MODEL=qwen3.5-4b:latest
+LLM_HOST=http://localhost:1234
+
+# Language (en/ru, default en):
+GENERAL_LANGUAGE=en
+```
+
+### 3. Launch
+
+Run the exe — the app will start the backend automatically and open the window.
+
+## Where to get ready models and exe
+
+### Option 1: GitHub Releases
+
+Download ready builds from https://github.com/DarlingCat02/llm-assistant/releases
+
+### Option 2: Build from source
+
+#### 1. Download models
+
+```bash
+# Whisper (STT)
+python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir='llm-assistant-tauri/src-tauri/target/release/openai_whisper-large-v3-turbo')"
+
+# OmniVoice (TTS)
+python -c "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice', local_dir='llm-assistant-tauri/src-tauri/target/release/OmniVoice')"
+```
+
+#### 2. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+#### 3. Build Tauri app
+
+```bash
+cd llm-assistant-tauri
+npm install
+npm run tauri build
+```
+
+## Web search
+
+Search works via DuckDuckGo without API keys.
+
+**How to use:**
+1. Enable the "🌐 Search" toggle in the UI
+2. Ask a question — the assistant will automatically find up-to-date information
+
+**Example questions:**
+- "What's the weather in Moscow?"
+- "USD to RUB rate"
+- "Current US president"
+
+## Chat context
+
+Each chat has **isolated message history**. Switching chats does not mix contexts.
+
+**Context indicator** in the chat header shows:
+- How many tokens are used in the current dialog (`prompt_tokens`)
+- Maximum limit (`LLM_NUM_CTX` / LM Studio `loaded_context_length`)
+- Visual progress bar (green → yellow → red)
+
+Updates after each model response.
+
+## Agent skills
+
+The assistant can work with files, apps and websites on your computer.
+
+### Opening apps
+
+Say "Open notepad", "Launch telegram" or any phrase with the app name.
+
+**How it works:**
+1. LLM recognizes the phrase and calls `app_open`
+2. Searches `apps.json` by name/alias
+3. If found — launches (supports .exe, .lnk, folders)
+4. If not found — automatically opens as website in browser
+
+**Example phrases:**
+- "Open notepad"
+- "Launch telegram"
+- "Open discord"
+- "Launch calculator"
+- "Open replays" (opens folder in Explorer)
+
+### Opening websites
+
+Say "Open youtube", "Open github" — the site will open in the browser.
+
+**How it works:**
+- If app is not found in `apps.json`, `app_open` automatically opens as website
+- Also available directly via `browser_open`
+- Browser is taken from `default_browser` field in `apps.json`
+
+**Example phrases:**
+- "Open youtube"
+- "Open vk.com"
+- "Open github"
+- "Open mail.ru website"
+
+### Creating files
+
+Say "Create file notes.txt with shopping list" — the assistant will create the file.
+
+**Files are created in:** folder from `default_save_folder` in apps.json (default `~/Documents`)
+
+### Opening files
+
+Say "Open document.docx" — the file will be opened with the associated app.
+
+### Configuring apps (apps.json)
+
+`apps.json` in the project root contains the list of apps and their aliases.
+**Not tracked by git** — local config, will not be pushed.
+
+Use `apps.json.example` as a template.
+
+**Format:**
+```json
+{
+    "apps": [
+        {
+            "name": "telegram",
+            "aliases": ["телеграм", "telegram", "tg", "телега"],
+            "path": "C:\\Users\\%USERNAME%\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe"
+        },
+        {
+            "name": "replays",
+            "aliases": ["реплеи", "повторы"],
+            "path": "E:\\Folder\\with\\video"
+        }
+    ],
+    "default_browser": "yandex",
+    "default_save_folder": "C:\\Users\\%USERNAME%\\Documents",
+    "blocked_apps": []
+}
+```
+
+**Fields:**
+| Field | Description |
+|------|----------|
+| `apps` | List of apps with name, aliases and path |
+| `default_browser` | App name from `apps` to open websites |
+| `default_save_folder` | Default folder for file creation |
+| `blocked_apps` | List of blocked apps (will not open) |
+
+**Supported path types:**
+- `.exe` — executables
+- `.lnk` — Windows shortcuts
+- Folders — open in Explorer
+- `%USERNAME%` — automatically substituted
+
+**Aliases** — words by which LLM recognizes the request. The more aliases, the better the understanding.
+
+## File and image attachments
+
+Supports TXT, PDF, DOCX files and **images** for analysis.
+
+1. Click 📎 next to the input field
+2. Select a file (supported: TXT, PDF, DOCX, PNG, JPG, JPEG, WebP, GIF, BMP, TIFF)
+3. Type a message (or leave empty)
+4. File/image content will be sent with the message
+
+**Limits:**
+- Max 6000 characters from a file
+- PDF: up to 20 pages
+- DOCX: paragraph and table text
+- Images: auto-resize to 1024px, JPEG quality=90 (token optimization)
+
+### Vision-Language (VL) capabilities
+
+The assistant can **analyze images** and **read text from screens/screenshots**:
+
+- **OCR** — reading text from images, screenshots, document photos
+- **Image description** — describing photo, screenshot, diagram content
+- **Table/chart reading** — extracting data from tables and charts on screenshots
+- **Code/UI analysis** — reading code from IDE screenshots, console errors
+- **Multilingual** — Russian, English and other languages
+
+**Model requirements:** VL via API needs a model with vision encoder (qwen2.5-vl, llava, bakllava).
+When using qwen3.5-4b + mmproj via LM Studio API — works via correct `image_url` format in `content`.
+
+### Auto screenshot by triggers
+
+The assistant can **automatically take a screenshot** and analyze it:
+
+**Triggers (configurable in `.env`):**
+- "screen", "screenshot", "look at screen", "show screen"
+- "what's on screen", "take screenshot", "capture screen"
+- "screen", "screenshot", "look at screen"
+
+**How it works:**
+1. User writes: "Look at the screen"
+2. Assistant automatically takes a screenshot (JPEG quality=90, max 1024px)
+3. Screenshot is sent to the model with the request
+4. Model analyzes and answers
+
+**Configure via `.env`:**
+```env
+SCREENSHOT_ENABLED=true
+SCREENSHOT_SAVE_PATH=./screenshots
+SCREENSHOT_MONITOR=0
+SCREENSHOT_TRIGGERS=screen,screenshot,look at screen,show screen,whats on screen,take screenshot,screen,screenshot,look at screen
+```
+
+**Optimization for 2K/4K screens:**
+- Auto-resize to 1024px (keeps aspect ratio)
+- JPEG quality=90 (quality/tokens balance)
+- PNG → JPEG conversion (3-4x token saving)
+- Result: ~1700 tokens instead of 5300+ (for 2K screen)
+
+## Voice input (STT)
+
+Whisper transcribes only in Russian.
+
+### Hotkeys
+
+| Action | Key |
+|----------|---------|
+| Voice input | `Ctrl+Num0` |
+| Stop recording | `Ctrl+Num0` again or 2 sec silence |
+
+After stopping — 1 second pause, then text is sent to AI.
+
+### How to change hotkeys
+
+File: `llm-assistant-tauri/src-tauri/src/lib.rs`
+```rust
+let voice_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Numpad0);
+```
+
+## Voice output (TTS)
+
+### Modes
+
+1. **Synthesis** — voice generation from text description
+2. **Cloning** — copying voice from reference audio
+
+### Voices for cloning
+
+Add audio files to `voices/` folder:
+- Format: MP3, WAV
+- Recommended duration: 3-10 seconds
+
+## Configuration (.env)
+
+```env
+# === LLM ===
+LLM_PROVIDER=lm_studio        # ollama / lm_studio / openrouter
+LLM_MODEL=qwen3.5-4b:latest
+LLM_HOST=http://localhost:1234
+LLM_NUM_CTX=8192
+LLM_TEMPERATURE=0.7
+
+# === General ===
+GENERAL_LANGUAGE=en           # en / ru
+
+# === ChromaDB ===
+CHROMA_PERSIST_DIR=./storage/chroma
+
+# === Memory ===
+MEMORY_MAX_CONTEXT_MESSAGES=20
+MEMORY_SEARCH_RESULTS=3
+MEMORY_SIMILARITY_THRESHOLD=0.3
+
+# === TTS ===
+TTS_ENABLED=false
+TTS_STEPS=64
+TTS_TEMPERATURE=1.0
+
+# === Other ===
+LOG_LEVEL=INFO
+```
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|-------|----------|----------|
+| GET | `/api/status` | App status |
+| POST | `/api/chat` | Send message (returns `used_context_tokens`, `max_context_tokens`, supports `images` array) |
+| POST | `/api/stt` | Voice recognition |
+| POST | `/api/upload` | Upload file (document or image) |
+| GET | `/api/chats` | List chats |
+| GET | `/api/config` | Current config |
+| PUT | `/api/config` | Update config |
+| POST | `/api/tts/toggle` | Enable/disable TTS |
+| POST | `/api/tts/config` | Configure voice |
+| POST | `/api/tts/speak` | Synthesize speech |
+
+## Project structure
+
+```
+local_assistant/
+├── .env                    # Configuration
+├── apps.json               # Apps config (git-ignored)
+├── apps.json.example       # Template apps.json
+├── config.py               # Python config
+├── requirements.txt        # Python dependencies
+├── README.md               # This file
+├── backend/
+│   ├── main.py             # FastAPI backend
+│   ├── api.py              # API models
+│   └── database.py         # SQLite chat DB
+├── src/
+│   ├── i18n.py             # Backend i18n
+│   ├── main.py             # Assistant logic
+│   ├── llm_engine.py       # LLM + Tool Calling
+│   ├── stt_engine.py       # Whisper STT (Russian)
+│   ├── tts_engine.py       # OmniVoice TTS
+│   ├── web_search.py       # DuckDuckGo search
+│   ├── agent_tools.py      # Agent tools
+│   ├── file_processor.py   # File handling
+│   └── memory_manager.py   # ChromaDB memory
+├── llm-assistant-tauri/    # Tauri desktop app
+│   ├── dist/               # Built frontend
+│   ├── index.html           # Vite entry
+│   ├── src/                 # Frontend sources
+│   │   ├── app.js           # UI logic
+│   │   ├── i18n.js          # Frontend i18n
+│   │   ├── locales/en.json  # English translations
+│   │   ├── locales/ru.json  # Russian translations
+│   │   └── style.css        # Styles
+│   ├── src-tauri/
+│   │   ├── src/lib.rs      # Hotkeys
+│   │   └── target/release/
+│   │       ├── llm-assistant-tauri.exe  # Built app
+│   │       ├── OmniVoice/              # TTS model
+│   │       └── openai_whisper-*/       # STT model
+│   ├── package.json
+│   └── vite.config.ts
+├── storage/                 # ChromaDB data
+└── voices/                  # Voices for cloning
+```
+
+## Tools (Tool Calling)
+
+The assistant uses the following tools:
+
+| Tool | Description |
+|------------|----------|
+| `web_search_ddg` | Web search via DuckDuckGo |
+| `file_create` | Create file with content |
+| `app_open` | Open app/folder/website |
+| `file_open` | Open file with associated app |
+| `browser_open` | Open website in browser |
+| `capture_screen` | Screenshot + VL analysis |
+
+## Troubleshooting
+
+### App does not open
+1. Check Ollama/LM Studio
+2. Check .env
+
+### Search does not work
+1. Check internet
+2. Try another query
+
+### Hotkeys do not work
+1. Check NumLock
+2. Make sure app is focused
+
+### Apps do not open
+1. Check `apps.json` — is the app there
+2. Check exe paths
+3. For `.lnk` and folders — uses `os.startfile` (implemented)
+
+### Images not analyzed / 400 Bad Request
+1. **Check model in LM Studio** — must be VL model
+2. **Check `.env`** — `LLM_MODEL` must point to VL model
+3. **Restart backend** after changing model in LM Studio
+3. **Context overflow** — increase context in LM Studio (8192 or 16384)
+
+### Auto screenshot not working
+1. **Check triggers** in `.env` — `SCREENSHOT_TRIGGERS`
+2. **Check logs** — `Screenshot captured: monitor=0, size=XXXXX bytes`
+3. **400 Bad Request on screenshot** — model is not VL or context overflow (increase context)
+4. **Model does not see screen** — ensure VL model with mmproj is selected in LM Studio
+
+### Images not uploading
+1. Check format — supported: PNG, JPG, JPEG, WebP, GIF, BMP, TIFF
+2. File size should not exceed token limit (auto-resize to 1024px)
+
+## License
+
+MIT
+
+---
+
+<a id="russian"></a>
 # Local AI Assistant
 
 Локальный AI-ассистент с голосовым вводом/выводом, поиском в интернете, **Vision-Language (VL) возможностями** и агентными способностями для Windows.
@@ -18,6 +486,7 @@
 - 📊 **Индикатор контекста** — показывает использованные токены / лимит
 - 🖼️ **Vision-Language (VL) возможности** — анализ изображений, OCR, описание скриншотов
 - 🖥️ **Авто-скриншот экрана** — по триггерам ("посмотри на экран", "скриншот" и др.) с автоматическим анализом
+- 🌐 **Переключение языка** — английский / русский интерфейс (Общие → Язык), по умолчанию английский при первом запуске
 
 ## Требования
 
@@ -70,6 +539,9 @@ LLM_HOST=http://localhost:11434
 LLM_PROVIDER=lm_studio
 LLM_MODEL=qwen3.5-4b:latest
 LLM_HOST=http://localhost:1234
+
+# Язык (en/ru, по умолчанию en):
+GENERAL_LANGUAGE=en
 ```
 
 ### 3. Запуск
@@ -127,7 +599,7 @@ npm run tauri build
 
 **Индикатор контекста** в шапке чата показывает:
 - Сколько токенов использовано в текущем диалоге (`prompt_tokens`)
-- Максимальный лимит (`LLM_NUM_CTX`)
+- Максимальный лимит (`LLM_NUM_CTX` / LM Studio `loaded_context_length`)
 - Визуальный progress bar (зелёный → жёлтый → красный по мере заполнения)
 
 Обновляется после каждого ответа модели.
@@ -322,6 +794,9 @@ LLM_HOST=http://localhost:1234
 LLM_NUM_CTX=8192
 LLM_TEMPERATURE=0.7
 
+# === General ===
+GENERAL_LANGUAGE=en           # en / ru
+
 # === ChromaDB ===
 CHROMA_PERSIST_DIR=./storage/chroma
 
@@ -368,12 +843,24 @@ local_assistant/
 │   ├── main.py             # FastAPI backend
 │   ├── api.py              # API модели
 │   └── database.py         # SQLite база чатов
+├── src/
+│   ├── i18n.py             # Backend i18n
+│   ├── main.py             # Assistant логика
+│   ├── llm_engine.py       # LLM + Tool Calling
+│   ├── stt_engine.py       # Whisper STT (русский)
+│   ├── tts_engine.py       # OmniVoice TTS
+│   ├── web_search.py       # DuckDuckGo поиск
+│   ├── agent_tools.py      # Агентные инструменты
+│   ├── file_processor.py   # Обработка файлов
+│   └── memory_manager.py   # ChromaDB память
 ├── llm-assistant-tauri/    # Tauri desktop app
 │   ├── dist/               # Собранный фронтенд
 │   ├── index.html           # Точка входа Vite
 │   ├── src/                 # Исходники фронтенда
 │   │   ├── app.js           # UI логика
-│   │   ├── index.html       # Интерфейс (для Vite)
+│   │   ├── i18n.js          # Frontend i18n
+│   │   ├── locales/en.json  # English translations
+│   │   ├── locales/ru.json  # Russian translations
 │   │   └── style.css        # Стили
 │   ├── src-tauri/
 │   │   ├── src/lib.rs      # Горячие клавиши
@@ -383,17 +870,8 @@ local_assistant/
 │   │       └── openai_whisper-*/       # STT модель
 │   ├── package.json
 │   └── vite.config.ts
-├── src/
-│   ├── web_search.py       # DuckDuckGo поиск
-│   ├── agent_tools.py      # Агентные инструменты
-│   ├── file_processor.py   # Обработка файлов
-│   ├── memory_manager.py   # ChromaDB память
-│   ├── main.py             # Assistant логика
-│   ├── llm_engine.py       # LLM + Tool Calling
-│   ├── stt_engine.py       # Whisper STT (русский)
-│   ├── tts_engine.py       # OmniVoice TTS
-│   ├── screenshots/            # Авто-скриншоты экрана (игнорируется git'ом)
-│   └── voices/                  # Голоса для клонирования
+├── storage/                 # ChromaDB данные
+└── voices/                  # Голоса для клонирования
 ```
 
 ## Инструменты (Tool Calling)

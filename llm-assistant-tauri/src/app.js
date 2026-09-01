@@ -7,6 +7,8 @@
  * - Подготовка к голосовому вводу
  */
 
+import { initI18n, t, setLanguage, getLang } from './i18n.js';
+
 const API_BASE = 'http://127.0.0.1:8000';
 let currentChatId = null;
 let ws = null;
@@ -49,6 +51,7 @@ async function waitForApi(retries = 20, delay = 500) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    try { await initI18n(); } catch {}
     console.log('Ожидание готовности Python бэкенда...');
     const ready = await waitForApi();
     if (ready) {
@@ -59,7 +62,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateStatus();
     } else {
         document.getElementById('messages-container').innerHTML = 
-            '<div class="error">Ошибка: Python бэкенд не запущен</div>';
+            `<div class="error">${t('chat.error.backend')}</div>`;
     }
 });
 
@@ -114,7 +117,7 @@ function initEventListeners() {
                         `;
                     } else {
                         item.innerHTML = `
-                            <span class="file-name">📄 ${f.name} (${f.charCount} симв.)</span>
+                            <span class="file-name">📄 ${f.name} (${f.charCount} ${getLang()==='ru'?'симв.':'chars'})</span>
                             <button class="file-remove" data-index="${i}">✕</button>
                         `;
                     }
@@ -210,6 +213,13 @@ function initEventListeners() {
     document.getElementById('close-settings-btn').addEventListener('click', closeSettings);
     document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
     document.getElementById('provider-select').addEventListener('change', onProviderChange);
+    const langSel = document.getElementById('lang-select');
+    if (langSel) {
+        langSel.value = getLang();
+        langSel.addEventListener('change', async (e) => {
+            await setLanguage(e.target.value);
+        });
+    }
     
     // Enter для отправки
     document.getElementById('message-input').addEventListener('keydown', (e) => {
@@ -276,9 +286,9 @@ function handleWebSocketMessage(data) {
 function updateConnectionStatus(connected) {
     const statusBtn = document.getElementById('status-btn');
     if (connected) {
-        statusBtn.textContent = '🟢 Статус';
+        statusBtn.textContent = t('status.connected');
     } else {
-        statusBtn.textContent = '🔴 Статус';
+        statusBtn.textContent = t('status.disconnected');
     }
 }
 
@@ -309,7 +319,7 @@ function createChatElement(chat) {
     }
     
     const date = new Date(chat.updated_at);
-    const dateStr = date.toLocaleDateString('ru-RU', {
+    const dateStr = date.toLocaleDateString(getLang()==='ru'?'ru-RU':'en-US', {
         day: 'numeric',
         month: 'short',
         hour: '2-digit',
@@ -390,7 +400,7 @@ async function createNewChat() {
         const response = await fetch(`${API_BASE}/api/chats`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: 'Новый чат' }),
+            body: JSON.stringify({ title: t('sidebar.newChat') }),
         });
         
         const chat = await response.json();
@@ -417,7 +427,7 @@ async function selectChat(chatId) {
     await loadChatMessages(chatId);
     
     // Обновляем заголовок
-    document.getElementById('chat-title').textContent = `Чат #${chatId}`;
+    document.getElementById('chat-title').textContent = `${getLang()==='ru'?'Чат':'Chat'} #${chatId}`;
     
     // Сбрасываем индикатор контекста (обновится после следующего ответа)
     updateContextIndicator(0, 8192);
@@ -444,7 +454,7 @@ async function loadChatMessages(chatId) {
 async function deleteChat() {
     if (!currentChatId) return;
     
-    if (!confirm('Удалить этот чат?')) return;
+    if (!confirm(t('confirm.deleteChat'))) return;
     
     try {
         await fetch(`${API_BASE}/api/chats/${currentChatId}`, {
@@ -452,14 +462,14 @@ async function deleteChat() {
         });
         
         currentChatId = null;
-        document.getElementById('chat-title').textContent = 'Выберите чат';
+        document.getElementById('chat-title').textContent = t('chat.select');
         // Прячем индикатор контекста
         const ctxIndicator = document.getElementById('context-indicator');
         if (ctxIndicator) ctxIndicator.style.display = 'none';
         document.getElementById('messages-container').innerHTML = `
             <div class="welcome-message">
-                <h2>🤖 Добро пожаловать в Local AI Assistant!</h2>
-                <p>Выберите существующий чат или создайте новый</p>
+                <h2>${t('chat.welcome.title')}</h2>
+                <p>${t('chat.welcome.subtitle')}</p>
             </div>
         `;
         
@@ -472,7 +482,7 @@ async function deleteChat() {
 async function clearChat() {
     if (!currentChatId) return;
     
-    if (!confirm('Очистить историю сообщений?')) return;
+    if (!confirm(t('confirm.clearChat'))) return;
     
     try {
         await fetch(`${API_BASE}/api/chats/${currentChatId}/messages`, {
@@ -506,7 +516,7 @@ async function handleFileSelect(e) {
             
             if (!response.ok) {
                 const err = await response.json();
-                throw new Error(err.detail || 'Ошибка загрузки');
+                throw new Error(err.detail || t('alert.fileUpload'));
             }
             
             const data = await response.json();
@@ -542,7 +552,7 @@ async function handleFileSelect(e) {
                 const item = document.createElement('div');
                 item.className = 'file-preview-item';
                 item.innerHTML = `
-                    <span class="file-name">📄 ${file.name} (${data.char_count} симв.)</span>
+                    <span class="file-name">📄 ${file.name} (${data.char_count} ${getLang()==='ru'?'симв.':'chars'})</span>
                     <button class="file-remove" data-index="${attachedFiles.length - 1}">✕</button>
                 `;
                 previewsContainer.appendChild(item);
@@ -552,7 +562,7 @@ async function handleFileSelect(e) {
             
         } catch (error) {
             console.error('Ошибка загрузки файла:', error);
-            alert('Ошибка: ' + error.message);
+            alert(t('alert.error', {msg: error.message}));
         }
     }
     
@@ -576,7 +586,7 @@ async function sendMessage() {
     let fullMessage = message;
     const docTexts = attachedFiles
         .filter(f => f.type === 'document')
-        .map(f => `[ФАЙЛ: ${f.name}]\n${f.text}\n[КОНЕЦ ФАЙЛА]`)
+        .map(f => `[${getLang()==='ru'?'ФАЙЛ':'FILE'}: ${f.name}]\n${f.text}\n[${getLang()==='ru'?'КОНЕЦ ФАЙЛА':'END OF FILE'}]`)
         .join('\n\n');
     
     if (docTexts) {
@@ -605,9 +615,9 @@ async function sendMessage() {
     clearFile();
     
     // Добавляем сообщение пользователя (используем сохранённое количество)
-    appendMessage('user', message || (filesCount > 0 ? `📎 ${filesCount} файл(ов)` : '')
-        ? `${message}\n\n${hasDocs ? '📄 Документы: ' + docsToSend.map(f => f.name).join(', ') : ''}${hasImages ? (hasDocs ? ', ' : '') + '🖼️ Изображения: ' + imageBases.length : ''}`
-        : (filesCount > 0 ? `📎 ${filesCount} файл(ов)` : ''));
+    appendMessage('user', message || (filesCount > 0 ? `📎 ${t('chat.file.count', {count: filesCount})}` : '')
+        ? `${message}\n\n${hasDocs ? `📄 ${t('chat.file.docs', {names: docsToSend.map(f => f.name).join(', ')})}` : ''}${hasImages ? (hasDocs ? ', ' : '') + `🖼️ ${t('chat.file.images', {count: imageBases.length})}` : ''}`
+        : (filesCount > 0 ? `📎 ${t('chat.file.count', {count: filesCount})}` : ''));
     showTypingIndicator();
     
     // Отправляем на сервер
@@ -632,7 +642,7 @@ async function sendMessage() {
         
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.detail || 'Ошибка отправки');
+            throw new Error(error.detail || t('alert.sendError'));
         }
         
         const data = await response.json();
@@ -640,7 +650,7 @@ async function sendMessage() {
         // Если это первое сообщение в новом чате, обновляем currentChatId
         if (!currentChatId) {
             currentChatId = data.chat_id;
-            document.getElementById('chat-title').textContent = `Чат #${currentChatId}`;
+            document.getElementById('chat-title').textContent = `${getLang()==='ru'?'Чат':'Chat'} #${currentChatId}`;
             await loadChats();
         }
         
@@ -660,7 +670,7 @@ async function sendMessage() {
     } catch (error) {
         console.error('Ошибка отправки:', error);
         hideTypingIndicator();
-        appendMessage('assistant', `❌ Ошибка: ${error.message}`);
+        appendMessage('assistant', `❌ ${t('alert.error', {msg: error.message})}`);
     }
 }
 
@@ -678,8 +688,8 @@ function appendMessage(role, content, timestamp = null) {
     
     const avatar = role === 'user' ? '👤' : '🤖';
     const time = timestamp 
-        ? new Date(timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-        : new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        ? new Date(timestamp).toLocaleTimeString(getLang()==='ru'?'ru-RU':'en-US', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString(getLang()==='ru'?'ru-RU':'en-US', { hour: '2-digit', minute: '2-digit' });
     
     div.innerHTML = `
         <div class="message-avatar">${avatar}</div>
@@ -733,7 +743,7 @@ function toggleMemoryPanel() {
 
 async function loadAllMemoryEntries() {
     const resultsDiv = document.getElementById('memory-results');
-    resultsDiv.innerHTML = '<p>Загрузка...</p>';
+    resultsDiv.innerHTML = `<p>${t('memory.loading')}</p>`;
     
     try {
         const response = await fetch(`${API_BASE}/api/memory`);
@@ -742,11 +752,11 @@ async function loadAllMemoryEntries() {
         resultsDiv.innerHTML = '';
         
         if (!data.entries || data.entries.length === 0) {
-            resultsDiv.innerHTML = '<p>Память пуста. Ассистент ещё не сохранил важные факты.</p>';
+            resultsDiv.innerHTML = `<p>${t('memory.empty')}</p>`;
             return;
         }
         
-        resultsDiv.innerHTML = `<p style="color: gray; margin-bottom: 10px;">Записей: ${data.total}</p>`;
+        resultsDiv.innerHTML = `<p style="color: gray; margin-bottom: 10px;">${t('memory.count', {count: data.total})}</p>`;
         
         data.entries.forEach(entry => {
             const div = document.createElement('div');
@@ -754,8 +764,8 @@ async function loadAllMemoryEntries() {
             div.innerHTML = `
                 <div class="memory-entry-text">${escapeHtml(entry.text)}</div>
                 <div class="memory-entry-meta">
-                    <span>Тип: ${entry.metadata?.type || 'general'}</span>
-                    <button class="btn-icon" onclick="deleteMemoryEntry('${entry.id}')" title="Удалить">🗑️</button>
+                    <span>${t('memory.type', {type: entry.metadata?.type || 'general'})}</span>
+                    <button class="btn-icon" onclick="deleteMemoryEntry('${entry.id}')" title="${t('memory.delete')}">🗑️</button>
                 </div>
             `;
             resultsDiv.appendChild(div);
@@ -763,7 +773,7 @@ async function loadAllMemoryEntries() {
         
     } catch (error) {
         console.error('Ошибка загрузки:', error);
-        resultsDiv.innerHTML = `<p>Ошибка: ${error.message}</p>`;
+        resultsDiv.innerHTML = `<p>${t('alert.error', {msg: error.message})}</p>`;
     }
 }
 
@@ -774,7 +784,7 @@ async function searchMemory() {
     if (!query) return;
     
     const resultsDiv = document.getElementById('memory-results');
-    resultsDiv.innerHTML = '<p>Поиск...</p>';
+    resultsDiv.innerHTML = `<p>${t('memory.searching')}</p>`;
     
     try {
         const response = await fetch(`${API_BASE}/api/memory/search`, {
@@ -788,7 +798,7 @@ async function searchMemory() {
         resultsDiv.innerHTML = '';
         
         if (!data.results || data.results.length === 0) {
-            resultsDiv.innerHTML = '<p>Ничего не найдено</p>';
+            resultsDiv.innerHTML = `<p>${t('memory.notFound')}</p>`;
             return;
         }
         
@@ -798,8 +808,8 @@ async function searchMemory() {
             div.innerHTML = `
                 <div class="memory-entry-text">${escapeHtml(entry.text)}</div>
                 <div class="memory-entry-meta">
-                    <span>Схожесть: ${(entry.score * 100).toFixed(1)}%</span>
-                    <button class="btn-icon" onclick="deleteMemoryEntry('${entry.id}')" title="Удалить">🗑️</button>
+                    <span>${t('memory.similarity', {score: (entry.score * 100).toFixed(1)})}</span>
+                    <button class="btn-icon" onclick="deleteMemoryEntry('${entry.id}')" title="${t('memory.delete')}">🗑️</button>
                 </div>
             `;
             resultsDiv.appendChild(div);
@@ -807,12 +817,12 @@ async function searchMemory() {
         
     } catch (error) {
         console.error('Ошибка поиска:', error);
-        resultsDiv.innerHTML = `<p>Ошибка: ${error.message}</p>`;
+        resultsDiv.innerHTML = `<p>${t('alert.error', {msg: error.message})}</p>`;
     }
 }
 
 async function deleteMemoryEntry(entryId) {
-    if (!confirm('Удалить эту запись из памяти?')) return;
+    if (!confirm(t('memory.confirmDelete'))) return;
     
     try {
         const response = await fetch(`${API_BASE}/api/memory/${entryId}`, {
@@ -821,7 +831,7 @@ async function deleteMemoryEntry(entryId) {
         
         if (!response.ok) {
             const error = await response.json();
-            alert(`Ошибка: ${error.detail || 'Не удалось удалить'}`);
+            alert(t('alert.error', {msg: error.detail || t('memory.errorDelete')}));
             return;
         }
         
@@ -829,7 +839,7 @@ async function deleteMemoryEntry(entryId) {
         loadAllMemoryEntries();
     } catch (error) {
         console.error('Ошибка удаления:', error);
-        alert(`Ошибка: ${error.message}`);
+        alert(t('alert.error', {msg: error.message}));
     }
 }
 
@@ -848,7 +858,7 @@ async function addMemoryEntry() {
         
         if (!response.ok) {
             const error = await response.json();
-            alert(`Ошибка: ${error.detail || 'Не удалось добавить'}`);
+            alert(t('alert.error', {msg: error.detail || t('memory.errorAdd')}));
             return;
         }
         
@@ -856,7 +866,7 @@ async function addMemoryEntry() {
         loadAllMemoryEntries();
     } catch (error) {
         console.error('Ошибка добавления:', error);
-        alert(`Ошибка: ${error.message}`);
+        alert(t('alert.error', {msg: error.message}));
     }
 }
 
@@ -872,7 +882,7 @@ async function showStatus() {
         closeBtn.onclick = hideStatus;
     }
     
-    content.innerHTML = '<p>Загрузка...</p>';
+    content.innerHTML = `<p>${t('status.loading')}</p>`;
     modal.classList.remove('hidden');
     
     try {
@@ -880,14 +890,14 @@ async function showStatus() {
         const data = await response.json();
         
         content.innerHTML = `
-            <p><strong>Статус:</strong> ${data.status}</p>
-            <p><strong>Провайдер:</strong> ${data.provider}</p>
-            <p><strong>Модель:</strong> ${data.model}</p>
-            <p><strong>Чатов:</strong> ${data.chats_count || 0}</p>
-            <p><strong>Записей в памяти:</strong> ${data.memory_entries || 0}</p>
+            <p><strong>${t('status.status')}</strong> ${data.status}</p>
+            <p><strong>${t('status.provider')}</strong> ${data.provider}</p>
+            <p><strong>${t('status.model')}</strong> ${data.model}</p>
+            <p><strong>${t('status.chats')}</strong> ${data.chats_count || 0}</p>
+            <p><strong>${t('status.memory')}</strong> ${data.memory_entries || 0}</p>
         `;
     } catch (error) {
-        content.innerHTML = `<p>Ошибка: ${error.message}</p>`;
+        content.innerHTML = `<p>${t('alert.error', {msg: error.message})}</p>`;
     }
 }
 
@@ -907,6 +917,14 @@ async function openSettings() {
     try {
         const response = await fetch(`${API_BASE}/api/config`);
         const config = await response.json();
+        
+        const langSel = document.getElementById('lang-select');
+        if (langSel && config.language) {
+            langSel.value = config.language;
+            if (config.language !== getLang()) {
+                await setLanguage(config.language);
+            }
+        }
         
         document.getElementById('provider-select').value = config.provider || 'ollama';
         document.getElementById('ollama-host-input').value = config.ollama_host || 'http://localhost:11434';
@@ -945,7 +963,7 @@ async function openSettings() {
             if (!exists) {
                 const opt = document.createElement('option');
                 opt.value = config.model;
-                opt.textContent = config.model + ' (текущая)';
+                opt.textContent = config.model + t('settings.current');
                 modelSelect.prepend(opt);
             }
             modelSelect.value = config.model;
@@ -1065,8 +1083,8 @@ async function onProviderChange() {
     if (modelSelect) modelSelect.disabled = isLmStudio;
     if (ctxHint) {
         ctxHint.textContent = isLmStudio
-            ? '⚠️ Для LM Studio настраивайте модель и контекст в самом LM Studio (перезагрузите модель там) и перезапустите приложение.'
-            : 'ℹ️ Для Ollama применится сразу.';
+            ? t('settings.context.hint.lmstudio')
+            : t('settings.context.hint.ollama');
         ctxHint.classList.remove('hidden');
         if (!isLmStudio) ctxHint.classList.add('hidden');
     }
@@ -1076,7 +1094,7 @@ async function onProviderChange() {
 
 async function loadModelsForProvider(provider) {
     const modelSelect = document.getElementById('model-select');
-    modelSelect.innerHTML = '<option value="">Загрузка...</option>';
+    modelSelect.innerHTML = `<option value="">${t('settings.loading')}</option>`;
     
     // Получаем хост из настроек
     const hostInput = document.getElementById('ollama-host-input');
@@ -1095,11 +1113,11 @@ async function loadModelsForProvider(provider) {
                 modelSelect.appendChild(option);
             });
         } else {
-            modelSelect.innerHTML = '<option value="">Нет моделей</option>';
+            modelSelect.innerHTML = `<option value="">${t('settings.noModels')}</option>`;
         }
     } catch (error) {
         console.error('Ошибка загрузки моделей:', error);
-        modelSelect.innerHTML = '<option value="">Ошибка</option>';
+        modelSelect.innerHTML = `<option value="">${t('settings.error')}</option>`;
     }
 }
 
@@ -1116,6 +1134,7 @@ async function saveSettings() {
     const ttsTemperature = parseInt(document.getElementById('tts-temp-slider').value) / 10;
     const memorySearchResults = parseInt(document.getElementById('memory-search-slider').value);
     const memoryThreshold = parseInt(document.getElementById('memory-threshold-slider').value) / 10;
+    const language = document.getElementById('lang-select') ? document.getElementById('lang-select').value : getLang();
     
     try {
         const response = await fetch(`${API_BASE}/api/config`, {
@@ -1132,18 +1151,19 @@ async function saveSettings() {
                 tts_temperature: ttsTemperature,
                 memory_search_results: memorySearchResults,
                 memory_threshold: memoryThreshold,
+                language: language,
             }),
         });
         
         if (response.ok) {
-            alert('Настройки сохранены! Перезапустите приложение для применения.');
+            alert(t('settings.saved'));
             closeSettings();
         } else {
-            alert('Ошибка сохранения настроек');
+            alert(t('settings.saveError'));
         }
     } catch (error) {
         console.error('Ошибка сохранения:', error);
-        alert('Ошибка сохранения настроек');
+        alert(t('settings.saveError'));
     }
 }
 
@@ -1202,14 +1222,14 @@ function escapeHtml(text) {
 // === Голосовой ввод ===
 function startVoiceInput() {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-        alert('Голосовой ввод не поддерживается в этом браузере');
+        alert(t('alert.voiceNotSupported'));
         return;
     }
     
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     
-    recognition.lang = 'ru-RU';
+    recognition.lang = getLang()==='ru'?'ru-RU':'en-US';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
     
@@ -1249,13 +1269,13 @@ function toggleLiveMode() {
 
 function startLiveMode() {
     const input = document.getElementById('message-input');
-    input.placeholder = 'Live режим активирован - говорите...';
+    input.placeholder = t('voice.liveActive');
     input.focus();
 }
 
 function stopLiveMode() {
     const input = document.getElementById('message-input');
-    input.placeholder = 'Введите сообщение...';
+    input.placeholder = t('voice.placeholder');
 }
 
 // === Voice Recording (Web Audio API + VAD) ===
@@ -1320,7 +1340,7 @@ async function startVoiceRecording() {
         
     } catch (error) {
         console.error('Ошибка доступа к микрофону:', error);
-        alert('Не удалось получить доступ к микрофону');
+        alert(t('alert.micFailed'));
     }
 }
 
@@ -1386,11 +1406,11 @@ function stopVoiceRecording() {
 
 async function processVoiceRecording() {
     if (audioChunks.length === 0) {
-        console.log('Нет аудио данных');
+        console.log(t('voice.noAudio'));
         return;
     }
     
-    console.log('Обработка записи...');
+    console.log(t('voice.processing'));
     
     // Собираем аудио в blob
     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
@@ -1426,12 +1446,12 @@ async function processVoiceRecording() {
             // Автоматически отправляем сообщение
             sendMessage();
         } else {
-            console.log('Пустой результат распознавания');
+            console.log(t('voice.emptyResult'));
         }
         
     } catch (error) {
-        console.error('Ошибка STT:', error);
-        alert('Ошибка распознавания голоса: ' + error.message);
+        console.error(t('voice.sttError'), error);
+        alert(t('alert.sttFailed', {msg: error.message}));
     } finally {
         // Возвращаем кнопку в_NORMALное состояние
         voiceBtn.textContent = '🎤';
@@ -1444,7 +1464,7 @@ async function processVoiceRecording() {
 async function playTTS(text) {
     if (!text) return;
     
-    console.log('TTS: синтез речи для:', text.substring(0, 50) + '...');
+    console.log(t('voice.tts.synthesis'), text.substring(0, 50) + '...');
     
     try {
         const response = await fetch(`${API_BASE}/api/tts/speak`, {
@@ -1463,19 +1483,19 @@ async function playTTS(text) {
         
         audio.onended = () => {
             URL.revokeObjectURL(audioUrl);
-            console.log('TTS: воспроизведение завершено');
+            console.log(t('voice.tts.done'));
         };
         
         audio.onerror = (e) => {
-            console.error('TTS ошибка воспроизведения:', e);
+            console.error(t('voice.tts.playError'), e);
             URL.revokeObjectURL(audioUrl);
         };
         
         await audio.play();
-        console.log('TTS: воспроизведение начато');
+        console.log(t('voice.tts.start'));
         
     } catch (error) {
-        console.error('Ошибка TTS:', error);
+        console.error(t('voice.tts.error'), error);
     }
 }
 
@@ -1498,13 +1518,13 @@ async function loadTTSVoices() {
         } else {
             const option = document.createElement('option');
             option.value = '';
-            option.textContent = 'Нет голосов в папке voices/';
+            option.textContent = t('alert.noVoices');
             cloneSelect.appendChild(option);
         }
         
-        console.log('Загружено голосов для клонирования:', data.voices?.length || 0);
+        console.log(t('voice.loaded'), data.voices?.length || 0);
     } catch (err) {
-        console.error('Ошибка загрузки голосов:', err);
+        console.error(t('voice.loadError'), err);
     }
 }
 

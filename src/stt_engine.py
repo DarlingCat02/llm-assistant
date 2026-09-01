@@ -37,7 +37,7 @@ class STTEngine:
         if self._initialized:
             return
         
-        logger.info("Инициализация STT движка (Whisper)...")
+        logger.info("Initializing STT engine (Whisper)...")
         
         try:
             import torch
@@ -45,7 +45,7 @@ class STTEngine:
             
             # Определяем устройство
             self._device = "cuda" if torch.cuda.is_available() else "cpu"
-            logger.info(f"STT будет использовать: {self._device}")
+            logger.info(f"STT will use: {self._device}")
             
             # Путь к модели
             if self._model_path is None:
@@ -56,7 +56,7 @@ class STTEngine:
             if not model_path.exists():
                 raise FileNotFoundError(f"Модель Whisper не найдена: {model_path}")
             
-            logger.info(f"Загрузка модели из: {model_path}")
+            logger.info(f"Loading model from: {model_path}")
             
             # Загружаем процессор и модель
             self._processor = WhisperProcessor.from_pretrained(
@@ -74,10 +74,10 @@ class STTEngine:
             self._model.eval()
             
             self._initialized = True
-            logger.info("STT движок готов к работе")
+            logger.info("STT engine ready")
             
         except Exception as e:
-            logger.error(f"Ошибка инициализации STT: {e}")
+            logger.error(f"STT initialization error: {e}")
             raise
     
     async def transcribe(self, audio_path: str) -> str:
@@ -93,7 +93,7 @@ class STTEngine:
         if not self._initialized:
             await self.initialize()
         
-        logger.info(f"Распознавание речи из: {audio_path}")
+        logger.info(f"Speech recognition from: {audio_path}")
         
         try:
             import torch
@@ -112,11 +112,11 @@ class STTEngine:
             # Загружаем аудио
             audio, sr = librosa.load(audio_path, sr=16000)
             
-            logger.debug(f"Аудио загружено: shape={audio.shape}, sr={sr}, duration={len(audio)/sr:.2f}s")
+            logger.debug(f"Audio loaded: shape={audio.shape}, sr={sr}, duration={len(audio)/sr:.2f}s")
             if len(audio) == 0:
                 raise ValueError("Аудио пустое (0 samples) — запись слишком короткая или повреждена")
             if len(audio) < 1600:  # <0.1 сек
-                logger.warning(f"Очень короткое аудио: {len(audio)} samples ({len(audio)/sr:.2f}s), возможно тишина")
+                logger.warning(f"Very short audio: {len(audio)} samples ({len(audio)/sr:.2f}s), possibly silence")
             
             # Если стерео - конвертируем в моно
             if len(audio.shape) > 1:
@@ -155,11 +155,11 @@ class STTEngine:
                 skip_special_tokens=True
             )[0]
             
-            logger.info(f"Распознано: {transcription[:100]}...")
+            logger.info(f"Recognized: {transcription[:100]}...")
             return transcription.strip()
             
         except Exception as e:
-            logger.error(f"Ошибка распознавания: {e}", exc_info=True)
+            logger.error(f"Recognition error: {e}", exc_info=True)
             raise
     
     async def transcribe_bytes(self, audio_bytes: bytes, format: str = "webm") -> str:

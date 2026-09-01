@@ -106,7 +106,7 @@ class ChatDatabase:
         # Создаём таблицы
         await self._create_tables()
         
-        logger.info(f"База данных чатов инициализирована: {self._db_path}")
+        logger.info(f"Chat database initialized: {self._db_path}")
     
     async def _create_tables(self) -> None:
         """Создать таблицы если не существуют."""
@@ -153,7 +153,7 @@ class ChatDatabase:
         if self._db:
             await self._db.close()
             self._db = None
-            logger.info("База данных чатов закрыта")
+            logger.info("Chat database closed")
     
     # === CRUD для чатов ===
     
@@ -179,7 +179,7 @@ class ChatDatabase:
         await self._db.commit()
         
         chat_id = cursor.lastrowid
-        logger.info(f"Создан чат #{chat_id}: {title}")
+        logger.info(f"Created chat #{chat_id}: {title}")
         return chat_id
     
     async def get_chat(self, chat_id: int) -> Optional[Chat]:
@@ -263,7 +263,7 @@ class ChatDatabase:
         
         deleted = cursor.rowcount > 0
         if deleted:
-            logger.info(f"Удалён чат #{chat_id}")
+            logger.info(f"Deleted chat #{chat_id}")
         
         return deleted
     

@@ -133,7 +133,7 @@ class DummyTTSEngine(ITTSEngine):
     async def initialize(self) -> None:
         """Инициализировать заглушку."""
         self._initialized = True
-        logger.info("Dummy TTS Engine инициализирован (заглушка)")
+        logger.info("Dummy TTS Engine initialized (dummy)")
     
     async def speak(self, text: str) -> AudioResult:
         """
@@ -148,7 +148,7 @@ class DummyTTSEngine(ITTSEngine):
             )
         
         self._call_count += 1
-        logger.info(f"[TTS Dummy] Текст для озвучки #{self._call_count}: {text[:50]}...")
+        logger.info(f"[TTS Dummy] Text for synthesis #{self._call_count}: {text[:50]}...")
         
         # Имитация задержки синтеза
         await asyncio.sleep(0.1)
@@ -167,7 +167,7 @@ class DummyTTSEngine(ITTSEngine):
             )
         
         self._call_count += 1
-        logger.debug(f"[TTS Dummy] Синтез: {text[:50]}...")
+        logger.debug(f"[TTS Dummy] Synthesis: {text[:50]}...")
         
         return AudioResult(
             success=True,
@@ -184,7 +184,7 @@ class DummyTTSEngine(ITTSEngine):
             )
         
         self._call_count += 1
-        logger.info(f"[TTS Dummy] Сохранение в файл: {file_path}")
+        logger.info(f"[TTS Dummy] Saving to file: {file_path}")
         
         return AudioResult(
             success=True,
@@ -195,7 +195,7 @@ class DummyTTSEngine(ITTSEngine):
     async def close(self) -> None:
         """Закрыть заглушку."""
         self._initialized = False
-        logger.info("Dummy TTS Engine закрыт")
+        logger.info("Dummy TTS Engine closed")
 
 
 class OmniVoiceEngine(ITTSEngine):
@@ -245,23 +245,23 @@ class OmniVoiceEngine(ITTSEngine):
             self._ensure_ref_text_cached(ref_audio)
         
         mode_str = f"instruct={instruct}" if mode == "instruct" else f"clone={ref_audio}"
-        logger.info(f"TTS голос настроен: mode={mode}, {mode_str}")
+        logger.info(f"TTS voice configured: mode={mode}, {mode_str}")
     
     def _ensure_ref_text_cached(self, ref_audio_path: str) -> None:
         """Транскрибировать референс и сохранить в кеш (если ещё не закеширован)."""
         if ref_audio_path in self._ref_text_cache:
-            logger.info(f"Использую кеш транскрипции для: {ref_audio_path}")
+            logger.info(f"Using transcription cache for: {ref_audio_path}")
             return
         
         if not self._whisper_model or not self._whisper_processor:
-            logger.info("Локальная Whisper не загружена, пропускаю кеширование")
+            logger.info("Local Whisper not loaded, skipping caching")
             return
         
         try:
             import librosa
             import torch
             
-            logger.info(f"Транскрибирую референс (кеширование): {ref_audio_path}")
+            logger.info(f"Transcribing reference (caching): {ref_audio_path}")
             
             # Загружаем аудио
             audio, sr = librosa.load(ref_audio_path, sr=16000)
@@ -286,30 +286,30 @@ class OmniVoiceEngine(ITTSEngine):
             
             # Сохраняем в кеш
             self._ref_text_cache[ref_audio_path] = transcription
-            logger.info(f"Референс закеширован: {transcription[:50]}...")
+            logger.info(f"Reference cached: {transcription[:50]}...")
             
         except Exception as e:
-            logger.warning(f"Не удалось транскрибировать референс: {e}")
+            logger.warning(f"Failed to transcribe reference: {e}")
     
     def get_available_voices(self) -> list:
         """Получить список доступных голосов из папки voices/."""
         voices = []
         if not self._voices_dir.exists():
-            logger.warning(f"Папка голосов не существует: {self._voices_dir}")
+            logger.warning(f"Voices folder does not exist: {self._voices_dir}")
             return voices
         
-        logger.info(f"Ищу голоса в: {self._voices_dir}")
+        logger.info(f"Searching voices in: {self._voices_dir}")
         
         for f in self._voices_dir.iterdir():
             if f.suffix.lower() in ['.wav', '.mp3', '.ogg', '.flac']:
-                logger.info(f"Найден голос: {f.name}")
+                logger.info(f"Found voice: {f.name}")
                 voices.append({
                     "name": f.stem,
                     "file": f.name,
                     "path": str(f),
                 })
         
-        logger.info(f"Всего найдено голосов: {len(voices)}")
+        logger.info(f"Total voices found: {len(voices)}")
         return voices
     
     async def initialize(self) -> None:
@@ -317,7 +317,7 @@ class OmniVoiceEngine(ITTSEngine):
         if self._initialized:
             return
         
-        logger.info(f"Загрузка OmniVoice модели: {self._model_path}")
+        logger.info(f"Loading OmniVoice model: {self._model_path}")
         
         try:
             import os
@@ -338,7 +338,7 @@ class OmniVoiceEngine(ITTSEngine):
                             os.add_dll_directory(ffmpeg_bin)
                         except Exception:
                             pass
-                        logger.info(f"FFmpeg добавлен в PATH: {ffmpeg_bin}")
+                        logger.info(f"FFmpeg added to PATH: {ffmpeg_bin}")
                         break
             
             # Офлайн режим - использовать только локальные файлы
@@ -368,7 +368,7 @@ class OmniVoiceEngine(ITTSEngine):
             whisper_path = str(Path(__file__).parent.parent / "llm-assistant-tauri" / "src-tauri" / "target" / "release" / "openai_whisper-large-v3-turbo")
             try:
                 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
-                logger.info(f"Загрузка локальной Whisper для кеширования: {whisper_path}")
+                logger.info(f"Loading local Whisper for caching: {whisper_path}")
                 self._whisper_processor = AutoProcessor.from_pretrained(whisper_path, local_files_only=True)
                 self._whisper_model = AutoModelForSpeechSeq2Seq.from_pretrained(
                     whisper_path, 
@@ -377,20 +377,20 @@ class OmniVoiceEngine(ITTSEngine):
                 )
                 if self._device == "cuda":
                     self._whisper_model = self._whisper_model.to(self._device)
-                logger.info("Локальная Whisper загружена для кеширования")
+                logger.info("Local Whisper loaded for caching")
             except Exception as e:
-                logger.warning(f"Не удалось загрузить локальную Whisper: {e}")
+                logger.warning(f"Failed to load local Whisper: {e}")
                 self._whisper_model = None
                 self._whisper_processor = None
             
             self._initialized = True
-            logger.info(f"OmniVoice модель загружена на {self._device}")
+            logger.info(f"OmniVoice model loaded on {self._device}")
             
         except ImportError:
-            logger.error("omnivoice не установлен. Установите: pip install omnivoice")
+            logger.error("omnivoice not installed. Install: pip install omnivoice")
             raise
         except Exception as e:
-            logger.error(f"Ошибка загрузки OmniVoice: {e}")
+            logger.error(f"OmniVoice loading error: {e}")
             raise
     
     async def _transcribe_reference(self, audio_path: str) -> str:
@@ -400,7 +400,7 @@ class OmniVoiceEngine(ITTSEngine):
             import librosa
             import numpy as np
             
-            logger.info(f"Загрузка аудио: {audio_path}")
+            logger.info(f"Loading audio: {audio_path}")
             audio, sr = librosa.load(audio_path, sr=16000)
             if audio.ndim > 1:
                 audio = audio.mean(axis=1)
@@ -424,11 +424,11 @@ class OmniVoiceEngine(ITTSEngine):
             )
             
             transcription = self._whisper_processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
-            logger.info(f"Транскрипция: {transcription}")
+            logger.info(f"Transcription: {transcription}")
             return transcription
             
         except Exception as e:
-            logger.error(f"Ошибка транскрибации: {e}")
+            logger.error(f"Transcription error: {e}")
             return ""
     
     def _prepare_ref_audio(self, ref_path: str) -> str:
@@ -448,7 +448,7 @@ class OmniVoiceEngine(ITTSEngine):
             tmp_path = tmp.name
             sf.write(tmp_path, audio, 24000, format="WAV", subtype="FLOAT")
         
-        logger.info(f"Референс подготовлен: {tmp_path}")
+        logger.info(f"Reference prepared: {tmp_path}")
         return tmp_path
     
     async def speak(self, text: str) -> AudioResult:
@@ -467,8 +467,8 @@ class OmniVoiceEngine(ITTSEngine):
             import tempfile
             import os
             
-            logger.info(f"OmniVoice синтез: {text[:50]}...")
-            logger.info(f"Режим: mode={self._mode}, ref_audio={self._ref_audio_path}")
+            logger.info(f"OmniVoice synthesis: {text[:50]}...")
+            logger.info(f"Mode: mode={self._mode}, ref_audio={self._ref_audio_path}")
             
             loop = asyncio.get_event_loop()
             
@@ -491,9 +491,9 @@ class OmniVoiceEngine(ITTSEngine):
                 gen_params["ref_text"] = cached_ref_text
                 
                 if cached_ref_text:
-                    logger.info(f"Использую кешированную транскрипцию для {self._ref_audio_path}")
+                    logger.info(f"Using cached transcription for {self._ref_audio_path}")
                 else:
-                    logger.info(f"Использую voice cloning: ref_audio (прямой файл) + ref_text=None (FFmpeg auto)")
+                    logger.info(f"Using voice cloning: ref_audio (direct file) + ref_text=None (FFmpeg auto)")
                 
                 gen_params["num_step"] = 32
                 gen_params["guidance_scale"] = 2.0
@@ -502,7 +502,7 @@ class OmniVoiceEngine(ITTSEngine):
                 gen_params["postprocess_output"] = True
                 gen_params["language"] = "Russian"
                 gen_params["seed"] = 12345
-                logger.info(f"Использую voice cloning: ref_audio (прямой файл) + ref_text=None (FFmpeg auto)")
+                logger.info(f"Using voice cloning: ref_audio (direct file) + ref_text=None (FFmpeg auto)")
             else:
                 gen_params["instruct"] = "female, low pitch,"
                 gen_params["num_step"] = 32
@@ -512,7 +512,7 @@ class OmniVoiceEngine(ITTSEngine):
                 gen_params["postprocess_output"] = True
                 gen_params["language"] = "Russian"
                 gen_params["seed"] = 468556206
-                logger.info(f"Использую voice design: female, low pitch, seed=468556206")
+                logger.info(f"Using voice design: female, low pitch, seed=468556206")
             
             # Генерируем аудио (в executor, чтобы не блокировать)
             audio = await loop.run_in_executor(
@@ -539,21 +539,21 @@ class OmniVoiceEngine(ITTSEngine):
             else:
                 audio_np = np.array(audio_data)
             
-            logger.info(f"Аудио форма: shape={audio_np.shape}, dtype={audio_np.dtype}, min={audio_np.min():.4f}, max={audio_np.max():.4f}")
+            logger.info(f"Audio shape: shape={audio_np.shape}, dtype={audio_np.dtype}, min={audio_np.min():.4f}, max={audio_np.max():.4f}")
             
             # Убедимся что 1D массив
             if audio_np.ndim > 1:
                 audio_np = audio_np.flatten()
-                logger.info(f"После flatten: shape={audio_np.shape}")
+                logger.info(f"After flatten: shape={audio_np.shape}")
             
             # Нормализуем аудио
             audio_np = audio_np.astype(np.float32)
             max_val = np.abs(audio_np).max()
-            logger.info(f"До нормализации: max={max_val:.4f}")
+            logger.info(f"Before normalization: max={max_val:.4f}")
             if max_val > 0:
                 audio_np = audio_np / max_val
             
-            logger.info(f"После нормализации: min={audio_np.min():.4f}, max={audio_np.max():.4f}")
+            logger.info(f"After normalization: min={audio_np.min():.4f}, max={audio_np.max():.4f}")
             
             # Сохраняем во временный файл и на диск для проверки
             import tempfile
@@ -569,8 +569,8 @@ class OmniVoiceEngine(ITTSEngine):
             # Сохраняем 24kHz аудио
             sf.write(temp_path, audio_np, 24000)
             sf.write(debug_path, audio_np, 24000)
-            logger.info(f"WAV сохранён: {temp_path}")
-            logger.info(f"DEBUG WAV сохранён: {debug_path}")
+            logger.info(f"WAV saved: {temp_path}")
+            logger.info(f"DEBUG WAV saved: {debug_path}")
             
             # Читаем файл
             with open(temp_path, 'rb') as f:
@@ -590,7 +590,7 @@ class OmniVoiceEngine(ITTSEngine):
             
             duration_ms = int(len(audio_bytes) / 2.4)  # Приблизительно для 24kHz 16bit
             
-            logger.info(f"OmniVoice: аудио сгенерировано, {len(audio_bytes)} байт")
+            logger.info(f"OmniVoice: audio generated, {len(audio_bytes)} bytes")
             
             return AudioResult(
                 success=True,
@@ -599,7 +599,7 @@ class OmniVoiceEngine(ITTSEngine):
             )
             
         except Exception as e:
-            logger.error(f"Ошибка OmniVoice TTS: {e}")
+            logger.error(f"OmniVoice TTS error: {e}")
             return AudioResult(
                 success=False,
                 error=str(e),
@@ -639,7 +639,7 @@ class OmniVoiceEngine(ITTSEngine):
             del self._model
             self._model = None
         self._initialized = False
-        logger.info("OmniVoice модель выгружена из памяти")
+        logger.info("OmniVoice model unloaded from memory")
 
 
 class TTSEngine:
@@ -685,9 +685,9 @@ class TTSEngine:
         
         if not self._config.enabled:
             self._engine = DummyTTSEngine()
-            logger.info("TTS отключён в конфигурации, используется заглушка")
+            logger.info("TTS disabled in config, using dummy")
         else:
-            logger.info("TTS включён, будет загружен при первом запросе через API")
+            logger.info("TTS enabled, will be loaded on first API request")
             self._engine = DummyTTSEngine()
         
         await self._engine.initialize()
@@ -753,7 +753,7 @@ class TTSEngine:
         Загружает модель в память при первом вызове.
         """
         if self._engine and not isinstance(self._engine, DummyTTSEngine):
-            logger.info("OmniVoice уже загружен")
+            logger.info("OmniVoice already loaded")
             return True
         
         try:
@@ -774,13 +774,13 @@ class TTSEngine:
                 position_temperature=0.0,
                 class_temperature=0.0,
             )
-            logger.info(f"Применён конфиг: mode={self._voice_mode}, ref={self._voice_ref_audio}")
+            logger.info(f"Config applied: mode={self._voice_mode}, ref={self._voice_ref_audio}")
             
-            logger.info("OmniVoice TTS включён и загружен в память")
+            logger.info("OmniVoice TTS enabled and loaded into memory")
             return True
             
         except Exception as e:
-            logger.error(f"Не удалось включить OmniVoice: {e}")
+            logger.error(f"Failed to enable OmniVoice: {e}")
             self._engine = DummyTTSEngine()
             await self._engine.initialize()
             return False
@@ -797,7 +797,7 @@ class TTSEngine:
         await self._engine.initialize()
         self._initialized = True
         
-        logger.info("OmniVoice TTS выключён и выгружен из памяти")
+        logger.info("OmniVoice TTS disabled and unloaded from memory")
         return True
     
     def set_voice_config(self, mode: str = "instruct",
@@ -820,7 +820,7 @@ class TTSEngine:
                 class_temperature=class_temperature,
             )
         
-        logger.info(f"TTS конфиг сохранён: mode={mode}, instruct={instruct}, ref_audio={ref_audio}")
+        logger.info(f"TTS config saved: mode={mode}, instruct={instruct}, ref_audio={ref_audio}")
     
     @property
     def is_omnivoice_loaded(self) -> bool:

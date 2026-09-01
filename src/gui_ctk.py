@@ -161,7 +161,7 @@ class AssistantGUI:
         # Флаг работы
         self._running = False
         
-        logger.info("AssistantGUI (CustomTkinter) инициализирован")
+        logger.info("AssistantGUI (CustomTkinter) initialized")
     
     def build(self) -> None:
         """
@@ -203,7 +203,7 @@ class AssistantGUI:
         self._running = True
         self._process_queue()
         
-        logger.debug("GUI построен")
+        logger.debug("GUI built")
         
         # Запускаем главный цикл
         self.root.mainloop()
@@ -390,7 +390,7 @@ class AssistantGUI:
             self._message_queue.put(("answer", answer))
                 
         except Exception as e:
-            logger.error(f"Ошибка при обработке сообщения: {e}", exc_info=True)
+            logger.error(f"Error processing message: {e}", exc_info=True)
             self._message_queue.put(("error", str(e)))
     
     def _process_queue(self) -> None:
@@ -438,7 +438,7 @@ class AssistantGUI:
         )
         self._update_status("Готов к работе")
         
-        logger.info("История диалога очищена")
+        logger.info("Dialog history cleared")
     
     def _on_stats(self) -> None:
         """Показать статистику."""
@@ -520,7 +520,7 @@ class AssistantGUI:
     
     def _on_exit(self) -> None:
         """Выйти из приложения."""
-        logger.info("Выход из приложения через GUI")
+        logger.info("Exit via GUI")
         self._running = False
         self.root.destroy()
     

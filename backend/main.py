@@ -41,6 +41,14 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import get_config, Config
+try:
+    from src.i18n import t
+except ImportError:
+    try:
+        from i18n import t  # type: ignore
+    except ImportError:
+        def t(key, lang=None, **kwargs):
+            return key
 from backend.database import ChatDatabase
 from backend.api import (
     memory_router,
@@ -71,9 +79,13 @@ def get_assistant():
 
 
 def get_db() -> ChatDatabase:
-    """Получить глобальный экземпляр БД."""
+    """Get global DB instance."""
     if _db is None:
-        raise HTTPException(status_code=503, detail="База данных не инициализирована")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=503, detail=t("api.db_not_init", lang=lang))
     return _db
 
 
@@ -94,26 +106,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     """
     global _config, _assistant, _db
     
-    logger.info("Запуск Local AI Assistant Backend...")
+    logger.info("Starting Local AI Assistant Backend...")
     
-    # Загружаем конфигурацию
+    # Load configuration
     _config = get_config()
-    logger.info(f"Конфигурация загружена: провайдер={_config.llm.provider.value}, модель={_config.llm.model}")
+    logger.info(f"Configuration loaded: provider={_config.llm.provider.value}, model={_config.llm.model}")
     
-    # Инициализируем базу данных чатов
+    # Initialize chat database
     _db = ChatDatabase(str(Path(__file__).parent.parent / "storage" / "chats.db"))
     await _db.initialize()
     
-    # Устанавливаем getter для БД (для api.py)
+    # Set getter for DB (for api.py)
     set_db_getter(lambda: _db)
     
-    # Инициализируем ассистента (опционально, для API чата)
+    # Initialize assistant (optional, for chat API)
     try:
         from src.main import Assistant
         _assistant = Assistant(_config)
         await _assistant.initialize()
-        logger.info("Ассистент инициализирован для API")
-        # Для LM Studio — синхронизируем модель с реально загруженной в LM Studio (один раз при старте)
+        logger.info("Assistant initialized for API")
+        # For LM Studio — sync model with actually loaded in LM Studio (once at startup)
         if _config.llm.provider.value == "lm_studio":
             try:
                 import httpx
@@ -124,33 +136,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
                             if m.get("state") == "loaded":
                                 loaded_id = m.get("id")
                                 if loaded_id and loaded_id != _config.llm.model:
-                                    logger.info(f"Синхронизация модели LM Studio: {_config.llm.model} -> {loaded_id} (загружена в LM Studio)")
+                                    logger.info(f"Syncing LM Studio model: {_config.llm.model} -> {loaded_id} (loaded in LM Studio)")
                                     _config.llm.model = loaded_id
                                     if _assistant and _assistant._llm:
                                         _assistant._llm._config.model = loaded_id
                                 break
             except Exception as e:
-                logger.debug(f"Не удалось синхронизировать модель LM Studio: {e}")
+                logger.debug(f"Failed to sync LM Studio model: {e}")
     except Exception as e:
-        logger.warning(f"Не удалось инициализировать ассистента: {e}")
-        logger.warning("API чата будет недоступно, но веб-интерфейс работает")
+        logger.warning(f"Failed to initialize assistant: {e}")
+        logger.warning("Chat API will be unavailable, but web interface works")
         _assistant = None
     
-    # Запускаем keep-alive для Ollama
+    # Start keep-alive for Ollama
     try:
         from backend.background_tasks import start_ollama_keep_alive
         await start_ollama_keep_alive(interval=60)
     except Exception as e:
-        logger.warning(f"Не удалось запустить keep-alive: {e}")
+        logger.warning(f"Failed to start keep-alive: {e}")
     
-    logger.info("Backend готов к работе")
+    logger.info("Backend ready")
     
-    yield  # Приложение работает
+    yield  # App running
     
-    # Завершение работы
-    logger.info("Остановка Backend...")
+    # Shutdown
+    logger.info("Stopping Backend...")
     
-    # Останавливаем keep-alive
+    # Stop keep-alive
     try:
         from backend.background_tasks import stop_ollama_keep_alive
         await stop_ollama_keep_alive()
@@ -163,7 +175,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     if _db:
         await _db.close()
     
-    logger.info("Backend остановлен")
+    logger.info("Backend stopped")
 
 
 # === Создание приложения ===
@@ -207,17 +219,17 @@ app.include_router(memory_router)
 # Это помогает обойти проверку origin
 @app.websocket("/ws/events")
 async def global_websocket_endpoint(websocket: WebSocket):
-    """Глобальный WebSocket эндпоинт."""
+    """Global WebSocket endpoint."""
     from backend.api import manager
     from fastapi import WebSocketDisconnect
     
-    logger.info(f"WebSocket запрос (global): origin={websocket.headers.get('origin')}")
+    logger.info(f"WebSocket request (global): origin={websocket.headers.get('origin')}")
     
     try:
         await manager.connect(websocket)
-        logger.info("WebSocket подключён (global)")
+        logger.info("WebSocket connected (global)")
         
-        # Просто держим подключение открытым
+        # Just keep connection open
         while True:
             try:
                 data = await websocket.receive_json()
@@ -227,9 +239,9 @@ async def global_websocket_endpoint(websocket: WebSocket):
                 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        logger.info("WebSocket отключён (global)")
+        logger.info("WebSocket disconnected (global)")
     except Exception as e:
-        logger.error(f"WebSocket ошибка: {e}")
+        logger.error(f"WebSocket error: {e}")
         manager.disconnect(websocket)
 
 
@@ -253,8 +265,13 @@ async def get_all_chats():
 
 @app.post("/api/chats")
 async def create_chat(request: dict):
-    """Создать новый чат."""
-    title = request.get("title", "Новый чат")
+    """Create new chat."""
+    try:
+        lang = get_config().general.language
+    except Exception:
+        lang = "en"
+    default_title = "Новый чат" if lang == "ru" else "New chat"
+    title = request.get("title", default_title)
     chat_id = await _db.create_chat(title)
     chat = await _db.get_chat(chat_id)
     return {
@@ -267,13 +284,17 @@ async def create_chat(request: dict):
 
 @app.put("/api/chats/{chat_id}")
 async def update_chat(chat_id: int, request: dict):
-    """Обновить чат (переименовать)."""
+    """Update chat (rename)."""
     title = request.get("title")
     if title:
         await _db.update_chat_title(chat_id, title)
     chat = await _db.get_chat(chat_id)
     if not chat:
-        raise HTTPException(status_code=404, detail="Чат не найден")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=404, detail=t("api.chat_not_found", lang=lang))
     return {
         "id": chat.id,
         "title": chat.title,
@@ -300,10 +321,14 @@ async def get_chat_messages(chat_id: int):
 
 @app.delete("/api/chats/{chat_id}")
 async def delete_chat(chat_id: int):
-    """Удалить чат."""
+    """Delete chat."""
     deleted = await _db.delete_chat(chat_id)
     if not deleted:
-        raise HTTPException(status_code=404, detail="Чат не найден")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=404, detail=t("api.chat_not_found", lang=lang))
     return {"status": "ok"}
 
 
@@ -335,7 +360,11 @@ async def upload_file(file: UploadFile = File(...)):
     allowed_types = document_types + image_types
     
     if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail=f"Формат {file.content_type} не поддерживается. Используйте: txt, pdf, docx, png, jpg, webp, gif, bmp, tiff")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=400, detail=t("api.unsupported_format", lang=lang, type=file.content_type))
     
     try:
         content = await file.read()
@@ -391,43 +420,52 @@ async def upload_file(file: UploadFile = File(...)):
         }
         
     except Exception as e:
-        logger.error(f"Ошибка загрузки файла: {e}")
+        logger.error(f"File upload error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/chat", response_model=ChatResponseMessage)
 async def chat(request: ChatMessage):
     """
-    Отправить сообщение и получить ответ от AI.
+    Send message and get AI response.
 
-    Основной эндпоинт для чата с ассистентом.
+    Main endpoint for chat with assistant.
 
     Args:
-        request: Сообщение и опционально ID чата.
+        request: Message and optional chat ID.
 
     Returns:
-        ChatResponseMessage: Ответ ассистента и ID чата.
+        ChatResponseMessage: Assistant response and chat ID.
     """
     if not _assistant:
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
         raise HTTPException(
             status_code=503,
-            detail="Ассистент не инициализирован. Убедитесь, что Ollama запущена (ollama serve).",
+            detail=t("api.assistant_not_init", lang=lang),
         )
 
-    # Создаём новый чат если не указан
+    # Create new chat if not specified
     chat_id = request.chat_id
     if not chat_id:
-        chat_id = await _db.create_chat("Новый диалог")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        default_title = "Новый диалог" if lang == "ru" else "New chat"
+        chat_id = await _db.create_chat(default_title)
 
-    # Сохраняем сообщение пользователя
+    # Save user message
     await _db.add_message(chat_id, "user", request.message)
 
-    # Загружаем историю чата для контекста (последние 30 сообщений, без дубля текущего)
+    # Load chat history for context (last 30 messages, without duplicate current)
     history_messages = await _db.get_chat_history(chat_id)
-    # Исключаем последнее сообщение (текущее user), т.к. оно уже передаётся как user_message отдельно
+    # Exclude last message (current user), as it's already passed as user_message separately
     if history_messages and history_messages[-1].role == "user" and history_messages[-1].content == request.message:
         history_messages = history_messages[:-1]
-    # Ограничиваем историю чтобы не раздувать промпт (57 сообщений → 1968 токенов, было медленно)
+    # Limit history to not bloat prompt (57 messages -> 1968 tokens, was slow)
     MAX_HISTORY = 30
     if len(history_messages) > MAX_HISTORY:
         history_messages = history_messages[-MAX_HISTORY:]
@@ -437,14 +475,14 @@ async def chat(request: ChatMessage):
         if msg.role in ("user", "assistant")
     ]
 
-    # Для LM Studio — подменяем модель на реально загруженную (1 запрос в 30с, чтобы не грузить вторую)
+    # For LM Studio — replace model with actually loaded (1 request per 30s)
     if _config and _config.llm.provider.value == "lm_studio":
         loaded = await get_lmstudio_loaded_model()
         if loaded and _assistant and _assistant._llm and loaded != _assistant._llm._config.model:
-            logger.info(f"Подмена модели {_assistant._llm._config.model} -> {loaded} (загружена в LM Studio)")
+            logger.info(f"Replacing model {_assistant._llm._config.model} -> {loaded} (loaded in LM Studio)")
             _assistant._llm._config.model = loaded
 
-    # Получаем ответ от ассистента
+    # Get response from assistant
     try:
         llm_response = await _assistant.process_message(
             request.message,
@@ -456,14 +494,14 @@ async def chat(request: ChatMessage):
         response_text = llm_response.content
         used_tokens = llm_response.prompt_tokens
     except Exception as e:
-        logger.error(f"Ошибка при генерации ответа: {e}")
+        logger.error(f"Error generating response: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Сохраняем ответ ассистента
+    # Save assistant response
     await _db.add_message(chat_id, "assistant", response_text)
 
-    # Отправляем событие через WebSocket
-    logger.info(f"Отправка WebSocket события: chat_id={chat_id}, content={response_text[:50]}...")
+    # Send event via WebSocket
+    logger.info(f"Sending WebSocket event: chat_id={chat_id}, content={response_text[:50]}...")
     await manager.broadcast({
         "type": "new_message",
         "chat_id": chat_id,
@@ -553,6 +591,7 @@ async def get_current_config():
             "api_key": "", "num_ctx": 8192, "temperature": 0.7,
             "tts_steps": 64, "tts_temperature": 1.0,
             "memory_max_context": 20, "memory_search_results": 3, "memory_threshold": 0.3,
+            "language": "en",
         }
     
     return {
@@ -567,6 +606,7 @@ async def get_current_config():
         "memory_max_context": _config.memory.max_context_messages,
         "memory_search_results": _config.memory.search_results,
         "memory_threshold": _config.memory.similarity_threshold,
+        "language": _config.general.language,
     }
 
 
@@ -586,6 +626,7 @@ async def update_config(request: dict):
     memory_max_context = request.get("memory_max_context")
     memory_search_results = request.get("memory_search_results")
     memory_threshold = request.get("memory_threshold")
+    language = request.get("language")
 
     # Запомним предыдущую модель/контекст для определения смены
     try:
@@ -610,8 +651,9 @@ async def update_config(request: dict):
         memory_max_context=memory_max_context,
         memory_search_results=memory_search_results,
         memory_threshold=memory_threshold,
+        language=language,
     )
-    # Hot-swap без рестарта
+    # Hot-swap without restart
     try:
         new_cfg = reload_config()
         global _config
@@ -620,13 +662,26 @@ async def update_config(request: dict):
             _assistant._config = new_cfg
             if _assistant._llm:
                 _assistant._llm._config = new_cfg.llm
-                # Пересоздать http клиент с новым host/api_key если сменился
+                # Recreate http client with new host/api_key if changed
                 try:
                     await _assistant._llm.close()
                 except:
                     pass
                 _assistant._llm._initialized = False
                 await _assistant._llm.initialize()
+                # Refresh language-aware system prompt and tool definitions
+                try:
+                    if hasattr(_assistant._llm, "refresh_system_prompt"):
+                        _assistant._llm.refresh_system_prompt()
+                    # Refresh DDG tool def for new language
+                    _lang = new_cfg.general.language
+                    try:
+                        from src.web_search import DDG_TOOL_DEFINITION, DDG_TOOL_DEFINITION_EN
+                        _assistant._ddg_tool_def = DDG_TOOL_DEFINITION if _lang == "ru" else DDG_TOOL_DEFINITION_EN
+                    except ImportError:
+                        pass
+                except Exception:
+                    pass
     except Exception as e:
         logger.warning(f"Hot-swap config failed: {e}")
 
@@ -638,8 +693,8 @@ async def update_config(request: dict):
             base = ollama_host.rstrip("/") if ollama_host else "http://localhost:1234"
             if not base.startswith("http"):
                 base = "http://" + base
-            # Выгрузить старые загруженные модели перед загрузкой новой (чтобы не копились :2, :3)
-            # Если та же модель с тем же контекстом уже загружена — пропускаем выгрузку
+            # Unload old loaded models before loading new (to avoid accumulating :2, :3)
+            # If same model with same context already loaded — skip unload
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     r = await client.get(f"{base}/api/v0/models")
@@ -661,11 +716,11 @@ async def update_config(request: dict):
                                 if m.get("state") == "loaded":
                                     try:
                                         await client.post(f"{base}/api/v1/models/unload", json={"instance_id": m.get("id")}, timeout=10.0)
-                                        logger.info(f"Выгружена старая модель: {m.get('id')}")
+                                        logger.info(f"Unloaded old model: {m.get('id')}")
                                     except Exception as ue:
-                                        logger.debug(f"Не удалось выгрузить {m.get('id')}: {ue}")
+                                        logger.debug(f"Failed to unload {m.get('id')}: {ue}")
             except Exception as e:
-                logger.debug(f"Ошибка при выгрузке старых моделей: {e}")
+                logger.debug(f"Error unloading old models: {e}")
             payload = {"model": model}
             if num_ctx:
                 try:
@@ -690,24 +745,43 @@ async def update_config(request: dict):
 
     if load_result is not None:
         if load_result.get("ok"):
-            return {"status": "ok", "message": "Конфигурация сохранена и модель загружена в LM Studio", "load": load_result}
+            try:
+                lang = get_config().general.language
+            except Exception:
+                lang = "en"
+            # Use translated config saved message
+            base_msg = t("api.config_saved", lang=lang)
+            return {"status": "ok", "message": base_msg + " - LM Studio model loaded", "load": load_result}
         else:
-            return {"status": "ok", "message": "Конфигурация сохранена, но автозагрузка в LM Studio не удалась — загрузите вручную", "load": load_result, "warning": True}
+            try:
+                lang = get_config().general.language
+            except Exception:
+                lang = "en"
+            base_msg = t("api.config_saved", lang=lang)
+            return {"status": "ok", "message": base_msg + " - LM Studio auto-load failed, please load manually", "load": load_result, "warning": True}
     
-    return {"status": "ok", "message": "Конфигурация сохранена (hot-swap без рестарта)"}
+    try:
+        lang = get_config().general.language
+    except Exception:
+        lang = "en"
+    return {"status": "ok", "message": t("api.config_saved", lang=lang)}
 
 
 @app.post("/api/tts/toggle")
 async def toggle_tts(request: Request):
     """
-    Переключить TTS (OmniVoice) вкл/выкл.
+    Toggle TTS (OmniVoice) on/off.
     
-    Принимает raw JSON bool (true/false) или объект {"enabled": true}.
-    При enabled=True - загружает OmniVoice в память.
-    При enabled=False - выгружает OmniVoice из памяти.
+    Accepts raw JSON bool (true/false) or object {"enabled": true}.
+    When enabled=True - loads OmniVoice into memory.
+    When enabled=False - unloads OmniVoice from memory.
     """
     if not _assistant:
-        raise HTTPException(status_code=503, detail="Ассистент не инициализирован")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=503, detail=t("api.assistant_not_init", lang=lang))
     
     try:
         body = await request.json()
@@ -755,15 +829,19 @@ async def tts_config(request: dict):
     - class_temperature: 0 = стабильный, выше = случайный
     """
     if not _assistant or not _assistant._tts:
-        raise HTTPException(status_code=503, detail="TTS не инициализирован")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=503, detail=t("api.tts_not_init", lang=lang))
     
-    mode = request.get("mode", "instruct")  # "instruct" или "clone"
+    mode = request.get("mode", "instruct")  # "instruct" or "clone"
     instruct = request.get("instruct", "female")
-    ref_audio = request.get("ref_audio", None)  # путь к файлу референса
+    ref_audio = request.get("ref_audio", None)  # path to reference file
     position_temp = request.get("position_temperature", 0.0)
     class_temp = request.get("class_temperature", 0.0)
     
-    # Сохраняем конфиг в TTSEngine (фасад)
+    # Save config in TTSEngine (facade)
     _assistant._tts.set_voice_config(
         mode=mode,
         instruct=instruct,
@@ -772,7 +850,7 @@ async def tts_config(request: dict):
         class_temperature=class_temp,
     )
     
-    # Если OmniVoice уже загружен - применяем конфиг сразу
+    # If OmniVoice already loaded - apply config immediately
     if _assistant._tts.is_omnivoice_loaded and hasattr(_assistant._tts._engine, 'set_voice_config'):
         _assistant._tts._engine.set_voice_config(
             mode=mode,
@@ -781,7 +859,7 @@ async def tts_config(request: dict):
             position_temperature=position_temp,
             class_temperature=class_temp,
         )
-        logger.info(f"Конфиг применён к уже загруженному OmniVoice: mode={mode}, ref={ref_audio}")
+        logger.info(f"Config applied to already loaded OmniVoice: mode={mode}, ref={ref_audio}")
     
     return {
         "status": "ok",
@@ -833,25 +911,37 @@ async def get_tts_config():
 @app.post("/api/tts/speak")
 async def tts_speak(request: dict):
     """
-    Синтезировать речь из текста и вернуть аудио.
+    Synthesize speech from text and return audio.
     """
     if not _assistant or not _assistant._tts:
-        raise HTTPException(status_code=503, detail="TTS не инициализирован")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=503, detail=t("api.tts_not_init", lang=lang))
     
     text = request.get("text", "")
     if not text:
-        raise HTTPException(status_code=400, detail="Текст не предоставлен")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=400, detail=t("api.text_not_provided", lang=lang))
     
-    # Проверяем что OmniVoice загружен
+    # Check OmniVoice loaded
     if not _assistant._tts.is_omnivoice_loaded:
-        # Пробуем загрузить
+        # Try to load
         await _assistant._tts.enable_omnivoice()
     
-    # Синтезируем
+    # Synthesize
     result = await _assistant._tts.speak(text)
     
     if not result.success:
-        raise HTTPException(status_code=500, detail=result.error or "Ошибка синтеза")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=500, detail=result.error or t("api.synthesis_error", lang=lang))
     
     # Возвращаем аудио
     from fastapi.responses import Response
@@ -918,15 +1008,19 @@ async def load_model(request: dict):
     context_length = request.get("context_length") or request.get("num_ctx")
 
     if not model:
-        raise HTTPException(status_code=400, detail="model не указан")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=400, detail=t("api.model_not_specified", lang=lang))
 
     if provider == "lm_studio":
         base = host.rstrip("/") if host else "http://localhost:1234"
         if not base.startswith("http"):
             base = "http://" + base
-        # Выгрузить предыдущие загруженные модели (чтобы не копились :2, :3 инстансы)
-        # Логика: если уже загружена та же модель с тем же контекстом — ничего не делаем,
-        # иначе выгружаем все загруженные (особенно ту же модель с другим контекстом)
+        # Unload previously loaded models (to avoid accumulating :2, :3 instances)
+        # Logic: if same model with same context already loaded — do nothing,
+        # otherwise unload all loaded (especially same model with different context)
         try:
             import httpx
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -947,21 +1041,21 @@ async def load_model(request: dict):
                                 already_ok = True
                                 break
                     if already_ok:
-                        logger.info(f"Модель {model} уже загружена с контекстом {target_ctx}, пропускаем выгрузку")
+                        logger.info(f"Model {model} already loaded with context {target_ctx}, skipping unload")
                     else:
-                        # Выгружаем все загруженные (и ту же модель с другим контекстом, и другие модели)
+                        # Unload all loaded (both same model with different context and other models)
                         for m in data.get("data", []):
                             if m.get("state") == "loaded":
                                 inst_id = m.get("id")
-                                # Не выгружаем саму цель если она уже загружена с правильным контекстом (выше уже проверили)
-                                # Иначе выгружаем всё
+                                # Do not unload target if already loaded with correct context (checked above)
+                                # Otherwise unload all
                                 try:
                                     await client.post(f"{base}/api/v1/models/unload", json={"instance_id": inst_id}, timeout=10.0)
-                                    logger.info(f"Выгружена предыдущая модель: {inst_id}")
+                                    logger.info(f"Unloaded previous model: {inst_id}")
                                 except Exception as ue:
-                                    logger.debug(f"Не удалось выгрузить {inst_id}: {ue}")
+                                    logger.debug(f"Failed to unload {inst_id}: {ue}")
         except Exception as e:
-            logger.debug(f"Ошибка при выгрузке старых моделей: {e}")
+            logger.debug(f"Error unloading old models: {e}")
 
         payload = {"model": model}
         if context_length:
@@ -1014,42 +1108,50 @@ async def stt_transcribe(file: UploadFile = File(...)):
     
     Принимает аудио файл (webm, wav, mp3) и возвращает распознанный текст.
     """
-    logger.info(f"Получен аудио файл: {file.filename}, тип: {file.content_type}")
+    logger.info(f"Received audio file: {file.filename}, type: {file.content_type}")
     
-    # Проверяем формат
+    # Check format
     allowed_types = ["audio/webm", "audio/wav", "audio/wave", "audio/x-wav", "audio/mp3", "audio/mpeg", "audio/ogg", "audioopus"]
     if file.content_type not in allowed_types:
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
         raise HTTPException(
             status_code=400, 
-            detail=f"Неподдерживаемый формат: {file.content_type}. Используйте webm, wav или mp3"
+            detail=t("api.unsupported_format", lang=lang, type=file.content_type)
         )
     
     try:
-        # Инициализируем STT если нужно
+        # Initialize STT if needed
         stt = await get_stt_engine()
         
-        # Читаем аудио
+        # Read audio
         audio_data = await file.read()
         
-        # Определяем формат
+        # Determine format
         ext = file.filename.split(".")[-1] if "." in file.filename else "webm"
         
-        # Распознаём
-        logger.info("Начало распознавания...")
+        # Recognize
+        logger.info("Starting recognition...")
         text = await stt.transcribe_bytes(audio_data, format=ext)
         
-        logger.info(f"Распознано: {text[:100]}...")
+        logger.info(f"Recognized: {text[:100]}...")
         
         return {"text": text, "success": True}
         
     except Exception as e:
-        logger.error(f"Ошибка STT: {e}", exc_info=True)
-        # Если ошибка пустая — показать repr и traceback для диагностики
+        logger.error(f"STT error: {e}", exc_info=True)
+        # If error empty — show repr and traceback for diagnostics
         detail = str(e) or repr(e) or e.__class__.__name__
         if not detail.strip():
             import traceback
             detail = traceback.format_exc()[-500:]
-        raise HTTPException(status_code=500, detail=f"Ошибка распознавания: {detail}")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=500, detail=t("api.recognition_error", lang=lang, detail=detail))
 
 
 # === Запуск ===
