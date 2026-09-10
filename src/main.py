@@ -1,24 +1,24 @@
 """
-Local Assistant - Главный модуль запуска.
+Local Assistant - Main entry module.
 
-Консольный интерфейс для диалога с локальным AI-ассистентом.
-Объединяет все компоненты:
-- LLM Engine: генерация ответов через Ollama
-- Memory Manager: поиск контекста в ChromaDB
-- TTS Engine: озвучка ответов (опционально)
+Console interface for dialog with the local AI assistant.
+Combines all components:
+- LLM Engine: answer generation via Ollama
+- Memory Manager: context search in ChromaDB
+- TTS Engine: answer voicing (optional)
 
-Архитектурные решения:
-1. Класс Assistant инкапсулирует всю логику работы
-2. Асинхронный цикл диалога не блокирует ввод/вывод
-3. Graceful shutdown для корректного закрытия ресурсов
+Architectural decisions:
+1. The Assistant class encapsulates all working logic
+2. The async dialog loop does not block input/output
+3. Graceful shutdown for correct resource closing
 
-Пример использования:
-    # Запуск через CLI
+Example usage:
+    # Run via CLI
     python -m src.main
-    
-    # Или программно
+
+    # Or programmatically
     from src.main import Assistant
-    
+
     async def main():
         assistant = Assistant()
         await assistant.run()
@@ -36,40 +36,42 @@ from src.llm_engine import LLMEngine, Message, MessageRole, LLMResponse
 from src.memory_manager import MemoryManager
 from src.tts_engine import TTSEngine
 try:
-    from src.i18n import t
+    from src.i18n import t, assistant_not_init_detail
 except ImportError:
     try:
-        from i18n import t
+        from i18n import t, assistant_not_init_detail
     except ImportError:
         def t(key, lang=None, **kwargs):
             return key
+        def assistant_not_init_detail(lang=None):
+            return "Assistant not initialized"
 
-# Логгер модуля
+# Module logger
 logger = logging.getLogger(__name__)
 
 
-# === Настройка логирования ===
+# === Logging setup ===
 def setup_logging(config: Config) -> logging.Logger:
     """
-    Настроить логирование приложения.
+    Configure application logging.
 
-    Логи пишутся:
-    - В консоль (stdout)
-    - В файл logs/assistant.log
+    Logs are written to:
+    - Console (stdout)
+    - File logs/assistant.log
 
     Args:
-        config: Конфигурация с уровнем логирования.
+        config: Configuration with the logging level.
 
     Returns:
-        logging.Logger: Настроенный логгер.
+        logging.Logger: Configured logger.
     """
-    # Используем функцию из config модуля для базовой настройки
+    # Use the function from the config module for base setup
     config_setup_logging(config)
     
-    # Создаём директорию для логов
+    # Create the logs directory
     log_dir = config.get_logs_dir()
     
-    # Добавляем файловый обработчик
+    # Add a file handler
     logger = logging.getLogger(__name__)
     file_handler = logging.FileHandler(
         log_dir / "assistant.log",
@@ -83,20 +85,20 @@ def setup_logging(config: Config) -> logging.Logger:
 
 class Assistant:
     """
-    Локальный AI-ассистент.
-    
-    Основной класс приложения, объединяющий все компоненты.
-    Управляет жизненным циклом диалога и координирует работу модулей.
-    
-    Поток обработки запроса:
-    1. Пользователь вводит сообщение
-    2. Поиск релевантного контекста в памяти (RAG)
-    3. Отправка запроса к LLM с контекстом
-    4. Получение и отображение ответа
-    5. Озвучка ответа (если включено)
-    6. Сохранение диалога в память
-    
-    Пример использования:
+    Local AI assistant.
+
+    The main application class combining all components.
+    Manages the dialog lifecycle and coordinates module work.
+
+    Request processing flow:
+    1. User enters a message
+    2. Search for relevant context in memory (RAG)
+    3. Send request to LLM with context
+    4. Receive and display the answer
+    5. Voice the answer (if enabled)
+    6. Save the dialog to memory
+
+    Example usage:
         assistant = Assistant()
         await assistant.initialize()
         await assistant.run()
@@ -104,40 +106,40 @@ class Assistant:
     
     def __init__(self, config: Config | None = None):
         """
-        Инициализировать ассистента.
+        Initialize the assistant.
 
         Args:
-            config: Конфигурация приложения.
+            config: Application configuration.
         """
         self._config = config or get_config()
         self._logger = logging.getLogger(__name__)
 
-        # Компоненты (инициализируются позже)
+        # Components (initialized later)
         self._llm: LLMEngine | None = None
         self._memory: MemoryManager | None = None
         self._tts: TTSEngine | None = None
 
-        # Флаг работы
+        # Running flag
         self._running = False
         self._closed = False
 
-        # Статистика сессии
+        # Session statistics
         self._message_count = 0
         self._start_time: datetime | None = None
 
-        # Поиск в интернете
+        # Web search
         self._search_tool = None
         self._ddg_tool_def = None
     
     async def initialize(self) -> None:
         """
-        Инициализировать все компоненты ассистента.
-        
-        Вызывается один раз при старте.
-        Последовательно инициализирует:
-        1. LLM Engine (подключение к Ollama)
-        2. Memory Manager (загрузка ChromaDB)
-        3. TTS Engine (опционально)
+        Initialize all assistant components.
+
+        Called once at startup.
+        Sequentially initializes:
+        1. LLM Engine (connection to Ollama)
+        2. Memory Manager (ChromaDB loading)
+        3. TTS Engine (optional)
         """
         self._logger.info("Initializing assistant...")
         self._start_time = datetime.now()
@@ -168,13 +170,13 @@ class Assistant:
     
     def _should_search_memory(self, message: str) -> bool:
         """
-        Определить, нужно ли искать в памяти (расширенная логика).
-        
-        RAG выполняется когда сообщение требует знаний/контекста.
+        Decide whether memory search is needed (extended logic).
+
+        RAG runs when the message requires knowledge/context.
         """
         msg = message.strip().lower()
         
-        # === Категория 1: Явные запросы на воспоминание (100%) ===
+        # === Category 1: Explicit recall requests (100%) ===
         recall_keywords = [
             'помнишь', 'помни', 'remember', 'recall', 'ты знаешь', 'do you know',
             'было', 'was it', 'это было', 'is it was', 'как зовут', "what's my name",
@@ -185,7 +187,7 @@ class Assistant:
             if kw in msg:
                 return True
         
-        # === Категория 2: Вопросы требующие знаний (100%) ===
+        # === Category 2: Knowledge-seeking questions (100%) ===
         question_keywords = [
             'что такое', 'what is', 'кто такой', 'who is',
             'как работает', 'how does', 'explain', 'объясни',
@@ -193,14 +195,14 @@ class Assistant:
             'почему', 'why', 'зачем', 'for what',
             'чем отличается', 'difference between',
         ]
-        # Вопрос с вопросительным знаком
+        # Question with a question mark
         if '?' in message:
             return True
         for kw in question_keywords:
             if kw in msg:
                 return True
         
-        # === Категория 3: Временные ссылки на прошлое ===
+        # === Category 3: Temporal references to the past ===
         temporal_keywords = [
             'в прошлый раз', 'last time', 'раньше', 'earlier', 'before',
             'недавно', 'recently', 'на прошлой неделе', 'last week',
@@ -210,7 +212,7 @@ class Assistant:
             if kw in msg:
                 return True
         
-        # === Категория 4: Контекстные ссылки (проект/код) ===
+        # === Category 4: Contextual references (project/code) ===
         context_keywords = [
             'мой проект', 'my project', 'наш код', 'our code',
             'этот файл', 'that file', 'тот проект', 'that project',
@@ -221,7 +223,7 @@ class Assistant:
             if kw in msg:
                 return True
         
-        # === Категория 5: Глаголы намерения/уточнения ===
+        # === Category 5: Intent/clarification verbs ===
         intent_keywords = [
             'проверь', 'check', 'посмотри', 'look',
             'какой', 'which', 'сколько', 'how many', 'how much',
@@ -231,14 +233,14 @@ class Assistant:
             if kw in msg:
                 return True
         
-        # === ИСКЛЮЧЕНИЯ - когда RAG НЕ нужен ===
-        
-        # Очень короткие сообщения (кроме если есть явные маркеры)
+        # === EXCLUSIONS - when RAG is NOT needed ===
+
+        # Very short messages (except if there are explicit markers)
         if len(message.strip()) < 15:
-            # Всё равно проверяем на явные маркеры выше
+            # Still check for explicit markers above
             pass  # Continue to exclusions
         
-        # Приветствия и простые фразы
+        # Greetings and simple phrases
         greetings = [
             'привет', 'здравствуй', 'здравствуйте', 'hello', 'hi', 'hey',
             'как дела', 'как ты', 'что делаешь', 'чем занимаешься',
@@ -249,7 +251,7 @@ class Assistant:
             if msg.startswith(greeting):
                 return False
         
-        # Простые вопросы о времени/погоде без личного контекста
+        # Simple time/weather questions without personal context
         simple_questions = [
             'который час', 'сколько времени', 'какая дата',
             'как погода', 'какой день', 'today date', 'current time',
@@ -258,26 +260,26 @@ class Assistant:
             if q in msg:
                 return False
         
-        # Сообщение начинается с "я" new данные" без запроса
+        # Message starting with "I ..." as new data without a request
         if msg.startswith('я ') or msg.startswith('я:'):
-            # Это новая информация от пользователя, а не вопрос
+            # This is new information from the user, not a question
             return False
         
-        # По умолчанию - ищем в памяти (лучше переусердствовать чем недополучить)
+        # By default - search memory (better to overdo than to miss)
         return True
     
     def _looks_like_new_fact(self, message: str) -> bool:
         """
-        Определить, содержит ли сообщение новый факт для извлечения.
-        
-        Факты обычно содержат:
-        - Личную информацию (имя, возраст, город)
-        - Предпочтения (любимый, нравится, не люблю)
-        - О себе утверждения
+        Decide whether the message contains a new fact for extraction.
+
+        Facts usually contain:
+        - Personal information (name, age, city)
+        - Preferences (favorite, likes, dislikes)
+        - Self statements
         """
         msg = message.strip().lower()
         
-        # Паттерны фактов
+        # Fact patterns
         fact_patterns = [
             'меня зовут', 'моё имя', ' меня ', 'по имени',
             'мне лет', 'мне ', 'года', 'возраст',
@@ -289,12 +291,12 @@ class Assistant:
             'предпочитаю', 'обычно', 'часто', 'я люблю',
         ]
         
-        # Проверяем наличие фактовых паттернов
+        # Check for fact patterns
         for pattern in fact_patterns:
             if pattern in msg:
                 return True
         
-        # Также проверяем длину - очень длинные сообщения могут содержать факты
+        # Also check length - very long messages may contain facts
         if len(message.strip()) > 50:
             return True
         
@@ -302,7 +304,7 @@ class Assistant:
 
     async def _register_tools(self) -> None:
         """
-        Зарегистрировать доступные инструменты (Function Calling).
+        Register available tools (Function Calling).
         """
         if not self._llm:
             return
@@ -344,7 +346,7 @@ class Assistant:
         self._logger.info("Agent tools registered: file_create, app_open, file_open, browser_open, capture_screen")
     
     def _get_api_headers(self) -> dict:
-        """Получить заголовки для API-запросов."""
+        """Get headers for API requests."""
         headers = {}
         if self._config.llm.requires_api_key:
             headers["Authorization"] = f"Bearer {self._config.llm.api_key}"
@@ -354,7 +356,7 @@ class Assistant:
         return headers
     
     async def close(self) -> None:
-        """Корректно закрыть все компоненты."""
+        """Close all components correctly."""
         if self._closed:
             return
         self._closed = True
@@ -379,21 +381,21 @@ class Assistant:
     
     async def process_message(self, user_message: str, thinking: bool = False, search: str = "", chat_history: list[dict] | None = None, images: list[str] | None = None) -> LLMResponse:
         """
-        Обработать сообщение пользователя.
+        Process a user message.
 
         Args:
-            user_message: Сообщение пользователя.
-            thinking: Включить режим рассуждения (для Qwen3).
-            search: Включить поиск в интернете.
-            chat_history: История сообщений чата (список dict'ов с role/content).
-            images: Список base64-encoded изображений.
+            user_message: User message.
+            thinking: Enable reasoning mode (for Qwen3).
+            search: Enable web search.
+            chat_history: Chat message history (list of dicts with role/content).
+            images: List of base64-encoded images.
 
         Returns:
-            LLMResponse: Ответ ассистента с контентом и метаданными.
+            LLMResponse: Assistant response with content and metadata.
         """
         if not self._llm or not self._memory:
             lang = get_config().general.language
-            raise RuntimeError(t("api.assistant_not_init", lang=lang))
+            raise RuntimeError(assistant_not_init_detail(lang))
 
         self._message_count += 1
 
@@ -512,13 +514,13 @@ class Assistant:
 
     def process_message_sync(self, user_message: str, thinking: bool = False) -> str:
         """
-        Обработать сообщение пользователя (синхронная версия для GUI).
+        Process a user message (sync version for GUI).
         """
         import httpx
         
         if not self._llm or not self._memory:
             lang = get_config().general.language
-            raise RuntimeError(t("api.assistant_not_init", lang=lang))
+            raise RuntimeError(assistant_not_init_detail(lang))
 
         self._message_count += 1
 
@@ -554,20 +556,19 @@ class Assistant:
                 system_prompt = self._llm._system_prompt
             history = self._llm.get_history()
             
-            messages = [
-                {"role": "system", "content": system_prompt},
-            ]
-            
+            # NOTE: memory context is merged into the single system message
+            # because chat templates (e.g. Qwen3 via LM Studio) reject more
+            # than one system message ("System message must be at the beginning").
             if context:
                 context_text = "\n\n".join(context)
                 if lang == "ru":
-                    ctx = f"=== КОНТЕКСТ ИЗ ПАМЯТИ ===\n{context_text}\n=== КОНЕЦ КОНТЕКСТА ==="
+                    system_prompt += f"\n\n=== КОНТЕКСТ ИЗ ПАМЯТИ ===\n{context_text}\n=== КОНЕЦ КОНТЕКСТА ==="
                 else:
-                    ctx = f"=== MEMORY CONTEXT ===\n{context_text}\n=== END OF CONTEXT ==="
-                messages.append({
-                    "role": "system",
-                    "content": ctx
-                })
+                    system_prompt += f"\n\n=== MEMORY CONTEXT ===\n{context_text}\n=== END OF CONTEXT ==="
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+            ]
             
             for msg in history:
                 messages.append(msg.to_dict())
@@ -597,11 +598,11 @@ class Assistant:
             choice = data.get("choices", [{}])[0]
             answer = choice.get("message", {}).get("content", "")
 
-        # 3. Извлечение фактов (только если сообщение содержит факты)
+        # 3. Fact extraction (only if the message contains facts)
         if self._looks_like_new_fact(user_message):
             asyncio.run(self._extract_and_save_facts(user_message, answer))
 
-        # 4. Добавляем в историю LLM
+        # 4. Add to LLM history
         self._llm.add_to_history(Message(role=MessageRole.USER, content=user_message))
         self._llm.add_to_history(Message(role=MessageRole.ASSISTANT, content=answer))
 
@@ -609,17 +610,17 @@ class Assistant:
 
     async def _extract_and_save_facts(self, user_message: str, assistant_response: str) -> None:
         """
-        Извлечь важные факты из диалога и сохранить в память.
-        
-        Анализирует диалог и сохраняет только важную информацию:
-        - Имя пользователя
-        - Предпочтения (любимый цвет, еда, и т.д.)
-        - Личные факты (возраст, город, работа)
-        - Контекст для будущих разговоров
-        
+        Extract important facts from the dialog and save to memory.
+
+        Analyzes the dialog and saves only important information:
+        - User name
+        - Preferences (favorite color, food, etc.)
+        - Personal facts (age, city, job)
+        - Context for future conversations
+
         Args:
-            user_message: Сообщение пользователя.
-            assistant_response: Ответ ассистента.
+            user_message: User message.
+            assistant_response: Assistant response.
         """
         # Prompt for fact extraction (language-aware)
         try:
@@ -714,7 +715,7 @@ Do not save ordinary questions and answers like 'hello', 'how are you', 'thanks'
                 choice = data.get("choices", [{}])[0]
                 facts_text = choice.get("message", {}).get("content", "[]")
                 
-                # Парсим JSON
+                # Parse JSON
                 facts = json.loads(facts_text.strip())
                 
                 if isinstance(facts, list) and facts:
@@ -732,19 +733,19 @@ Do not save ordinary questions and answers like 'hello', 'how are you', 'thanks'
 
     async def run(self) -> None:
         """
-        Запустить консольный цикл диалога.
-        
-        Бесконечный цикл:
-        - Чтение ввода пользователя
-        - Обработка команд (quit, clear, help, stats)
-        - Обработка сообщений через process_message
-        - Вывод ответа
-        
-        Завершается по команде 'quit' или Ctrl+C.
+        Run the console dialog loop.
+
+        Endless loop:
+        - Read user input
+        - Handle commands (quit, clear, help, stats)
+        - Process messages via process_message
+        - Print the answer
+
+        Ends on 'quit' command or Ctrl+C.
         """
         if not self._llm:
             lang = get_config().general.language
-            raise RuntimeError(t("api.assistant_not_init", lang=lang))
+            raise RuntimeError(assistant_not_init_detail(lang))
         
         self._running = True
         self._print_welcome()
@@ -789,12 +790,12 @@ Do not save ordinary questions and answers like 'hello', 'how are you', 'thanks'
     
     async def _get_input(self) -> str:
         """
-        Получить ввод от пользователя.
-        
-        Асинхронная обёртка над input() для совместимости.
-        
+        Get input from the user.
+
+        Async wrapper over input() for compatibility.
+
         Returns:
-            str: Введённая строка.
+            str: Entered string.
         """
         # In Windows input() is blocking, use sync
         loop = asyncio.get_event_loop()
@@ -807,19 +808,19 @@ Do not save ordinary questions and answers like 'hello', 'how are you', 'thanks'
     
     async def _handle_command(self, text: str) -> Optional[str]:
         """
-        Обработать команду пользователя.
-        
-        Поддерживаемые команды:
-        - quit, exit, q: завершение работы
-        - clear, c: очистка истории
-        - help, h: справка
-        - stats, s: статистика
-        
+        Handle a user command.
+
+        Supported commands:
+        - quit, exit, q: shutdown
+        - clear, c: clear history
+        - help, h: help
+        - stats, s: statistics
+
         Args:
-            text: Введённый текст.
-        
+            text: Entered text.
+
         Returns:
-            str | None: Результат команды или None если не команда.
+            str | None: Command result or None if not a command.
         """
         text_lower = text.strip().lower()
         
@@ -843,7 +844,7 @@ Do not save ordinary questions and answers like 'hello', 'how are you', 'thanks'
         return None
     
     def _print_welcome(self) -> None:
-        """Вывести приветственное сообщение."""
+        """Print the welcome message."""
         lang = get_config().general.language
         tts_state = t("cli.tts_state_on", lang=lang) if self._config.tts.enabled else t("cli.tts_state_off", lang=lang)
         print("\n" + "=" * 60)
@@ -858,7 +859,7 @@ Do not save ordinary questions and answers like 'hello', 'how are you', 'thanks'
         print("=" * 60 + "\n")
     
     def _get_help_text(self) -> str:
-        """Получить текст справки."""
+        """Get the help text."""
         lang = get_config().general.language
         lines = [
             "",
@@ -876,7 +877,7 @@ Do not save ordinary questions and answers like 'hello', 'how are you', 'thanks'
         return "\n".join(lines)
     
     async def _get_stats_text(self) -> str:
-        """Получить текст статистики."""
+        """Get the statistics text."""
         lang = get_config().general.language
         lines = ["" + t("cli.stats.title", lang=lang)]
         lines.append(t("cli.stats.messages", lang=lang, count=self._message_count))
@@ -893,12 +894,12 @@ Do not save ordinary questions and answers like 'hello', 'how are you', 'thanks'
 
 async def main() -> None:
     """
-    Точка входа приложения.
+    Application entry point.
 
-    Настраивает логирование, создаёт ассистента
-    и запускает цикл диалога (консоль или GUI).
+    Configures logging, creates the assistant
+    and runs the dialog loop (console or GUI).
     """
-    # Загружаем конфигурацию
+    # Load the configuration
     config = get_config()
 
     # Setup logging
@@ -932,12 +933,12 @@ async def main() -> None:
 
 def _run_gui_mode(assistant: Assistant) -> None:
     """
-    Запустить графический интерфейс.
-    
-    Выбирает фреймворк на основе конфигурации.
-    
+    Run the graphical interface.
+
+    Selects the framework based on the configuration.
+
     Args:
-        assistant: Инициализированный экземпляр Assistant.
+        assistant: Initialized Assistant instance.
     """
     framework = assistant._config.gui.framework.lower()
     
@@ -950,13 +951,13 @@ def _run_gui_mode(assistant: Assistant) -> None:
 
 def _run_customtkinter_gui(assistant: Assistant) -> None:
     """
-    Запустить GUI на CustomTkinter.
-    
-    CustomTkinter работает в главном потоке, поэтому
-    просто передаём управление и завершаем основной процесс.
-    
+    Run the CustomTkinter GUI.
+
+    CustomTkinter runs in the main thread, so
+    we just hand over control and finish the main process.
+
     Args:
-        assistant: Инициализированный экземпляр Assistant.
+        assistant: Initialized Assistant instance.
     """
     from src.gui_ctk import run_gui
     logger.info("Starting CustomTkinter GUI")

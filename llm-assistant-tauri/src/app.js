@@ -1,10 +1,10 @@
 /**
  * Local AI Assistant - Frontend Application
  * 
- * Архитектура:
- * - API-first: все вызовы через REST API
- * - WebSocket для real-time событий
- * - Подготовка к голосовому вводу
+ * Architecture:
+ * - API-first: primary backend calls go through the REST API
+ * - WebSocket for real-time events
+ * - Voice input via Web Audio API + STT
  */
 
 import { initI18n, t, setLanguage, getLang } from './i18n.js';
@@ -35,13 +35,18 @@ try {
     console.log('Запуск в браузере (не Tauri)');
 }
 
-// === Инициализация ===
+// === Initialization ===
 
-async function waitForApi(retries = 20, delay = 500) {
+async function waitForApi(retries = 90, delay = 1000) {
     for (let i = 0; i < retries; i++) {
         try {
             const response = await fetch(`${API_BASE}/api/status`, { method: 'GET' });
-            if (response.ok) return true;
+            if (response.ok) {
+                const data = await response.json().catch(() => null);
+                // Older backends have no assistant_ready flag - treat as ready
+                if (!data || data.assistant_ready !== false) return true;
+                console.log(`Backend is up, waiting for assistant... (${i + 1}/${retries})`);
+            }
         } catch (e) {
             console.log(`Ожидание API... (${i + 1}/${retries})`);
         }
@@ -90,21 +95,21 @@ function initEventListeners() {
         });
     }
 
-    // Кнопки
+    // Buttons
     document.getElementById('new-chat-btn').addEventListener('click', createNewChat);
     document.getElementById('send-btn').addEventListener('click', sendMessage);
     
-    // Файлы
+    // Files
     document.getElementById('file-input').addEventListener('change', handleFileSelect);
     document.getElementById('file-remove').addEventListener('click', clearFile);
     
-    // Удаление отдельных файлов из превью (делегирование событий)
+    // Remove individual files from previews (event delegation)
     document.getElementById('file-previews').addEventListener('click', (e) => {
         if (e.target.classList.contains('file-remove')) {
             const index = parseInt(e.target.dataset.index);
             if (!isNaN(index)) {
                 attachedFiles.splice(index, 1);
-                // Перерендерим превью
+                // Re-render the previews
                 const previewsContainer = document.getElementById('file-previews');
                 previewsContainer.innerHTML = '';
                 attachedFiles.forEach((f, i) => {
@@ -140,13 +145,15 @@ function initEventListeners() {
     document.getElementById('tts-toggle').addEventListener('change', async (e) => {
         const enabled = e.target.checked;
         console.log('TTS переключено:', enabled);
-        
-        // Показываем/скрываем TTS опции
+
+        // Show/hide the TTS options
         const ttsOptions = document.getElementById('tts-options');
         if (ttsOptions) {
             ttsOptions.style.display = enabled ? 'flex' : 'none';
         }
-        
+
+        // Block double-clicks: model (un)loading takes tens of seconds
+        e.target.disabled = true;
         try {
             const response = await fetch(`${API_BASE}/api/tts/toggle`, {
                 method: 'POST',
@@ -155,20 +162,30 @@ function initEventListeners() {
             });
             const data = await response.json();
             console.log('TTS статус:', data);
-            
-            // Загружаем голоса для клонирования
+
+            // Backend reports the real state - do not leave the switch ON if load failed
+            if (enabled && !data.omnivoice_loaded) {
+                e.target.checked = false;
+                if (ttsOptions) ttsOptions.style.display = 'none';
+                alert(t('alert.ttsLoadFailed') + (data.error ? ': ' + data.error : ''));
+                return;
+            }
+
+            // Load voices for cloning
             if (enabled) await loadTTSVoices();
-            
+
         } catch (err) {
             console.error('Ошибка переключения TTS:', err);
             e.target.checked = !enabled;
+        } finally {
+            e.target.disabled = false;
         }
     });
     
-    // Загружаем голоса при старте
+    // Load voices on startup
     loadTTSVoices();
     
-    // Переключение режима TTS (синтез/клонирование)
+    // TTS mode switching (synthesis/cloning)
     document.querySelectorAll('input[name="tts-mode"]').forEach(radio => {
         radio.addEventListener('change', async (e) => {
             const mode = e.target.value;
@@ -179,7 +196,7 @@ function initEventListeners() {
                 voiceSelect.style.display = 'none';
                 cloneSelect.style.display = 'block';
                 
-                // Загрузить голоса если ещё не загружены
+                // Load voices if not loaded yet
                 if (cloneSelect.options.length === 1 && cloneSelect.options[0].value === '') {
                     await loadTTSVoices();
                 }
@@ -192,12 +209,12 @@ function initEventListeners() {
         });
     });
     
-    // Выбор голоса в режиме синтеза
+    // Voice selection in synthesis mode
     document.getElementById('tts-voice-select').addEventListener('change', async (e) => {
         await updateTTSConfig();
     });
     
-    // Выбор голоса в режиме клонирования
+    // Voice selection in cloning mode
     document.getElementById('tts-clone-select').addEventListener('change', async (e) => {
         await updateTTSConfig();
     });
@@ -240,7 +257,7 @@ function initEventListeners() {
         });
     }
     
-    // Enter для отправки
+    // Enter to send
     document.getElementById('message-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -248,14 +265,14 @@ function initEventListeners() {
         }
     });
     
-    // Поиск в памяти по Enter
+    // Memory search on Enter
     document.getElementById('memory-search-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             searchMemory();
         }
     });
     
-    // Добавление записи по Enter
+    // Add entry on Enter
     document.getElementById('memory-add-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             addMemoryEntry();
@@ -266,7 +283,7 @@ function initEventListeners() {
 // === WebSocket ===
 
 function connectWebSocket() {
-    // Используем тот же host что и для страницы
+    // Use the same host as the page
     const wsUrl = `ws://${window.location.host}/ws/events`;
     console.log('Подключение к WebSocket:', wsUrl);
     
@@ -280,7 +297,7 @@ function connectWebSocket() {
     ws.onclose = () => {
         console.log('WebSocket отключён');
         updateConnectionStatus(false);
-        // Переподключение через 5 секунд
+        // Reconnect in 5 seconds
         setTimeout(connectWebSocket, 5000);
     };
     
@@ -298,8 +315,8 @@ function connectWebSocket() {
 function handleWebSocketMessage(data) {
     console.log('WebSocket сообщение:', data);
     
-    // Ответы показываются через HTTP response в sendMessage().
-    // WebSocket здесь для будущих real-time уведомлений.
+    // Responses are rendered via the HTTP response in sendMessage().
+    // WebSocket is reserved here for future real-time notifications.
 }
 
 function updateConnectionStatus(connected) {
@@ -311,7 +328,7 @@ function updateConnectionStatus(connected) {
     }
 }
 
-// === Чаты ===
+// === Chats ===
 
 async function loadChats() {
     try {
@@ -350,14 +367,14 @@ function createChatElement(chat) {
         <div class="chat-item-date">${dateStr}</div>
     `;
     
-    // Клик - выбор чата
+    // Click selects the chat
     div.addEventListener('click', (e) => {
         if (!e.target.classList.contains('chat-item-title') || !e.target.contentEditable) {
             selectChat(chat.id);
         }
     });
     
-    // Двойной клик - переименование
+    // Double-click renames the chat
     const titleEl = div.querySelector('.chat-item-title');
     titleEl.addEventListener('dblclick', (e) => {
         e.stopPropagation();
@@ -372,7 +389,7 @@ async function startRenameChat(chatId, element) {
     element.contentEditable = true;
     element.focus();
     
-    // Выделить весь текст
+    // Select all text
     const range = document.createRange();
     range.selectNodeContents(element);
     const sel = window.getSelection();
@@ -433,22 +450,22 @@ async function createNewChat() {
 async function selectChat(chatId) {
     currentChatId = chatId;
     
-    // Показываем индикатор контекста
+    // Show the context indicator
     const ctxIndicator = document.getElementById('context-indicator');
     if (ctxIndicator) ctxIndicator.style.display = 'flex';
     
-    // Обновляем выделение
+    // Update the selection highlight
     document.querySelectorAll('.chat-item').forEach(el => {
         el.classList.remove('active');
     });
     
-    // Загружаем сообщения
+    // Load messages
     await loadChatMessages(chatId);
     
-    // Обновляем заголовок
+    // Update the title
     document.getElementById('chat-title').textContent = `${getLang()==='ru'?'Чат':'Chat'} #${chatId}`;
     
-    // Сбрасываем индикатор контекста (обновится после следующего ответа)
+    // Reset the context indicator (it updates after the next response)
     updateContextIndicator(0, 8192);
 }
 
@@ -482,7 +499,7 @@ async function deleteChat() {
         
         currentChatId = null;
         document.getElementById('chat-title').textContent = t('chat.select');
-        // Прячем индикатор контекста
+        // Hide the context indicator
         const ctxIndicator = document.getElementById('context-indicator');
         if (ctxIndicator) ctxIndicator.style.display = 'none';
         document.getElementById('messages-container').innerHTML = `
@@ -515,7 +532,7 @@ async function clearChat() {
     }
 }
 
-// === Сообщения ===
+// === Messages ===
 
 let attachedFiles = []; // {type: 'document'|'image', name, text?, base64?, mime, width, height}
 
@@ -550,7 +567,7 @@ async function handleFileSelect(e) {
                     height: data.height
                 });
                 
-                // Создаем превью
+                // Create a preview
                 const item = document.createElement('div');
                 item.className = 'file-preview-item';
                 item.innerHTML = `
@@ -567,7 +584,7 @@ async function handleFileSelect(e) {
                     charCount: data.char_count
                 });
                 
-                // Создаем превью для документа
+                // Create a preview for the document
                 const item = document.createElement('div');
                 item.className = 'file-preview-item';
                 item.innerHTML = `
@@ -601,7 +618,7 @@ async function sendMessage() {
     
     if (!message && !attachedFiles.length) return;
     
-    // Формируем финальное сообщение с файлами
+    // Build the final message with files
     let fullMessage = message;
     const docTexts = attachedFiles
         .filter(f => f.type === 'document')
@@ -614,32 +631,32 @@ async function sendMessage() {
             : docTexts;
     }
     
-    // Собираем base64 изображений для отправки
+    // Collect image base64 payloads for sending
     const imageBases = attachedFiles
         .filter(f => f.type === 'image')
         .map(f => f.base64);
     
-    // Сохраняем информацию о файлах для UI ДО очистки
+    // Save file info for the UI before clearing
     const filesCount = attachedFiles.length;
     const hasImages = imageBases.length > 0;
     const hasDocs = docTexts.length > 0;
     
-    // Очищаем поле и файлы
+    // Clear the input field and files
     input.value = '';
     input.style.height = 'auto';
     
-    // Сохраняем текущие файлы для отправки
+    // Keep the current files for sending
     const imagesToSend = [...imageBases];
     const docsToSend = attachedFiles.filter(f => f.type === 'document');
     clearFile();
     
-    // Добавляем сообщение пользователя (используем сохранённое количество)
+    // Append the user message (using the saved counts)
     appendMessage('user', message || (filesCount > 0 ? `📎 ${t('chat.file.count', {count: filesCount})}` : '')
         ? `${message}\n\n${hasDocs ? `📄 ${t('chat.file.docs', {names: docsToSend.map(f => f.name).join(', ')})}` : ''}${hasImages ? (hasDocs ? ', ' : '') + `🖼️ ${t('chat.file.images', {count: imageBases.length})}` : ''}`
         : (filesCount > 0 ? `📎 ${t('chat.file.count', {count: filesCount})}` : ''));
     showTypingIndicator();
     
-    // Отправляем на сервер
+    // Send to the server
     try {
         const thinkingToggle = document.getElementById('thinking-toggle');
         const thinkingEnabled = thinkingToggle ? thinkingToggle.checked : false;
@@ -666,21 +683,21 @@ async function sendMessage() {
         
         const data = await response.json();
         
-        // Если это первое сообщение в новом чате, обновляем currentChatId
+        // If this is the first message in a new chat, update currentChatId
         if (!currentChatId) {
             currentChatId = data.chat_id;
             document.getElementById('chat-title').textContent = `${getLang()==='ru'?'Чат':'Chat'} #${currentChatId}`;
             await loadChats();
         }
         
-        // Показываем ответ из HTTP-ответа
+        // Render the response from the HTTP response
         appendMessage('assistant', data.response);
         hideTypingIndicator();
         
-        // Обновляем индикатор контекста
+        // Update the context indicator
         updateContextIndicator(data.used_context_tokens, data.max_context_tokens);
         
-        // TTS - озвучиваем ответ если включено
+        // TTS - speak the response if enabled
         const ttsToggle = document.getElementById('tts-toggle');
         if (ttsToggle && ttsToggle.checked) {
             playTTS(data.response);
@@ -696,7 +713,7 @@ async function sendMessage() {
 function appendMessage(role, content, timestamp = null) {
     const container = document.getElementById('messages-container');
     
-    // Удаляем welcome сообщение если есть
+    // Remove the welcome message if present
     const welcome = container.querySelector('.welcome-message');
     if (welcome) {
         welcome.remove();
@@ -748,13 +765,13 @@ function scrollToBottom() {
     container.scrollTop = container.scrollHeight;
 }
 
-// === Память ===
+// === Memory ===
 
 function toggleMemoryPanel() {
     const panel = document.getElementById('memory-panel');
     const isHidden = panel.classList.toggle('hidden');
     
-    // Если открыли панель - загружаем все записи
+    // If the panel was opened, load all entries
     if (!isHidden) {
         loadAllMemoryEntries();
     }
@@ -854,7 +871,7 @@ async function deleteMemoryEntry(entryId) {
             return;
         }
         
-        // Перезагружаем список записей
+        // Reload the entry list
         loadAllMemoryEntries();
     } catch (error) {
         console.error('Ошибка удаления:', error);
@@ -889,13 +906,13 @@ async function addMemoryEntry() {
     }
 }
 
-// === Статус ===
+// === Status ===
 
 async function showStatus() {
     const modal = document.getElementById('status-modal');
     const content = document.getElementById('status-content');
     
-    // Привязываем обработчик кнопки закрытия СРАЗУ, до fetch
+    // Attach the close-button handler immediately, before fetch
     const closeBtn = document.getElementById('close-status-btn');
     if (closeBtn) {
         closeBtn.onclick = hideStatus;
@@ -954,7 +971,6 @@ function appendTerminal(line) {
     const pre = document.getElementById('terminal-log');
     if (!pre) return;
     pre.textContent += line + '\n';
-    // limit
     const lines = pre.textContent.split('\n');
     if (lines.length > 2000) pre.textContent = lines.slice(-2000).join('\n');
     pre.scrollTop = pre.scrollHeight;
@@ -974,12 +990,12 @@ async function copyTerminal() {
     }
 }
 
-// === Настройки ===
+// === Settings ===
 async function openSettings() {
     const modal = document.getElementById('settings-modal');
     modal.classList.remove('hidden');
     
-    // Загружаем текущие настройки
+    // Load the current settings
     try {
         const response = await fetch(`${API_BASE}/api/config`);
         const config = await response.json();
@@ -995,7 +1011,7 @@ async function openSettings() {
         document.getElementById('ollama-host-input').value = config.ollama_host || 'http://localhost:11434';
         document.getElementById('api-key-input').value = config.api_key || '';
         
-        // Контекст (log2 для слайдера)
+        // Context (log2 for the slider)
         const numCtx = config.num_ctx || 8192;
         const logVal = Math.round(Math.log2(numCtx));
         document.getElementById('num-ctx-slider').value = logVal;
@@ -1023,10 +1039,10 @@ async function openSettings() {
         
         await onProviderChange();
         
-        // Выбрать текущую модель (после загрузки списка)
+        // Select the current model (after loading the list)
         const modelSelect = document.getElementById('model-select');
         if (config.model) {
-            // Если модели нет в списке — добавим её как (текущая)
+            // If the model is missing from the list, add it as (current)
             const exists = Array.from(modelSelect.options).some(o => o.value === config.model);
             if (!exists) {
                 const opt = document.createElement('option');
@@ -1040,7 +1056,7 @@ async function openSettings() {
         console.error('Ошибка загрузки настроек:', error);
     }
     
-    // Инициализация табов
+    // Initialize the tabs
     initSettingsTabs();
     initSliders();
 }
@@ -1062,7 +1078,7 @@ function initSettingsTabs() {
 }
 
 function initSliders() {
-    // Контекст: log2 слайдер
+    // Context: log2 slider
     const ctxSlider = document.getElementById('num-ctx-slider');
     const ctxValue = document.getElementById('num-ctx-value');
     if (ctxSlider) {
@@ -1131,7 +1147,7 @@ async function onProviderChange() {
     } else if (provider === 'lm_studio') {
         apiKeySection.classList.add('hidden');
         ollamaHostSection.classList.remove('hidden');
-        // LM Studio по умолчанию на порту 1234
+        // LM Studio defaults to port 1234
         if (hostInput.value.includes('11434')) {
             hostInput.value = 'http://localhost:1234';
         }
@@ -1144,7 +1160,7 @@ async function onProviderChange() {
         }
     }
 
-    // Для LM Studio контекст и модель — только чтение (меняются в LM Studio)
+    // For LM Studio, context and model are read-only (managed in LM Studio)
     const isLmStudio = provider === 'lm_studio';
     const modelSelect = document.getElementById('model-select');
     if (ctxSlider) ctxSlider.disabled = isLmStudio;
@@ -1164,7 +1180,7 @@ async function loadModelsForProvider(provider) {
     const modelSelect = document.getElementById('model-select');
     modelSelect.innerHTML = `<option value="">${t('settings.loading')}</option>`;
     
-    // Получаем хост из настроек
+    // Get the host from the settings
     const hostInput = document.getElementById('ollama-host-input');
     const host = hostInput.value || 'http://localhost:11434';
     
@@ -1256,7 +1272,7 @@ async function saveSettings() {
     }
 }
 
-// Закрытие модалки при клике вне контента
+// Close the modal when clicking outside the content
 document.addEventListener('click', (e) => {
     const modal = document.getElementById('status-modal');
     if (modal && e.target === modal) {
@@ -1265,12 +1281,12 @@ document.addEventListener('click', (e) => {
 });
 
 async function updateStatus() {
-    // Периодическое обновление статуса
+    // Periodic status refresh
     const response = await fetch(`${API_BASE}/api/status`);
     const data = await response.json();
     console.log('Статус:', data);
     
-    // Обновление состояния переключателя рассуждения
+    // Update the reasoning toggle state
     const thinkingToggle = document.getElementById('thinking-toggle');
     if (thinkingToggle) {
         const supportsThinking = data.supports_thinking === true;
@@ -1300,7 +1316,7 @@ async function updateStatus() {
     }, 30000);
 }
 
-// === Утилиты ===
+// === Utilities ===
 
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -1308,7 +1324,7 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// === Голосовой ввод ===
+// === Voice input ===
 function startVoiceInput() {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
         alert(t('alert.voiceNotSupported'));
@@ -1342,7 +1358,7 @@ function startVoiceInput() {
     };
 }
 
-// === Live режим ===
+// === Live mode ===
 let liveModeActive = false;
 
 function toggleLiveMode() {
@@ -1377,7 +1393,7 @@ const SILENCE_THRESHOLD = 0.01;
 const SILENCE_DURATION = 2000; // 2 seconds of silence to stop
 
 async function toggleVoiceRecording() {
-    if (isProcessingVoice) return; // Блокируем во время обработки
+    if (isProcessingVoice) return; // Block while processing
     if (isRecording) {
         stopVoiceRecording();
     } else {
@@ -1386,7 +1402,7 @@ async function toggleVoiceRecording() {
 }
 
 async function startVoiceRecording() {
-    if (isProcessingVoice) return; // Блокируем во время обработки
+    if (isProcessingVoice) return; // Block while processing
     
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1403,26 +1419,26 @@ async function startVoiceRecording() {
         };
         
         mediaRecorder.onstop = async () => {
-            isProcessingVoice = true; // Блокируем повторную запись пока обрабатываем
+            isProcessingVoice = true; // Block re-recording while processing
             stream.getTracks().forEach(track => track.stop());
             
-            // Ждём 1 секунду перед отправкой
+            // Wait 1 second before sending
             await new Promise(resolve => setTimeout(resolve, 1000));
             
             await processVoiceRecording();
             isProcessingVoice = false;
         };
         
-        // Начинаем запись
+        // Start recording
         mediaRecorder.start(100);
         isRecording = true;
         
-        // UI - показываем что записываем
+        // UI - show the recording state
         const voiceBtn = document.getElementById('voice-btn');
         voiceBtn.classList.add('recording');
         voiceBtn.disabled = true;
         
-        // Начинаем мониторинг голосовой активности
+        // Start voice activity monitoring
         monitorVoiceActivity(stream);
         
         console.log('Запись голоса начата...');
@@ -1448,7 +1464,7 @@ function monitorVoiceActivity(stream) {
         
         analyser.getByteFrequencyData(dataArray);
         
-        // Вычисляем средний уровень
+        // Compute the average level
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) {
             sum += dataArray[i];
@@ -1456,11 +1472,11 @@ function monitorVoiceActivity(stream) {
         const average = sum / dataArray.length / 255;
         
         if (average > SILENCE_THRESHOLD) {
-            // Есть звук - сбрасываем таймер
+            // Sound detected - reset the timer
             if (voiceActivityTimeout) {
                 clearTimeout(voiceActivityTimeout);
             }
-            // Запускаем новый таймер на остановку после тишины
+            // Start a new timer to stop after silence
             voiceActivityTimeout = setTimeout(() => {
                 console.log('Тишина detected - останавливаем запись');
                 stopVoiceRecording();
@@ -1501,16 +1517,23 @@ async function processVoiceRecording() {
     
     console.log(t('voice.processing'));
     
-    // Собираем аудио в blob
+    // Collect the audio into a blob
     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-    
-    // Показываем индикатор обработки
+
+    // Skip obviously empty recordings locally (backend would answer 422)
+    if (audioBlob.size < 4096) {
+        console.log(t('voice.tooShort'));
+        alert(t('voice.tooShort'));
+        return;
+    }
+
+    // Show the processing indicator
     const voiceBtn = document.getElementById('voice-btn');
     voiceBtn.textContent = '⏳';
     voiceBtn.disabled = true;
     
     try {
-        // Отправляем на сервер
+        // Send to the server
         const formData = new FormData();
         formData.append('file', audioBlob, 'recording.webm');
         
@@ -1520,19 +1543,20 @@ async function processVoiceRecording() {
         });
         
         if (!response.ok) {
-            throw new Error(`STT error: ${response.status}`);
+            const errBody = await response.json().catch(() => null);
+            throw new Error(errBody && errBody.detail ? errBody.detail : `STT error: ${response.status}`);
         }
         
         const data = await response.json();
         
         if (data.success && data.text) {
-            // Вставляем текст в поле ввода
+            // Insert the text into the input field
             const input = document.getElementById('message-input');
             input.value = data.text;
             input.focus();
             console.log('Распознано:', data.text);
             
-            // Автоматически отправляем сообщение
+            // Send the message automatically
             sendMessage();
         } else {
             console.log(t('voice.emptyResult'));
@@ -1542,7 +1566,7 @@ async function processVoiceRecording() {
         console.error(t('voice.sttError'), error);
         alert(t('alert.sttFailed', {msg: error.message}));
     } finally {
-        // Возвращаем кнопку в_NORMALное состояние
+        // Restore the button to its normal state
         voiceBtn.textContent = '🎤';
         voiceBtn.disabled = false;
         audioChunks = [];
@@ -1588,7 +1612,7 @@ async function playTTS(text) {
     }
 }
 
-// Загрузить список голосов для клонирования
+// Load the voice list for cloning
 async function loadTTSVoices() {
     try {
         const response = await fetch(`${API_BASE}/api/tts/voices`);
@@ -1617,7 +1641,7 @@ async function loadTTSVoices() {
     }
 }
 
-// Обновить конфигурацию TTS
+// Update the TTS configuration
 async function updateTTSConfig() {
     const mode = document.querySelector('input[name="tts-mode"]:checked').value;
     let instruct = 'female';
@@ -1650,5 +1674,5 @@ async function updateTTSConfig() {
     }
 }
 
-// Глобальная функция для удаления записей памяти
+// Global function for deleting memory entries
 window.deleteMemoryEntry = deleteMemoryEntry;

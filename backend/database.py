@@ -1,15 +1,15 @@
 """
-База данных для хранения чатов.
+Database for storing chats.
 
-Использует SQLite для хранения:
-- Списка чатов (sessions)
-- Сообщений в каждом чате
-- Метаданных (время создания, последнее сообщение)
+Uses SQLite to store:
+- Chat list (sessions)
+- Messages in each chat
+- Metadata (creation time, last message)
 
-Архитектурные решения:
-1. Отдельная БД для чатов (независимо от ChromaDB)
-2. Асинхронный доступ через aiosqlite
-3. Подготовка к масштабированию (легко заменить на PostgreSQL)
+Architecture decisions:
+1. Separate DB for chats (independent of ChromaDB)
+2. Async access via aiosqlite
+3. Prepared for scaling (easy to replace with PostgreSQL)
 """
 
 import asyncio
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Chat:
-    """Модель чата."""
+    """Chat model."""
     id: int
     title: str
     created_at: datetime
@@ -45,10 +45,10 @@ class Chat:
 
 @dataclass
 class Message:
-    """Модель сообщения в чате."""
+    """Chat message model."""
     id: int
     chat_id: int
-    role: str  # 'user' или 'assistant'
+    role: str  # 'user' or 'assistant'
     content: str
     created_at: datetime
     
@@ -65,55 +65,55 @@ class Message:
 
 class ChatDatabase:
     """
-    Менеджер базы данных чатов.
-    
-    Пример использования:
+    Chat database manager.
+
+    Usage example:
         db = ChatDatabase("./storage/chats.db")
         await db.initialize()
-        
-        # Создать чат
-        chat_id = await db.create_chat("Новый чат")
-        
-        # Добавить сообщение
-        await db.add_message(chat_id, "user", "Привет!")
-        await db.add_message(chat_id, "assistant", "Здравствуйте!")
-        
-        # Получить историю
+
+        # Create a chat
+        chat_id = await db.create_chat("New chat")
+
+        # Add messages
+        await db.add_message(chat_id, "user", "Hello!")
+        await db.add_message(chat_id, "assistant", "Hi there!")
+
+        # Get history
         messages = await db.get_chat_history(chat_id)
     """
     
     def __init__(self, db_path: str):
         """
-        Инициализировать базу данных.
-        
+        Initialize the database.
+
         Args:
-            db_path: Путь к файлу базы данных.
+            db_path: Path to the database file.
         """
         self._db_path = Path(db_path)
         self._db: Optional[aiosqlite.Connection] = None
     
     async def initialize(self) -> None:
         """
-        Инициализировать соединение и создать таблицы.
+        Initialize the connection and create tables.
         """
-        # Создаём директорию если не существует
+        # Create the directory if it does not exist
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Подключаемся к БД
+        # Connect to the DB
         self._db = await aiosqlite.connect(str(self._db_path))
         self._db.row_factory = aiosqlite.Row
         
-        # Создаём таблицы
+        # Create tables
         await self._create_tables()
         
         logger.info(f"Chat database initialized: {self._db_path}")
     
     async def _create_tables(self) -> None:
-        """Создать таблицы если не существуют."""
+        """Create tables if they do not exist."""
         if not self._db:
             raise RuntimeError("База данных не инициализирована")
         
-        # Таблица чатов
+        # Chats table
         await self._db.execute("""
             CREATE TABLE IF NOT EXISTS chats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,7 +123,7 @@ class ChatDatabase:
             )
         """)
         
-        # Таблица сообщений
+        # Messages table
         await self._db.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,7 +135,7 @@ class ChatDatabase:
             )
         """)
         
-        # Индексы для ускорения поиска
+        # Indexes to speed up lookups
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_messages_chat_id 
             ON messages(chat_id)
@@ -149,23 +149,23 @@ class ChatDatabase:
         await self._db.commit()
     
     async def close(self) -> None:
-        """Закрыть соединение с БД."""
+        """Close the DB connection."""
         if self._db:
             await self._db.close()
             self._db = None
             logger.info("Chat database closed")
     
-    # === CRUD для чатов ===
+    # === CRUD for chats ===
     
     async def create_chat(self, title: str = "Новый чат") -> int:
         """
-        Создать новый чат.
-        
+        Create a new chat.
+
         Args:
-            title: Заголовок чата.
-        
+            title: Chat title.
+
         Returns:
-            int: ID созданного чата.
+            int: ID of the created chat.
         """
         if not self._db:
             raise RuntimeError("База данных не инициализирована")
@@ -184,13 +184,13 @@ class ChatDatabase:
     
     async def get_chat(self, chat_id: int) -> Optional[Chat]:
         """
-        Получить чат по ID.
-        
+        Get a chat by ID.
+
         Args:
-            chat_id: ID чата.
-        
+            chat_id: Chat ID.
+
         Returns:
-            Chat | None: Чат или None если не найден.
+            Chat | None: Chat or None if not found.
         """
         if not self._db:
             raise RuntimeError("База данных не инициализирована")
@@ -208,10 +208,10 @@ class ChatDatabase:
     
     async def get_all_chats(self) -> list[Chat]:
         """
-        Получить все чаты.
-        
+        Get all chats.
+
         Returns:
-            list[Chat]: Список чатов, отсортированных по дате обновления.
+            list[Chat]: List of chats, sorted by update date.
         """
         if not self._db:
             raise RuntimeError("База данных не инициализирована")
@@ -225,11 +225,11 @@ class ChatDatabase:
     
     async def update_chat_title(self, chat_id: int, title: str) -> None:
         """
-        Обновить заголовок чата.
-        
+        Update the chat title.
+
         Args:
-            chat_id: ID чата.
-            title: Новый заголовок.
+            chat_id: Chat ID.
+            title: New title.
         """
         if not self._db:
             raise RuntimeError("База данных не инициализирована")
@@ -244,13 +244,13 @@ class ChatDatabase:
     
     async def delete_chat(self, chat_id: int) -> bool:
         """
-        Удалить чат.
-        
+        Delete a chat.
+
         Args:
-            chat_id: ID чата.
-        
+            chat_id: Chat ID.
+
         Returns:
-            bool: True если чат удалён.
+            bool: True if the chat was deleted.
         """
         if not self._db:
             raise RuntimeError("База данных не инициализирована")
@@ -267,7 +267,7 @@ class ChatDatabase:
         
         return deleted
     
-    # === CRUD для сообщений ===
+    # === CRUD for messages ===
     
     async def add_message(
         self,
@@ -276,15 +276,15 @@ class ChatDatabase:
         content: str,
     ) -> int:
         """
-        Добавить сообщение в чат.
-        
+        Add a message to the chat.
+
         Args:
-            chat_id: ID чата.
-            role: Роль ('user' или 'assistant').
-            content: Текст сообщения.
-        
+            chat_id: Chat ID.
+            role: Role ('user' or 'assistant').
+            content: Message text.
+
         Returns:
-            int: ID сообщения.
+            int: Message ID.
         """
         if not self._db:
             raise RuntimeError("База данных не инициализирована")
@@ -297,7 +297,7 @@ class ChatDatabase:
         )
         await self._db.commit()
         
-        # Обновляем время обновления чата
+        # Update the chat's updated timestamp
         await self._db.execute(
             "UPDATE chats SET updated_at = ? WHERE id = ?",
             (now, chat_id),
@@ -308,13 +308,13 @@ class ChatDatabase:
     
     async def get_chat_history(self, chat_id: int) -> list[Message]:
         """
-        Получить историю сообщений чата.
-        
+        Get the chat message history.
+
         Args:
-            chat_id: ID чата.
-        
+            chat_id: Chat ID.
+
         Returns:
-            list[Message]: Список сообщений, отсортированных по времени.
+            list[Message]: List of messages, sorted by time.
         """
         if not self._db:
             raise RuntimeError("База данных не инициализирована")
@@ -329,13 +329,13 @@ class ChatDatabase:
     
     async def delete_message(self, message_id: int) -> bool:
         """
-        Удалить сообщение.
-        
+        Delete a message.
+
         Args:
-            message_id: ID сообщения.
-        
+            message_id: Message ID.
+
         Returns:
-            bool: True если сообщение удалено.
+            bool: True if the message was deleted.
         """
         if not self._db:
             raise RuntimeError("База данных не инициализирована")
@@ -350,13 +350,13 @@ class ChatDatabase:
     
     async def clear_chat_history(self, chat_id: int) -> int:
         """
-        Очистить историю чата.
-        
+        Clear the chat history.
+
         Args:
-            chat_id: ID чата.
-        
+            chat_id: Chat ID.
+
         Returns:
-            int: Количество удалённых сообщений.
+            int: Number of deleted messages.
         """
         if not self._db:
             raise RuntimeError("База данных не инициализирована")

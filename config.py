@@ -1,17 +1,17 @@
 """
-Конфигурация локального AI-ассистента.
+Local AI assistant configuration.
 
-Модуль использует pydantic-settings для валидации и загрузки настроек
-из переменных окружения (.env файл).
+This module uses pydantic-settings to validate and load settings
+from environment variables (.env file).
 
-Поддерживаемые LLM-провайдеры:
-- ollama: Локальный Ollama сервер
-- lm_studio: Локальный LM Studio сервер
-- openrouter: OpenRouter API (облачный)
+Supported LLM providers:
+- ollama: local Ollama server
+- lm_studio: local LM Studio server
+- openrouter: OpenRouter API (cloud)
 
-Пример использования:
+Usage example:
     from config import get_config
-    
+
     config = get_config()
     print(config.llm.provider)   # "ollama"
     print(config.llm.model)      # "qwen2.5:7b"
@@ -26,11 +26,11 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-# === Базовые классы конфигураций ===
+# === Base configuration classes ===
 
 class BaseConfig(BaseSettings):
     """
-    Базовый класс для всех конфигураций.
+    Base class for all configurations.
     """
     
     model_config = SettingsConfigDict(
@@ -42,9 +42,9 @@ class BaseConfig(BaseSettings):
 
 class LLMProvider(str, Enum):
     """
-    Поддерживаемые LLM-провайдеры.
-    
-    Все провайдеры используют OpenAI-совместимый API:
+    Supported LLM providers.
+
+    All providers use an OpenAI-compatible API:
     - ollama: http://localhost:11434/v1/chat/completions
     - lm_studio: http://localhost:1234/v1/chat/completions
     - openrouter: https://openrouter.ai/api/v1/chat/completions
@@ -56,15 +56,15 @@ class LLMProvider(str, Enum):
 
 class LLMConfig(BaseConfig):
     """
-    Универсальная конфигурация LLM-провайдера.
-    
+    Universal LLM provider configuration.
+
     Attributes:
-        provider: Провайдер (ollama / lm_studio / openrouter)
-        host: URL сервера (для локальных провайдеров)
-        api_key: API-ключ (для OpenRouter)
-        model: Название модели
-        num_ctx: Максимальное количество токенов контекста
-        temperature: Температура генерации (0.0-2.0)
+        provider: Provider (ollama / lm_studio / openrouter)
+        host: Server URL (for local providers)
+        api_key: API key (for OpenRouter)
+        model: Model name
+        num_ctx: Maximum number of context tokens
+        temperature: Generation temperature (0.0-2.0)
     """
     
     provider: LLMProvider = Field(
@@ -101,7 +101,7 @@ class LLMConfig(BaseConfig):
     @property
     def api_base_url(self) -> str:
         """
-        Получить базовый URL API для текущего провайдера.
+        Get the base API URL for the current provider.
         """
         if self.provider == LLMProvider.OPENROUTER:
             return "https://openrouter.ai/api/v1"
@@ -110,24 +110,24 @@ class LLMConfig(BaseConfig):
                 return "http://localhost:1234/v1"
             return f"{self.host}/v1"
         else:
-            # Ollama - без /v1
+            # Ollama - without /v1
             return self.host
     
     @property
     def requires_api_key(self) -> bool:
-        """Проверить, нужен ли API-ключ для провайдера."""
+        """Check whether the provider requires an API key."""
         return self.provider == LLMProvider.OPENROUTER
     
     @property
     def is_local(self) -> bool:
-        """Проверить, является ли провайдер локальным."""
+        """Check whether the provider is local."""
         return self.provider in (LLMProvider.OLLAMA, LLMProvider.LM_STUDIO)
     
     async def check_thinking_support(self) -> bool:
         """
-        Динамически проверить, поддерживает ли модель режим рассуждения.
-        
-        Делает запрос к Ollama API для получения информации о модели.
+        Dynamically check whether the model supports reasoning mode.
+
+        Queries the Ollama API for model information.
         """
         if self.provider != LLMProvider.OLLAMA:
             return False
@@ -153,13 +153,13 @@ class LLMConfig(BaseConfig):
     
     @property
     def supports_thinking(self) -> bool:
-        """Синхронная заглушка - используйте check_thinking_support() для async."""
+        """Sync stub - use check_thinking_support() for async."""
         return False
 
 
 class OllamaConfig(BaseConfig):
     """
-    Устаревшая конфигурация Ollama (для обратной совместимости).
+    Legacy Ollama configuration (for backward compatibility).
     """
     
     host: str = Field(default="http://localhost:11434")
@@ -171,7 +171,7 @@ class OllamaConfig(BaseConfig):
 
 
 class ChromaConfig(BaseConfig):
-    """Конфигурация ChromaDB."""
+    """ChromaDB configuration."""
     
     persist_dir: str = Field(
         default="./storage/chroma",
@@ -186,7 +186,7 @@ class ChromaConfig(BaseConfig):
 
 
 class MemoryConfig(BaseConfig):
-    """Конфигурация системы памяти."""
+    """Memory system configuration."""
     
     max_context_messages: int = Field(
         default=20,
@@ -211,18 +211,27 @@ class MemoryConfig(BaseConfig):
 
 
 class TTSConfig(BaseConfig):
-    """Конфигурация Text-to-Speech."""
+    """Text-to-Speech configuration."""
     
     enabled: bool = Field(default=False, description="Включить озвучку")
     model: str = Field(default="silero_v3", description="TTS модель")
     steps: int = Field(default=64, ge=16, le=128, description="Шаги генерации")
     temperature: float = Field(default=1.0, ge=0.0, le=2.0, description="Temperature TTS")
-    
+    debug_save: bool = Field(default=False, description="Сохранять отладочные WAV в debug_tts/")
+
     model_config = SettingsConfigDict(env_prefix="TTS_")
 
 
+class STTConfig(BaseConfig):
+    """Speech-to-Text configuration."""
+
+    model: str = Field(default="large-v3-turbo", description="Модель Whisper: алиас (tiny/base/small/medium/large/large-v3-turbo), 'owner/repo' или путь к папке")
+
+    model_config = SettingsConfigDict(env_prefix="STT_")
+
+
 class LogConfig(BaseConfig):
-    """Конфигурация логирования."""
+    """Logging configuration."""
     
     level: str = Field(default="INFO", description="Уровень логирования")
     
@@ -242,7 +251,7 @@ class LogConfig(BaseConfig):
 
 
 class GUIConfig(BaseConfig):
-    """Конфигурация GUI."""
+    """GUI configuration."""
     
     enabled: bool = Field(default=True, description="Включить GUI")
     framework: str = Field(default="customtkinter", description="GUI фреймворк")
@@ -255,7 +264,7 @@ class GUIConfig(BaseConfig):
 
 
 class ScreenConfig(BaseConfig):
-    """Конфигурация скриншотов."""
+    """Screenshot configuration."""
     
     enabled: bool = Field(default=True, description="Включить авто-скриншоты по триггерам")
     save_path: str = Field(default="./screenshots", description="Папка для сохранения скриншотов")
@@ -266,7 +275,7 @@ class ScreenConfig(BaseConfig):
 
 
 class GeneralConfig(BaseConfig):
-    """Общие настройки (язык интерфейса)."""
+    """General settings (interface language)."""
     
     language: str = Field(default="en", description="Язык интерфейса: en / ru")
     show_backend_console: bool = Field(default=False, description="Show external backend console window")
@@ -282,11 +291,11 @@ class GeneralConfig(BaseConfig):
     model_config = SettingsConfigDict(env_prefix="GENERAL_")
 
 
-# === Основная конфигурация ===
+# === Main configuration ===
 
 class Config(BaseSettings):
     """
-    Основная конфигурация приложения.
+    Main application configuration.
     """
     
     base_dir: Path = Field(
@@ -313,6 +322,10 @@ class Config(BaseSettings):
     tts: TTSConfig = Field(
         default_factory=TTSConfig,
         description="Настройки TTS",
+    )
+    stt: STTConfig = Field(
+        default_factory=STTConfig,
+        description="Настройки STT",
     )
     log: LogConfig = Field(
         default_factory=LogConfig,
@@ -350,26 +363,26 @@ class Config(BaseSettings):
         return logs_dir
 
 
-# === Глобальная функция получения конфигурации ===
+# === Global configuration getter ===
 
 @lru_cache()
 def get_config() -> Config:
     """
-    Получить глобальный объект конфигурации (кэшируется).
+    Get the global configuration object (cached).
     """
     return Config()
 
 
 def reload_config() -> Config:
-    """Перезагрузить конфигурацию (очистить кэш)."""
+    """Reload the configuration (clear the cache)."""
     get_config.cache_clear()
     return get_config()
 
 
-# === Утилита для настройки логирования ===
+# === Logging setup utility ===
 
 def setup_logging(config: Config | None = None) -> None:
-    """Настроить логирование на основе конфигурации."""
+    """Configure logging based on the configuration."""
     if config is None:
         config = get_config()
     
@@ -401,13 +414,13 @@ def save_config(
     show_backend_console: bool | None = None,
 ) -> None:
     """
-    Сохранить конфигурацию в .env файл.
+    Save the configuration to the .env file.
     """
     from pathlib import Path
     
     env_path = Path(__file__).parent / ".env"
     
-    # Читаем текущий .env
+    # Read the current .env
     env_vars = {}
     if env_path.exists():
         with open(env_path, "r", encoding="utf-8") as f:
@@ -417,11 +430,11 @@ def save_config(
                     key, value = line.split("=", 1)
                     env_vars[key] = value
     
-    # Обновляем значения
+    # Update the values
     if provider is not None:
         env_vars["LLM_PROVIDER"] = provider
     
-    # Модель сохраняем только если не пустая
+    # Save the model only if it is not empty
     if model is not None and model != "":
         if provider == "ollama":
             env_vars["OLLAMA_MODEL"] = model
@@ -468,7 +481,7 @@ def save_config(
     if show_backend_console is not None:
         env_vars["GENERAL_SHOW_BACKEND_CONSOLE"] = "true" if show_backend_console else "false"
     
-    # Записываем обратно
+    # Write back
     with open(env_path, "w", encoding="utf-8") as f:
         for key, value in env_vars.items():
             f.write(f"{key}={value}\n")

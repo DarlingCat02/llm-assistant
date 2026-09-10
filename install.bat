@@ -22,7 +22,7 @@ echo  [2] Install Python dependencies
 echo  [3] Download Whisper Large V3 Turbo
 echo  [4] Download OmniVoice
 echo  [5] Build Tauri app (exe)
-echo  [6] Setup .env from template
+echo  [6] Setup .env and apps.json
 echo  [7] Install FFmpeg
 echo  [8] Full installation (all steps)
 echo  [9] Launch application
@@ -175,6 +175,17 @@ if !errorlevel! neq 0 (
 echo    [+] Dependencies installed
 echo    [%date% %time%] Python deps installed >> "%LOG_FILE%"
 
+echo  [4/4] Checking CUDA support...
+venv\Scripts\python -c "import sys; import torch; sys.exit(0 if torch.cuda.is_available() else 1)" >nul 2>&1
+if !errorlevel! equ 0 (
+    echo    [+] CUDA available - GPU acceleration enabled
+    echo    [%date% %time%] CUDA available >> "%LOG_FILE%"
+) else (
+    echo    [!] WARNING: CUDA not available! STT will be slow, TTS may fail.
+    echo    [!] For NVIDIA GPU install: venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+    echo    [%date% %time%] CUDA NOT available >> "%LOG_FILE%"
+)
+
 echo.
 echo  Press any key to return to menu...
 pause >nul
@@ -187,7 +198,7 @@ echo   Download Whisper Large V3 Turbo
 echo =============================================
 echo.
 echo  Model will be downloaded to:
-echo    %SCRIPT_DIR%\llm-assistant-tauri\src-tauri\target\release\openai_whisper-large-v3-turbo
+echo    %SCRIPT_DIR%\models\whisper-large-v3-turbo
 echo.
 
 if not exist "venv\Scripts\activate.bat" (
@@ -205,7 +216,7 @@ echo  [2/2] Downloading model...
 echo    This may take 5-15 minutes (size ~3 GB)
 echo.
 
-set "WHISPER_DIR=%SCRIPT_DIR%\llm-assistant-tauri\src-tauri\target\release\openai_whisper-large-v3-turbo"
+set "WHISPER_DIR=%SCRIPT_DIR%\models\whisper-large-v3-turbo"
 if not exist "%WHISPER_DIR%" mkdir "%WHISPER_DIR%"
 
 python -c ^
@@ -236,7 +247,7 @@ echo   Download OmniVoice
 echo =============================================
 echo.
 echo  Model will be downloaded to:
-echo    %SCRIPT_DIR%\llm-assistant-tauri\src-tauri\target\release\OmniVoice
+echo    %SCRIPT_DIR%\models\omnivoice
 echo.
 
 if not exist "venv\Scripts\activate.bat" (
@@ -254,7 +265,7 @@ echo  [2/2] Downloading model...
 echo    This may take 5-10 minutes (size ~2 GB)
 echo.
 
-set "OMNI_DIR=%SCRIPT_DIR%\llm-assistant-tauri\src-tauri\target\release\OmniVoice"
+set "OMNI_DIR=%SCRIPT_DIR%\models\omnivoice"
 if not exist "%OMNI_DIR%" mkdir "%OMNI_DIR%"
 
 python -c ^
@@ -271,8 +282,12 @@ if !errorlevel! neq 0 (
     goto MENU
 )
 
-echo  [+] OmniVoice downloaded. Install the package:
-echo      pip install omnivoice
+echo  [+] OmniVoice downloaded. Installing the Python package...
+if exist "venv\Scripts\python.exe" (
+    venv\Scripts\python -m pip install omnivoice
+) else (
+    python -m pip install omnivoice
+)
 echo    [%date% %time%] OmniVoice downloaded >> "%LOG_FILE%"
 echo.
 echo  Press any key to return to menu...
@@ -343,7 +358,7 @@ goto MENU
 :SETUP_ENV
 cls
 echo =============================================
-echo   Setup .env from Template
+echo   Setup .env and apps.json
 echo =============================================
 echo.
 
@@ -367,6 +382,18 @@ if not exist ".env" (
     )
 ) else (
     echo  [+] .env already exists
+)
+echo.
+if not exist "apps.json" (
+    if exist "apps.json.example" (
+        copy "apps.json.example" "apps.json" >nul
+        echo  [+] apps.json created from apps.json.example
+        echo  [!] Edit apps.json to add your applications
+    ) else (
+        echo  [!] apps.json.example not found!
+    )
+) else (
+    echo  [+] apps.json already exists
 )
 echo.
 echo  Press any key to return to menu...
@@ -517,7 +544,7 @@ echo.
 echo  === [4/6] Download Whisper Large V3 Turbo ===
 echo.
 pip install huggingface_hub >nul 2>&1
-set "WHISPER_DIR=%SCRIPT_DIR%\llm-assistant-tauri\src-tauri\target\release\openai_whisper-large-v3-turbo"
+set "WHISPER_DIR=%SCRIPT_DIR%\models\whisper-large-v3-turbo"
 if not exist "%WHISPER_DIR%" mkdir "%WHISPER_DIR%"
 python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir=r'%WHISPER_DIR:\=\\%'); print('Done')"
 if !errorlevel! equ 0 (
@@ -530,7 +557,7 @@ echo    [%date% %time%] Full: Whisper done >> "%LOG_FILE%"
 echo.
 echo  === [5/6] Download OmniVoice ===
 echo.
-set "OMNI_DIR=%SCRIPT_DIR%\llm-assistant-tauri\src-tauri\target\release\OmniVoice"
+set "OMNI_DIR=%SCRIPT_DIR%\models\omnivoice"
 if not exist "%OMNI_DIR%" mkdir "%OMNI_DIR%"
 python -c "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice', local_dir=r'%OMNI_DIR:\=\\%'); print('Done')"
 if !errorlevel! equ 0 (
@@ -570,8 +597,8 @@ echo.
 echo  exe file: llm-assistant-tauri\src-tauri\target\release\llm-assistant-tauri.exe
 echo  Don't forget:
 echo    - Edit .env (LLM provider, model)
+echo    - Edit apps.json (your applications)
 echo    - Start Ollama or LM Studio
-echo    - Install: pip install omnivoice (for TTS)
 echo.
 pause
 goto MENU

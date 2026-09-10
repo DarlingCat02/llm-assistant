@@ -1,15 +1,14 @@
 """
-API роуты для FastAPI приложения.
+API routes for the FastAPI application.
 
-Модуль содержит все API эндпоинты, разделённые по категориям:
-- Chat: управление чатами
-- Memory: управление памятью (ChromaDB)
-- Voice: голосовой ввод (будущее)
+This module contains all API endpoints, grouped by category:
+- Chat: chat management
+- Memory: memory management (ChromaDB)
 
-Архитектурные решения:
-1. API-first: эндпоинты готовы к вызовам из любых клиентов
-2. WebSocket для real-time событий
-3. Подготовка к масштабированию (роуты разделены по тегам)
+Architecture decisions:
+1. API-first: endpoints are ready to be called from any client
+2. WebSocket for real-time events
+3. Prepared for scaling (routes are split by tags)
 """
 
 import logging
@@ -53,7 +52,7 @@ def get_db():
     return _db_getter()
 
 def set_db_getter(getter):
-    """Установить getter для БД."""
+    """Set the getter for the DB."""
     global _db_getter
     _db_getter = getter
 
@@ -61,15 +60,15 @@ def set_db_getter(getter):
 logger = logging.getLogger(__name__)
 
 
-# === Pydantic модели для API ===
+# === Pydantic models for API ===
 
 class ChatCreate(BaseModel):
-    """Модель создания чата."""
+    """Chat creation model."""
     title: str = Field(default="Новый чат", min_length=1, max_length=100)
 
 
 class ChatResponse(BaseModel):
-    """Модель ответа чата."""
+    """Chat response model."""
     id: int
     title: str
     created_at: datetime
@@ -79,13 +78,13 @@ class ChatResponse(BaseModel):
 
 
 class MessageCreate(BaseModel):
-    """Модель создания сообщения."""
+    """Message creation model."""
     content: str = Field(..., min_length=1, max_length=10000)
     role: str = Field(..., pattern="^(user|assistant)$")
 
 
 class MessageResponse(BaseModel):
-    """Модель ответа сообщения."""
+    """Message response model."""
     id: int
     chat_id: int
     role: str
@@ -96,7 +95,7 @@ class MessageResponse(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    """Модель сообщения для чата (API запрос)."""
+    """Message model for chat (API request)."""
     message: str = Field(..., min_length=1, max_length=10000)
     chat_id: Optional[int] = None
     thinking: bool = Field(default=False, description="Включить режим рассуждения")
@@ -105,7 +104,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatResponseMessage(BaseModel):
-    """Модель ответа на сообщение чата."""
+    """Response model for a chat message."""
     response: str
     chat_id: int
     message_id: int
@@ -114,7 +113,7 @@ class ChatResponseMessage(BaseModel):
 
 
 class MemoryEntry(BaseModel):
-    """Модель записи памяти."""
+    """Memory entry model."""
     id: str
     text: str
     score: float = 0.0
@@ -122,18 +121,18 @@ class MemoryEntry(BaseModel):
 
 
 class MemorySearchRequest(BaseModel):
-    """Модель запроса для поиска в памяти."""
+    """Request model for searching memory."""
     query: str = Field(..., min_length=1, max_length=10000)
     limit: int = Field(default=10, ge=1, le=100)
 
 
 class MemoryAddRequest(BaseModel):
-    """Модель запроса для добавления записи в память."""
+    """Request model for adding an entry to memory."""
     text: str = Field(..., min_length=1, max_length=10000)
     entry_type: str = Field(default="user_fact", pattern="^[a-z_]+$")
 
 
-# === Роуты для памяти ===
+# === Memory routes ===
 
 memory_router = APIRouter(prefix="/api/memory", tags=["Memory"])
 
@@ -143,7 +142,7 @@ async def get_memory_entries(
     limit: int = 50,
 ):
     """
-    Получить все записи из памяти.
+    Get all entries from memory.
     """
     from backend.main import get_assistant
     assistant = get_assistant()
@@ -151,7 +150,7 @@ async def get_memory_entries(
     if not assistant or not assistant._memory:
         return {"entries": [], "total": 0}
 
-    # Получаем все записи через поиск с пустым запросом
+    # Get all entries via search with an empty query
     entries = await assistant._memory.search("", limit=limit, min_similarity=0.0)
 
     return {
@@ -173,7 +172,7 @@ async def add_memory_entry(
     request: MemoryAddRequest,
 ):
     """
-    Добавить запись в память вручную.
+    Add an entry to memory manually.
     """
     from backend.main import get_assistant
     assistant = get_assistant()
@@ -209,7 +208,7 @@ async def search_memory(
     request: MemorySearchRequest,
 ):
     """
-    Поиск в памяти по запросу.
+    Search memory by query.
     """
     from backend.main import get_assistant
     assistant = get_assistant()
@@ -241,7 +240,7 @@ async def delete_memory_entry(
     entry_id: str,
 ):
     """
-    Удалить запись из памяти.
+    Delete an entry from memory.
     """
     from backend.main import get_assistant
     assistant = get_assistant()
@@ -269,10 +268,10 @@ async def delete_memory_entry(
     return {"status": "ok", "message": t("api.deleted", lang=lang, id=entry_id)}
 
 
-# === WebSocket для real-time событий ===
+# === WebSocket for real-time events ===
 
 class ConnectionManager:
-    """Менеджер WebSocket подключений."""
+    """WebSocket connection manager."""
 
     def __init__(self):
         self._connections: list[WebSocket] = []
@@ -299,10 +298,10 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict):
         """
-        Отправить сообщение всем подключённым клиентам.
+        Send a message to all connected clients.
 
         Args:
-            message: Словарь для отправки (будет сериализован в JSON).
+            message: Dict to send (will be serialized to JSON).
         """
         disconnected = []
         for connection in self._connections:
@@ -311,7 +310,7 @@ class ConnectionManager:
             except Exception:
                 disconnected.append(connection)
         
-        # Удаляем отключённых клиентов
+        # Remove disconnected clients
         for conn in disconnected:
             self.disconnect(conn)
 
@@ -331,5 +330,5 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# WebSocket роут перенесён в main.py для обхода проверки origin
+# WebSocket route moved to main.py to bypass origin check
 

@@ -1,8 +1,8 @@
 """
-Memory Manager - Менеджер долговременной памяти на основе ChromaDB.
+Memory Manager - Long-term memory manager based on ChromaDB.
 """
 
-# Отключаем HuggingFace онлайн-запросы ДО всех импортов
+# Disable HuggingFace online requests BEFORE all imports
 import os
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MemoryEntry:
     """
-    Запись в памяти.
-    
+    Memory entry.
+
     Attributes:
-        id: Уникальный идентификатор (хеш контента)
-        text: Текст записи
-        metadata: Дополнительные данные (тип, timestamp, etc.)
-        score: Оценка релевантности (заполняется при поиске)
+        id: Unique identifier (content hash)
+        text: Entry text
+        metadata: Additional data (type, timestamp, etc.)
+        score: Relevance score (filled in during search)
     """
     id: str
     text: str
@@ -44,78 +44,78 @@ class MemoryEntry:
 
 class EmbeddingModel(Protocol):
     """
-    Протокол для модели эмбеддингов.
-    
-    Определяет минимальный интерфейс для работы с эмбеддингами.
-    Позволяет заменить sentence-transformers на любую совместимую библиотеку.
+    Protocol for an embedding model.
+
+    Defines the minimal interface for working with embeddings.
+    Allows replacing sentence-transformers with any compatible library.
     """
-    
+
     def encode(self, texts: list[str], **kwargs) -> list[list[float]]:
         """
-        Создать эмбеддинги для текстов.
-        
+        Create embeddings for texts.
+
         Args:
-            texts: Список текстов для кодирования.
-            **kwargs: Дополнительные параметры.
-        
+            texts: List of texts to encode.
+            **kwargs: Additional parameters.
+
         Returns:
-            list[list[float]]: Список векторов эмбеддингов.
+            list[list[float]]: List of embedding vectors.
         """
         ...
 
 
 class IStorage(ABC):
     """
-    Абстрактный интерфейс хранилища векторов.
-    
-    Позволяет заменить ChromaDB на другую векторную БД
-    (FAISS, Qdrant, Weaviate) без изменения кода MemoryManager.
+    Abstract vector storage interface.
+
+    Allows replacing ChromaDB with another vector DB
+    (FAISS, Qdrant, Weaviate) without changing MemoryManager code.
     """
-    
+
     @abstractmethod
     async def add(self, entry: MemoryEntry) -> None:
-        """Добавить запись в хранилище."""
+        """Add an entry to the storage."""
         pass
     
     @abstractmethod
     async def search(self, query: str, limit: int) -> list[MemoryEntry]:
         """
-        Найти похожие записи.
-        
+        Find similar entries.
+
         Args:
-            query: Текст запроса.
-            limit: Максимальное количество результатов.
-        
+            query: Query text.
+            limit: Maximum number of results.
+
         Returns:
-            list[MemoryEntry]: Список найденных записей.
+            list[MemoryEntry]: List of found entries.
         """
         pass
     
     @abstractmethod
     async def delete(self, entry_id: str) -> bool:
         """
-        Удалить запись по ID.
-        
+        Delete an entry by ID.
+
         Args:
-            entry_id: Идентификатор записи.
-        
+            entry_id: Entry identifier.
+
         Returns:
-            bool: True если запись удалена.
+            bool: True if the entry was deleted.
         """
         pass
     
     @abstractmethod
     async def count(self) -> int:
-        """Получить количество записей в хранилище."""
+        """Get the number of entries in the storage."""
         pass
 
 
 class ChromaStorage(IStorage):
     """
-    Реализация хранилища на основе ChromaDB.
-    
-    Использует persistent mode для сохранения данных на диск.
-    Автоматически создаёт директорию storage при необходимости.
+    ChromaDB-based storage implementation.
+
+    Uses persistent mode to save data to disk.
+    Automatically creates the storage directory if needed.
     """
     
     def __init__(
@@ -124,11 +124,11 @@ class ChromaStorage(IStorage):
         embedding_model: EmbeddingModel,
     ):
         """
-        Инициализировать ChromaDB хранилище.
-        
+        Initialize the ChromaDB storage.
+
         Args:
-            config: Конфигурация ChromaDB.
-            embedding_model: Модель для создания эмбеддингов.
+            config: ChromaDB configuration.
+            embedding_model: Model for creating embeddings.
         """
         self._config = config
         self._embedding_model = embedding_model
@@ -137,31 +137,31 @@ class ChromaStorage(IStorage):
     
     async def initialize(self) -> None:
         """
-        Инициализировать ChromaDB клиент и коллекцию.
-        
-        Создаёт persistent хранилище в указанной директории.
+        Initialize the ChromaDB client and collection.
+
+        Creates persistent storage in the specified directory.
         """
-        # Отключаем онлайн-проверки HuggingFace (модель загружается из кэша)
+        # Disable HuggingFace online checks (model is loaded from cache)
         import os
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
         
-        # Создаём директорию если не существует
+        # Create the directory if it does not exist
         persist_path = Path(self._config.persist_dir)
         persist_path.mkdir(parents=True, exist_ok=True)
         
-        # Инициализируем клиент с persistent настройками
+        # Initialize the client with persistent settings
         self._client = chromadb.PersistentClient(
             path=str(persist_path),
             settings=ChromaSettings(
-                anonymized_telemetry=False,  # Отключаем телеметрию
+                anonymized_telemetry=False,  # Disable telemetry
             ),
         )
         
-        # Получаем или создаём коллекцию
+        # Get or create the collection
         self._collection = self._client.get_or_create_collection(
             name=self._config.collection_name,
-            metadata={"hnsw:space": "cosine"},  # Косинусное расстояние
+            metadata={"hnsw:space": "cosine"},  # Cosine distance
         )
         
         logger.info(
@@ -171,21 +171,21 @@ class ChromaStorage(IStorage):
     
     async def add(self, entry: MemoryEntry) -> None:
         """
-        Добавить запись в хранилище.
-        
-        Автоматически создаёт эмбеддинг для текста.
-        Если запись с таким ID существует, она обновляется.
-        
+        Add an entry to the storage.
+
+        Automatically creates an embedding for the text.
+        If an entry with the same ID exists, it is updated.
+
         Args:
-            entry: Запись для добавления.
+            entry: Entry to add.
         """
         if not self._collection:
             raise RuntimeError("ChromaDB не инициализирован")
         
-        # Создаём эмбеддинг
+        # Create an embedding
         embedding = self._create_embedding(entry.text)
         
-        # Добавляем в коллекцию
+        # Add to the collection
         self._collection.upsert(
             ids=[entry.id],
             embeddings=[embedding],
@@ -202,37 +202,37 @@ class ChromaStorage(IStorage):
         min_similarity: float = 0.0,
     ) -> list[MemoryEntry]:
         """
-        Найти похожие записи по семантическому запросу.
-        
-        Использует косинусное расстояние для поиска ближайших векторов.
-        
+        Find similar entries for a semantic query.
+
+        Uses cosine distance to find the nearest vectors.
+
         Args:
-            query: Текст запроса.
-            limit: Максимальное количество результатов.
-            min_similarity: Минимальный порог схожести.
-        
+            query: Query text.
+            limit: Maximum number of results.
+            min_similarity: Minimum similarity threshold.
+
         Returns:
-            list[MemoryEntry]: Отсортированные по релевантности записи.
+            list[MemoryEntry]: Entries sorted by relevance.
         """
         if not self._collection:
             raise RuntimeError("ChromaDB не инициализирован")
         
-        # Создаём эмбеддинг для запроса
+        # Create an embedding for the query
         query_embedding = self._create_embedding(query)
         
-        # Ищем похожие
+        # Find similar entries
         results = self._collection.query(
             query_embeddings=[query_embedding],
             n_results=limit,
             include=["documents", "metadatas", "distances"],
         )
         
-        # Преобразуем в MemoryEntry
+        # Convert to MemoryEntry
         entries = []
         if results["ids"] and results["ids"][0]:
             for i, doc_id in enumerate(results["ids"][0]):
                 distance = results["distances"][0][i] if results["distances"] else 0.0
-                # Конвертируем расстояние в схожесть (cosine distance -> similarity)
+                # Convert distance to similarity (cosine distance -> similarity)
                 similarity = 1.0 - distance
                 
                 if similarity >= min_similarity:
@@ -249,7 +249,7 @@ class ChromaStorage(IStorage):
         return entries
     
     async def delete(self, entry_id: str) -> bool:
-        """Удалить запись по ID."""
+        """Delete an entry by ID."""
         if not self._collection:
             raise RuntimeError("ChromaDB не инициализирован")
         
@@ -261,7 +261,7 @@ class ChromaStorage(IStorage):
             return False
     
     async def count(self) -> int:
-        """Получить количество записей."""
+        """Get the number of entries."""
         if not self._collection:
             raise RuntimeError("ChromaDB не инициализирован")
         
@@ -269,13 +269,13 @@ class ChromaStorage(IStorage):
     
     def _create_embedding(self, text: str) -> list[float]:
         """
-        Создать эмбеддинг для текста.
-        
+        Create an embedding for a text.
+
         Args:
-            text: Текст для кодирования.
-        
+            text: Text to encode.
+
         Returns:
-            list[float]: Вектор эмбеддинга.
+            list[float]: Embedding vector.
         """
         embeddings = self._embedding_model.encode(
             [text],
@@ -287,25 +287,25 @@ class ChromaStorage(IStorage):
 
 class MemoryManager:
     """
-    Менеджер долговременной памяти.
-    
-    Основной интерфейс для работы с памятью ассистента.
-    Автоматически извлекает релевантный контекст перед генерацией ответа.
-    
-    Особенности:
-    - Дедупликация записей по хешу контента
-    - Фильтрация по порогу схожести
-    - Асинхронные операции для неблокирующего доступа
-    
-    Пример использования:
+    Long-term memory manager.
+
+    The main interface for working with the assistant memory.
+    Automatically retrieves relevant context before generating a response.
+
+    Features:
+    - Record deduplication by content hash
+    - Similarity threshold filtering
+    - Async operations for non-blocking access
+
+    Example usage:
         memory = MemoryManager()
         await memory.initialize()
-        
-        # Сохранить диалог
-        await memory.save_dialog("Пользователь спросил про погоду", "assistant")
-        
-        # Найти контекст для запроса
-        contexts = await memory.search_context("Какая сегодня погода?")
+
+        # Save a dialog
+        await memory.save_dialog("User asked about the weather", "assistant")
+
+        # Find context for a query
+        contexts = await memory.search_context("What is the weather today?")
     """
     
     def __init__(
@@ -314,11 +314,11 @@ class MemoryManager:
         memory_config: MemoryConfig | None = None,
     ):
         """
-        Инициализировать менеджер памяти.
-        
+        Initialize the memory manager.
+
         Args:
-            chroma_config: Конфигурация ChromaDB.
-            memory_config: Конфигурация памяти.
+            chroma_config: ChromaDB configuration.
+            memory_config: Memory configuration.
         """
         self._chroma_config = chroma_config or get_config().chroma
         self._memory_config = memory_config or get_config().memory
@@ -327,29 +327,29 @@ class MemoryManager:
         self._embedding_model: EmbeddingModel | None = None
         self._initialized = False
         
-        # Кэш для избежания дубликатов
+        # Cache for avoiding duplicates
         self._seen_hashes: set[str] = set()
     
     async def initialize(self) -> None:
         """
-        Инициализировать менеджер памяти.
+        Initialize the memory manager.
 
-        Загружает модель эмбеддингов и инициализирует хранилище.
-        Модель загружается в CPU память (не VRAM) для экономии GPU.
-        
-        Важно: загружает все существующие ID из ChromaDB в _seen_hashes
-        для работы дедупликации между сессиями.
+        Loads the embedding model and initializes the storage.
+        The model is loaded into CPU memory (not VRAM) to save GPU.
+
+        Important: loads all existing IDs from ChromaDB into _seen_hashes
+        so deduplication works across sessions.
         """
         if self._initialized:
             return
 
-        # Загружаем модель эмбеддингов
-        # all-MiniLM-L6-v2: легковесная модель (80MB), работает на CPU
+        # Load the embedding model
+        # all-MiniLM-L6-v2: lightweight model (80MB), runs on CPU
         
         logger.info("Loading embedding model...")
         from sentence_transformers import SentenceTransformer
         
-        # local_files_only=True — самый надёжный способ отключить запросы к HuggingFace
+        # local_files_only=True — the most reliable way to disable HuggingFace requests
         self._embedding_model = SentenceTransformer(
             "all-MiniLM-L6-v2",
             device="cpu",
@@ -357,15 +357,15 @@ class MemoryManager:
         )
         logger.info("Embedding model loaded")
 
-        # Инициализируем хранилище
+        # Initialize the storage
         self._storage = ChromaStorage(
             config=self._chroma_config,
             embedding_model=self._embedding_model,
         )
         await self._storage.initialize()
 
-        # Загружаем существующие ID для дедупликации между сессиями
-        # Это позволяет не дублировать записи при перезапуске приложения
+        # Load existing IDs for deduplication across sessions
+        # This avoids duplicating records on application restart
         await self._load_existing_hashes()
 
         self._initialized = True
@@ -374,21 +374,21 @@ class MemoryManager:
 
     async def _load_existing_hashes(self) -> None:
         """
-        Загрузить все существующие ID из ChromaDB в _seen_hashes.
-        
-        Вызывается при инициализации для работы дедупликации
-        между сессиями приложения.
+        Load all existing IDs from ChromaDB into _seen_hashes.
+
+        Called on initialization so deduplication works
+        across application sessions.
         """
         if not isinstance(self._storage, ChromaStorage) or not self._storage._collection:
             return
         
-        # Получаем все ID из коллекции
-        # ChromaDB позволяет получить все ID через query с пустым эмбеддингом
+        # Get all IDs from the collection
+        # ChromaDB returns IDs directly via get(), no embedding needed
         try:
-            # Получаем все записи (без эмбеддингов и документов, только ID)
+            # Get all records (without embeddings and documents, IDs only)
             all_ids = self._storage._collection.get()["ids"]
             
-            # Добавляем все ID в множество для дедупликации
+            # Add all IDs to the set for deduplication
             for entry_id in all_ids:
                 self._seen_hashes.add(entry_id)
             
@@ -398,9 +398,9 @@ class MemoryManager:
     
     async def close(self) -> None:
         """
-        Освободить ресурсы.
-        
-        Вызывается при завершении работы приложения.
+        Release resources.
+
+        Called when the application shuts down.
         """
         self._initialized = False
         self._storage = None
@@ -409,15 +409,15 @@ class MemoryManager:
     
     def _generate_id(self, text: str) -> str:
         """
-        Сгенерировать уникальный ID для записи.
-        
-        Использует SHA-256 хеш контента для дедупликации.
-        
+        Generate a unique ID for a record.
+
+        Uses SHA-256 content hash for deduplication.
+
         Args:
-            text: Текст записи.
-        
+            text: Record text.
+
         Returns:
-            str: Уникальный идентификатор.
+            str: Unique identifier.
         """
         return hashlib.sha256(text.encode()).hexdigest()[:16]
     
@@ -428,28 +428,28 @@ class MemoryManager:
         metadata: dict | None = None,
     ) -> bool:
         """
-        Сохранить запись в памяти.
-        
-        Автоматически пропускает дубликаты.
-        
+        Save a record to memory.
+
+        Automatically skips duplicates.
+
         Args:
-            text: Текст для сохранения.
-            entry_type: Тип записи (general, dialog, fact, etc.)
-            metadata: Дополнительные метаданные.
-        
+            text: Text to save.
+            entry_type: Entry type (general, dialog, fact, etc.)
+            metadata: Additional metadata.
+
         Returns:
-            bool: True если запись сохранена, False если дубликат.
+            bool: True if the record was saved, False if duplicate.
         """
         if not self._initialized:
             raise RuntimeError("Memory Manager не инициализирован")
         
-        # Проверяем на дубликаты
+        # Check for duplicates
         entry_hash = self._generate_id(text)
         if entry_hash in self._seen_hashes:
             logger.debug(f"Duplicate memory skipped: {entry_hash}")
             return False
         
-        # Создаём запись
+        # Create the entry
         entry = MemoryEntry(
             id=entry_hash,
             text=text,
@@ -459,7 +459,7 @@ class MemoryManager:
             },
         )
         
-        # Сохраняем
+        # Save
         await self._storage.add(entry)
         self._seen_hashes.add(entry_hash)
         
@@ -472,18 +472,18 @@ class MemoryManager:
         assistant_response: str,
     ) -> bool:
         """
-        Сохранить диалог в памяти.
-        
-        Сохраняет пару вопрос-ответ как единый контекст.
-        
+        Save a dialog to memory.
+
+        Saves a question-answer pair as a single context.
+
         Args:
-            user_message: Сообщение пользователя.
-            assistant_response: Ответ ассистента.
-        
+            user_message: User message.
+            assistant_response: Assistant response.
+
         Returns:
-            bool: True если сохранено.
+            bool: True if saved.
         """
-        # Формируем текст диалога
+        # Build the dialog text
         dialog_text = f"User: {user_message}\nAssistant: {assistant_response}"
         
         return await self.save(
@@ -497,16 +497,16 @@ class MemoryManager:
     
     async def save_fact(self, fact: str, category: str = "general") -> bool:
         """
-        Сохранить факт в памяти.
-        
-        Для извлечения фактов можно использовать Function Calling.
-        
+        Save a fact to memory.
+
+        Function Calling can be used for fact extraction.
+
         Args:
-            fact: Текст факта.
-            category: Категория факта.
-        
+            fact: Fact text.
+            category: Fact category.
+
         Returns:
-            bool: True если сохранено.
+            bool: True if saved.
         """
         return await self.save(
             text=fact,
@@ -521,15 +521,15 @@ class MemoryManager:
         min_similarity: float | None = None,
     ) -> list[MemoryEntry]:
         """
-        Найти похожие записи в памяти.
-        
+        Find similar records in memory.
+
         Args:
-            query: Текст запроса для поиска.
-            limit: Максимальное количество результатов.
-            min_similarity: Минимальный порог схожести.
-        
+            query: Query text for search.
+            limit: Maximum number of results.
+            min_similarity: Minimum similarity threshold.
+
         Returns:
-            list[MemoryEntry]: Найденные записи, отсортированные по релевантности.
+            list[MemoryEntry]: Found records sorted by relevance.
         """
         if not self._initialized:
             raise RuntimeError("Memory Manager не инициализирован")
@@ -545,26 +545,26 @@ class MemoryManager:
     
     async def search_context(self, query: str) -> list[str]:
         """
-        Найти контекст для запроса.
+        Find context for a query.
 
-        Возвращает только тексты записей для включения в промпт LLM.
-        Используется для RAG (Retrieval Augmented Generation).
+        Returns only record texts for inclusion in the LLM prompt.
+        Used for RAG (Retrieval Augmented Generation).
 
         Args:
-            query: Текст запроса для поиска релевантного контекста.
+            query: Query text for finding relevant context.
 
         Returns:
-            list[str]: Список текстов контекста для добавления в промпт.
+            list[str]: List of context texts to add to the prompt.
         """
         entries = await self.search(query)
         return [entry.text for entry in entries]
     
     async def get_stats(self) -> dict:
         """
-        Получить статистику памяти.
-        
+        Get memory statistics.
+
         Returns:
-            dict: Статистика (количество записей, типы, etc.)
+            dict: Statistics (record count, types, etc.)
         """
         if not self._initialized:
             raise RuntimeError("Memory Manager не инициализирован")
@@ -578,14 +578,14 @@ class MemoryManager:
     
     async def clear(self) -> None:
         """
-        Очистить всю память.
-        
-        Внимание: необратимая операция!
+        Clear all memory.
+
+        Warning: irreversible operation!
         """
         if not self._initialized:
             raise RuntimeError("Memory Manager не инициализирован")
         
-        # Удаляем все записи через получение всех ID
+        # Delete all records by fetching all IDs
         if self._storage._collection:
             all_ids = self._storage._collection.get()["ids"]
             if all_ids:

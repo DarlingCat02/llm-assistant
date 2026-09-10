@@ -32,6 +32,7 @@ Local AI assistant with voice input/output, web search, **Vision-Language (VL) c
 - Python 3.11+
 - Ollama or LM Studio (for LLM)
 - GPU with 8GB+ VRAM (for OmniVoice + Whisper + VL)
+- Node.js 18+ and Rust (only to build the exe; easiest via `install.bat` option 8)
 
 **For VL capabilities (recommended models in LM Studio):**
 - `qwen2.5-vl-3b-instruct` — optimal for 8-12GB VRAM
@@ -94,21 +95,27 @@ Download ready builds from https://github.com/DarlingCat02/llm-assistant/release
 
 ### Option 2: Build from source
 
+Easiest on Windows: run `install.bat` and choose option [8] (full installation). Manual steps below:
+
 #### 1. Download models
 
 ```bash
 # Whisper (STT)
-python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir='llm-assistant-tauri/src-tauri/target/release/openai_whisper-large-v3-turbo')"
+python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir='models/whisper-large-v3-turbo')"
 
 # OmniVoice (TTS)
-python -c "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice', local_dir='llm-assistant-tauri/src-tauri/target/release/OmniVoice')"
+python -c "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice', local_dir='models/omnivoice')"
 ```
 
 #### 2. Install dependencies
 
 ```bash
+python -m venv venv
+venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+The app uses the `venv` Python automatically when it exists (both CLI and Tauri backend), falling back to system Python.
 
 #### 3. Build Tauri app
 
@@ -293,20 +300,37 @@ SCREENSHOT_TRIGGERS=screen,screenshot,look at screen,show screen,whats on screen
 
 Whisper transcribes only in Russian.
 
+### Model selection
+
+Set `STT_MODEL` in `.env`: an alias, a Hugging Face `owner/repo` id, or a local folder path. Missing models are downloaded on first use into `models/`.
+
+| Alias | Model | VRAM (approx) |
+|---|---|---|
+| `tiny` | `openai/whisper-tiny` | ~1 GB |
+| `base` | `openai/whisper-base` | ~1 GB |
+| `small` | `openai/whisper-small` | ~2 GB |
+| `medium` | `openai/whisper-medium` | ~5 GB |
+| `large` | `openai/whisper-large-v3` | ~10 GB |
+| `large-v3-turbo` (default) | `openai/whisper-large-v3-turbo` | ~4 GB |
+
 ### Hotkeys
 
-| Action | Key |
+| Action | Key (default) |
 |----------|---------|
-| Voice input | `Ctrl+Num0` |
-| Stop recording | `Ctrl+Num0` again or 2 sec silence |
+| Voice input | `Ctrl+Shift+V` or `Ctrl+Num0` |
+| Live mode | `Ctrl+Shift+L` |
+| Stop recording | Same voice key again or 2 sec silence |
 
 After stopping — 1 second pause, then text is sent to AI.
 
 ### How to change hotkeys
 
-File: `llm-assistant-tauri/src-tauri/src/lib.rs`
-```rust
-let voice_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Numpad0);
+Set in `.env` (applied on app restart, format `Ctrl+Shift+V`, `Alt+F9`, `F12`, ...):
+
+```env
+HOTKEY_VOICE=Ctrl+Shift+V
+HOTKEY_VOICE_NUM=Ctrl+Num0
+HOTKEY_LIVE=Ctrl+Shift+L
 ```
 
 ## Voice output (TTS)
@@ -347,6 +371,15 @@ MEMORY_SIMILARITY_THRESHOLD=0.3
 TTS_ENABLED=false
 TTS_STEPS=64
 TTS_TEMPERATURE=1.0
+TTS_DEBUG_SAVE=false       # save debug WAV copies to debug_tts/
+
+# === STT ===
+STT_MODEL=large-v3-turbo   # tiny / base / small / medium / large / large-v3-turbo, 'owner/repo' or folder path
+
+# === Hotkeys (global, applied on restart) ===
+HOTKEY_VOICE=Ctrl+Shift+V
+HOTKEY_VOICE_NUM=Ctrl+Num0
+HOTKEY_LIVE=Ctrl+Shift+L
 
 # === Other ===
 LOG_LEVEL=INFO
@@ -380,7 +413,8 @@ local_assistant/
 ├── backend/
 │   ├── main.py             # FastAPI backend
 │   ├── api.py              # API models
-│   └── database.py         # SQLite chat DB
+│   ├── database.py         # SQLite chat DB
+│   └── background_tasks.py # Background tasks (Ollama keep-alive)
 ├── src/
 │   ├── i18n.py             # Backend i18n
 │   ├── main.py             # Assistant logic
@@ -403,11 +437,12 @@ local_assistant/
 │   ├── src-tauri/
 │   │   ├── src/lib.rs      # Hotkeys
 │   │   └── target/release/
-│   │       ├── llm-assistant-tauri.exe  # Built app
-│   │       ├── OmniVoice/              # TTS model
-│   │       └── openai_whisper-*/       # STT model
+│   │       └── llm-assistant-tauri.exe  # Built app
 │   ├── package.json
 │   └── vite.config.ts
+├── models/                  # Local models
+│   ├── omnivoice/           # TTS model
+│   └── whisper-large-v3-turbo/  # STT model
 ├── storage/                 # ChromaDB data
 └── voices/                  # Voices for cloning
 ```
@@ -460,6 +495,20 @@ The assistant uses the following tools:
 1. Check format — supported: PNG, JPG, JPEG, WebP, GIF, BMP, TIFF
 2. File size should not exceed token limit (auto-resize to 1024px)
 
+### "Assistant not initialized" (503)
+1. **Kill stale Python processes** — an old backend may still hold port 8000 (`taskkill /F /IM python.exe`), then restart the app
+2. Wait for backend startup (~10-60 s on first run while the embedding model loads)
+
+### TTS model fails to load
+1. **Read the error text** — the app shows the backend reason in the alert
+2. **First load takes ~1 minute** (OmniVoice + Whisper cache), do not click twice
+3. **Check VRAM** — full stack (LLM + Whisper + OmniVoice) needs 7-10 GB
+
+### Voice recognition fails (STT 422)
+1. **Speak right after pressing the button**, louder and longer than a second
+2. Empty/silent recordings are rejected — check the microphone
+3. Slow recognition on CPU means torch without CUDA — reinstall: `venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121`
+
 ## License
 
 MIT
@@ -496,6 +545,7 @@ MIT
 - Python 3.11+
 - Ollama или LM Studio (для LLM)
 - GPU с 8GB+ VRAM (для OmniVoice + Whisper + VL)
+- Node.js 18+ и Rust (только для сборки exe; проще всего через `install.bat` пункт 8)
 
 **Для VL возможностей (рекомендуемые модели в LM Studio):**
 - `qwen2.5-vl-3b-instruct` — оптимально для 8-12GB VRAM
@@ -558,21 +608,27 @@ GENERAL_LANGUAGE=en
 
 ### Вариант 2: Сборка из исходников
 
+Проще всего на Windows: запустите `install.bat` и выберите пункт [8] (полная установка). Ручные шаги ниже:
+
 #### 1. Скачайте модели
 
 ```bash
 # Whisper (STT)
-python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir='llm-assistant-tauri/src-tauri/target/release/openai_whisper-large-v3-turbo')"
+python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir='models/whisper-large-v3-turbo')"
 
 # OmniVoice (TTS)
-python -c "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice', local_dir='llm-assistant-tauri/src-tauri/target/release/OmniVoice')"
+python -c "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice', local_dir='models/omnivoice')"
 ```
 
 #### 2. Установите зависимости
 
 ```bash
+python -m venv venv
+venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+Приложение автоматически использует Python из `venv`, если он есть (и CLI, и Tauri backend), иначе — системный Python.
 
 #### 3. Соберите Tauri app
 
@@ -757,20 +813,37 @@ SCREENSHOT_TRIGGERS=экран,скриншот,смотри на экран,п�
 
 Whisper транскрибирует только на русском языке.
 
+### Выбор модели
+
+Задайте `STT_MODEL` в `.env`: алиас, Hugging Face `owner/repo` или путь к папке. Недостающие модели скачиваются при первом использовании в `models/`.
+
+| Алиас | Модель | VRAM (примерно) |
+|---|---|---|
+| `tiny` | `openai/whisper-tiny` | ~1 ГБ |
+| `base` | `openai/whisper-base` | ~1 ГБ |
+| `small` | `openai/whisper-small` | ~2 ГБ |
+| `medium` | `openai/whisper-medium` | ~5 ГБ |
+| `large` | `openai/whisper-large-v3` | ~10 ГБ |
+| `large-v3-turbo` (по умолчанию) | `openai/whisper-large-v3-turbo` | ~4 ГБ |
+
 ### Горячие клавиши
 
-| Действие | Клавиша |
+| Действие | Клавиша (по умолчанию) |
 |----------|---------|
-| Голосовой ввод | `Ctrl+Num0` |
-| Остановка записи | `Ctrl+Num0` (повторно) или 2 сек тишины |
+| Голосовой ввод | `Ctrl+Shift+V` или `Ctrl+Num0` |
+| Live-режим | `Ctrl+Shift+L` |
+| Остановка записи | Та же клавиша повторно или 2 сек тишины |
 
 После остановки — 1 секунда паузы, затем текст отправляется AI.
 
 ### Как изменить горячие клавиши
 
-Файл: `llm-assistant-tauri/src-tauri/src/lib.rs`
-```rust
-let voice_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Numpad0);
+Задайте в `.env` (применяется при перезапуске приложения, формат `Ctrl+Shift+V`, `Alt+F9`, `F12`, ...):
+
+```env
+HOTKEY_VOICE=Ctrl+Shift+V
+HOTKEY_VOICE_NUM=Ctrl+Num0
+HOTKEY_LIVE=Ctrl+Shift+L
 ```
 
 ## Голосовой вывод (TTS)
@@ -811,6 +884,15 @@ MEMORY_SIMILARITY_THRESHOLD=0.3
 TTS_ENABLED=false
 TTS_STEPS=64
 TTS_TEMPERATURE=1.0
+TTS_DEBUG_SAVE=false       # сохранять отладочные WAV в debug_tts/
+
+# === STT ===
+STT_MODEL=large-v3-turbo   # tiny / base / small / medium / large / large-v3-turbo, 'owner/repo' или путь к папке
+
+# === Горячие клавиши (глобальные, применяются при перезапуске) ===
+HOTKEY_VOICE=Ctrl+Shift+V
+HOTKEY_VOICE_NUM=Ctrl+Num0
+HOTKEY_LIVE=Ctrl+Shift+L
 
 # === Прочее ===
 LOG_LEVEL=INFO
@@ -844,7 +926,8 @@ local_assistant/
 ├── backend/
 │   ├── main.py             # FastAPI backend
 │   ├── api.py              # API модели
-│   └── database.py         # SQLite база чатов
+│   ├── database.py         # SQLite база чатов
+│   └── background_tasks.py # Фоновые задачи (Ollama keep-alive)
 ├── src/
 │   ├── i18n.py             # Backend i18n
 │   ├── main.py             # Assistant логика
@@ -867,11 +950,12 @@ local_assistant/
 │   ├── src-tauri/
 │   │   ├── src/lib.rs      # Горячие клавиши
 │   │   └── target/release/
-│   │       ├── llm-assistant-tauri.exe  # Собранное приложение
-│   │       ├── OmniVoice/              # TTS модель
-│   │       └── openai_whisper-*/       # STT модель
+│   │       └── llm-assistant-tauri.exe  # Собранное приложение
 │   ├── package.json
 │   └── vite.config.ts
+├── models/                  # Локальные модели
+│   ├── omnivoice/           # TTS модель
+│   └── whisper-large-v3-turbo/  # STT модель
 ├── storage/                 # ChromaDB данные
 └── voices/                  # Голоса для клонирования
 ```
@@ -923,6 +1007,20 @@ local_assistant/
 ### Изображения не загружаются
 1. Проверьте формат — поддерживаются: PNG, JPG, JPEG, WebP, GIF, BMP, TIFF
 2. Размер файла не должен превышать лимит токенов (авто-ресайз до 1024px)
+
+### «Ассистент не инициализирован» (503)
+1. **Убейте зависшие процессы Python** — старый backend может держать порт 8000 (`taskkill /F /IM python.exe`), затем перезапустите приложение
+2. Дождитесь старта backend (~10-60 сек при первом запуске, грузится embedding-модель)
+
+### Модель TTS не загружается
+1. **Прочитайте текст ошибки** — приложение показывает причину из backend в алерте
+2. **Первая загрузка занимает ~минуту** (OmniVoice + кэш Whisper), не кликайте дважды
+3. **Проверьте VRAM** — полный стек (LLM + Whisper + OmniVoice) требует 7-10 ГБ
+
+### Не работает распознавание голоса (STT 422)
+1. **Говорите сразу после нажатия кнопки**, громче и дольше секунды
+2. Пустые/тихие записи отклоняются — проверьте микрофон
+3. Медленное распознавание на CPU означает torch без CUDA — переустановите: `venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121`
 
 ## Лицензия
 

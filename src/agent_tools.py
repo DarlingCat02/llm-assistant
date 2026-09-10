@@ -6,12 +6,12 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Путь к конфигу приложений
+# Path to the applications config
 APPS_CONFIG_PATH = Path(__file__).parent.parent / "apps.json"
 
 
 def _load_apps_config() -> dict:
-    """Загрузить конфиг приложений."""
+    """Load the applications config."""
     if not APPS_CONFIG_PATH.exists():
         logger.warning(f"apps.json not found: {APPS_CONFIG_PATH}")
         return {"apps": [], "default_save_folder": "", "blocked_apps": []}
@@ -21,28 +21,28 @@ def _load_apps_config() -> dict:
 
 
 def _resolve_path(path: str) -> str:
-    """Разрешить переменные окружения в пути."""
+    """Resolve environment variables in a path."""
     if "%USERNAME%" in path:
         path = path.replace("%USERNAME%", os.environ.get("USERNAME", ""))
     return path
 
 
 def _find_app(name: str) -> str | None:
-    """Найти приложение по имени или алиасу."""
+    """Find an application by name or alias."""
     config = _load_apps_config()
     name_lower = name.lower().strip()
     
     for app in config.get("apps", []):
-        # Проверяем основное имя
+        # Check the primary name
         if app["name"].lower() == name_lower:
             return _resolve_path(app["path"])
         
-        # Проверяем алиасы
+        # Check aliases
         for alias in app.get("aliases", []):
             if alias.lower() == name_lower:
                 return _resolve_path(app["path"])
     
-    # Попробуем найти как exe в PATH
+    # Try to find as exe in PATH
     for ext in ["", ".exe", ".cmd", ".bat"]:
         if name_lower.endswith(ext) or True:
             try:
@@ -224,9 +224,9 @@ BROWSER_OPEN_DEFINITION_EN = {
 # === Tool Implementations ===
 
 async def file_create(path: str, content: str) -> str:
-    """Создать файл с содержимым."""
+    """Create a file with content."""
     try:
-        # Если путь не абсолютный — используем default папку
+        # If the path is not absolute — use the default folder
         if not os.path.isabs(path):
             config = _load_apps_config()
             default_folder = _resolve_path(config.get("default_save_folder", ""))
@@ -234,7 +234,7 @@ async def file_create(path: str, content: str) -> str:
                 default_folder = os.path.join(os.path.expanduser("~"), "Documents")
             path = os.path.join(default_folder, path)
         
-        # Создаём директории если нужно
+        # Create directories if needed
         os.makedirs(os.path.dirname(path), exist_ok=True)
         
         with open(path, "w", encoding="utf-8") as f:
@@ -249,10 +249,10 @@ async def file_create(path: str, content: str) -> str:
 
 
 async def app_open(name: str) -> str:
-    """Открыть приложение или сайт."""
+    """Open an application or website."""
     config = _load_apps_config()
     
-    # Проверяем заблокированные
+    # Check blocked list
     blocked = [b.lower() for b in config.get("blocked_apps", [])]
     if name.lower() in blocked:
         return f"Приложение '{name}' заблокировано в конфигурации"
@@ -275,13 +275,13 @@ async def app_open(name: str) -> str:
             logger.error(f"Failed to launch {name}: {e}")
             return f"Ошибка запуска {name}: {e}"
     
-    # Если приложение не найдено — открываем как сайт
+    # If the application is not found — open as a website
     logger.info(f"Application not found, opening as website: {name}")
     return await browser_open(name)
 
 
 async def file_open(path: str) -> str:
-    """Открыть файл ассоциированным приложением."""
+    """Open a file with the associated application."""
     try:
         if not os.path.exists(path):
             return f"Файл не найден: {path}"
@@ -296,8 +296,8 @@ async def file_open(path: str) -> str:
 
 
 async def browser_open(url: str) -> str:
-    """Открыть сайт в браузере."""
-    # Добавляем https:// если нет протокола
+    """Open a website in the browser."""
+    # Add https:// if there is no protocol
     if not url.startswith("http://") and not url.startswith("https://"):
         if "." not in url:
             url = url + ".com"
@@ -364,7 +364,7 @@ def get_agent_tool_definitions(lang: str = "en") -> list[dict]:
 
 
 async def capture_screen(monitor: int = 0, save_path: str = "") -> str:
-    """Сделать скриншот экрана и вернуть base64 (JPEG quality=90, max 1024px)."""
+    """Take a screenshot and return base64 (JPEG quality=90, max 1024px)."""
     try:
         import mss
         import base64
@@ -375,31 +375,31 @@ async def capture_screen(monitor: int = 0, save_path: str = "") -> str:
         
         with mss.mss() as sct:
             if monitor == 0:
-                # Все мониторы объединены
+                # All monitors combined
                 screenshot = sct.grab(sct.monitors[0])
             else:
                 if monitor >= len(sct.monitors):
                     return f"Монитор {monitor} не найден. Доступно: {len(sct.monitors) - 1}"
                 screenshot = sct.grab(sct.monitors[monitor])
             
-            # Конвертировать mss screenshot в PIL Image
+            # Convert mss screenshot to PIL Image
             img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
             
-            # Ресайз если нужно (макс 1024px по большей стороне)
+            # Resize if needed (max 1024px on the larger side)
             max_dim = 1024
             if max(img.size) > max_dim:
                 ratio = max_dim / max(img.size)
                 new_size = (int(img.width * ratio), int(img.height * ratio))
                 img = img.resize(new_size, Image.Resampling.LANCZOS)
             
-            # Сохранить как JPEG quality=90 (экономия токенов)
+            # Save as JPEG quality=90 (saves tokens)
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=90, optimize=True)
             img_bytes = buf.getvalue()
             b64 = base64.b64encode(img_bytes).decode('utf-8')
             mime_type = "image/jpeg"
             
-            # Сохранить на диск если указан путь
+            # Save to disk if a path is given
             if save_path:
                 os.makedirs(save_path, exist_ok=True)
                 filename = f"screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
@@ -409,7 +409,7 @@ async def capture_screen(monitor: int = 0, save_path: str = "") -> str:
                 logger.info(f"Screenshot saved: {filepath}")
             
             logger.info(f"Screenshot captured: monitor={monitor}, size={len(img_bytes)} bytes, dims={img.size}")
-            # Возвращаем base64 строку для передачи в images массив
+            # Return the base64 string for passing into the images array
             return b64
             
     except ImportError:

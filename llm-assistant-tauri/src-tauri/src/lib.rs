@@ -24,6 +24,124 @@ fn get_show_console(project_dir: &std::path::Path) -> bool {
     false
 }
 
+fn project_dir() -> std::path::PathBuf {
+    let exe_path = std::env::current_exe().unwrap();
+    let binding = exe_path;
+    binding
+        .parent().unwrap()
+        .parent().unwrap()
+        .parent().unwrap()
+        .parent().unwrap()
+        .parent().unwrap()
+        .to_path_buf()
+}
+
+fn get_env_value(project_dir: &std::path::Path, key: &str) -> Option<String> {
+    let env_path = project_dir.join(".env");
+    if let Ok(content) = std::fs::read_to_string(env_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            // Exact KEY= match (so HOTKEY_VOICE does not match HOTKEY_VOICE_NUM)
+            if line.len() > key.len() && line.starts_with(key) && line[key.len()..].starts_with('=') {
+                if let Some(val) = line.split('=').nth(1) {
+                    return Some(val.trim().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_code(p: &str) -> Option<tauri_plugin_global_shortcut::Code> {
+    use tauri_plugin_global_shortcut::Code;
+    // Single latin letter -> KeyA..KeyZ, single digit -> Digit0..Digit9
+    if p.len() == 1 {
+        let c = p.chars().next().unwrap();
+        if c.is_ascii_alphabetic() {
+            return match c {
+                'A' => Some(Code::KeyA), 'B' => Some(Code::KeyB),
+                'C' => Some(Code::KeyC), 'D' => Some(Code::KeyD),
+                'E' => Some(Code::KeyE), 'F' => Some(Code::KeyF),
+                'G' => Some(Code::KeyG), 'H' => Some(Code::KeyH),
+                'I' => Some(Code::KeyI), 'J' => Some(Code::KeyJ),
+                'K' => Some(Code::KeyK), 'L' => Some(Code::KeyL),
+                'M' => Some(Code::KeyM), 'N' => Some(Code::KeyN),
+                'O' => Some(Code::KeyO), 'P' => Some(Code::KeyP),
+                'Q' => Some(Code::KeyQ), 'R' => Some(Code::KeyR),
+                'S' => Some(Code::KeyS), 'T' => Some(Code::KeyT),
+                'U' => Some(Code::KeyU), 'V' => Some(Code::KeyV),
+                'W' => Some(Code::KeyW), 'X' => Some(Code::KeyX),
+                'Y' => Some(Code::KeyY), 'Z' => Some(Code::KeyZ),
+                _ => None,
+            };
+        }
+        if c.is_ascii_digit() {
+            return match c {
+                '0' => Some(Code::Digit0), '1' => Some(Code::Digit1),
+                '2' => Some(Code::Digit2), '3' => Some(Code::Digit3),
+                '4' => Some(Code::Digit4), '5' => Some(Code::Digit5),
+                '6' => Some(Code::Digit6), '7' => Some(Code::Digit7),
+                '8' => Some(Code::Digit8), '9' => Some(Code::Digit9),
+                _ => None,
+            };
+        }
+        return None;
+    }
+    match p {
+        "NUM0" | "NUMPAD0" => Some(Code::Numpad0),
+        "NUM1" | "NUMPAD1" => Some(Code::Numpad1),
+        "NUM2" | "NUMPAD2" => Some(Code::Numpad2),
+        "NUM3" | "NUMPAD3" => Some(Code::Numpad3),
+        "NUM4" | "NUMPAD4" => Some(Code::Numpad4),
+        "NUM5" | "NUMPAD5" => Some(Code::Numpad5),
+        "NUM6" | "NUMPAD6" => Some(Code::Numpad6),
+        "NUM7" | "NUMPAD7" => Some(Code::Numpad7),
+        "NUM8" | "NUMPAD8" => Some(Code::Numpad8),
+        "NUM9" | "NUMPAD9" => Some(Code::Numpad9),
+        "F1" => Some(Code::F1), "F2" => Some(Code::F2),
+        "F3" => Some(Code::F3), "F4" => Some(Code::F4),
+        "F5" => Some(Code::F5), "F6" => Some(Code::F6),
+        "F7" => Some(Code::F7), "F8" => Some(Code::F8),
+        "F9" => Some(Code::F9), "F10" => Some(Code::F10),
+        "F11" => Some(Code::F11), "F12" => Some(Code::F12),
+        "SPACE" => Some(Code::Space),
+        "ENTER" | "RETURN" => Some(Code::Enter),
+        "TAB" => Some(Code::Tab),
+        "ESC" | "ESCAPE" => Some(Code::Escape),
+        "BACKSPACE" => Some(Code::Backspace),
+        _ => None,
+    }
+}
+
+fn parse_shortcut(spec: &str) -> Option<tauri_plugin_global_shortcut::Shortcut> {
+    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+    let mut modifiers = Modifiers::empty();
+    let mut code: Option<Code> = None;
+    for part in spec.split('+') {
+        let p = part.trim().to_uppercase();
+        if p.is_empty() {
+            return None;
+        }
+        match p.as_str() {
+            "CTRL" | "CONTROL" => modifiers |= Modifiers::CONTROL,
+            "SHIFT" => modifiers |= Modifiers::SHIFT,
+            "ALT" => modifiers |= Modifiers::ALT,
+            "SUPER" | "WIN" | "WINDOWS" | "CMD" | "META" => modifiers |= Modifiers::SUPER,
+            _ => {
+                if code.is_some() {
+                    return None; // two main keys -> invalid
+                }
+                code = parse_code(&p);
+                if code.is_none() {
+                    return None;
+                }
+            }
+        }
+    }
+    let mods = if modifiers.is_empty() { None } else { Some(modifiers) };
+    Some(Shortcut::new(mods, code?))
+}
+
 impl Drop for AppState {
     fn drop(&mut self) {
         if let Some(mut process) = self.python_process.take() {
@@ -66,13 +184,6 @@ fn stop_python_backend(app_handle: &AppHandle) {
 fn start_python_backend(app_handle: AppHandle) {
     info!("Starting Python backend...");
     
-    // На Windows пробуем разные варианты python
-    let python_cmds = if cfg!(windows) {
-        vec!["python", "python3", "py"]
-    } else {
-        vec!["python3", "python"]
-    };
-    
     let exe_path = std::env::current_exe().unwrap();
     let binding = exe_path;
     let project_dir = binding
@@ -80,11 +191,37 @@ fn start_python_backend(app_handle: AppHandle) {
         .parent().unwrap()
         .parent().unwrap()
         .parent().unwrap()
-        .parent().unwrap();
-    
+        .parent().unwrap()
+        .to_path_buf();
+
     info!("Project dir: {:?}", project_dir);
+
+    // Prefer the project's venv python (dependencies installed via install.bat),
+    // fall back to system interpreters.
+    let mut python_cmds: Vec<String> = Vec::new();
+    #[cfg(windows)]
+    {
+        let venv_python = project_dir.join("venv").join("Scripts").join("python.exe");
+        if venv_python.exists() {
+            info!("Using venv python: {:?}", venv_python);
+            python_cmds.push(venv_python.to_string_lossy().to_string());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let venv_python = project_dir.join("venv").join("bin").join("python3");
+        if venv_python.exists() {
+            info!("Using venv python: {:?}", venv_python);
+            python_cmds.push(venv_python.to_string_lossy().to_string());
+        }
+    }
+    if cfg!(windows) {
+        python_cmds.extend(["python".to_string(), "python3".to_string(), "py".to_string()]);
+    } else {
+        python_cmds.extend(["python3".to_string(), "python".to_string()]);
+    }
     
-    // Пробуем найти рабочую команду python
+    // Try to find a working python command
     let mut python_cmd = None;
     for cmd in &python_cmds {
         let test = Command::new(cmd)
@@ -108,7 +245,7 @@ fn start_python_backend(app_handle: AppHandle) {
         }
     };
     
-    let show_console = get_show_console(project_dir);
+    let show_console = get_show_console(&project_dir);
     let mut cmd = Command::new(&python);
     cmd.args(["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"])
         .current_dir(project_dir)
@@ -182,43 +319,62 @@ fn start_python_backend(app_handle: AppHandle) {
 
 fn setup_global_shortcuts(app: &AppHandle) {
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-    
-    let voice_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV);
-    let live_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyL);
-    let voice_num0_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Numpad0);
+
+    // Hotkeys are configurable via .env (HOTKEY_VOICE / HOTKEY_VOICE_NUM / HOTKEY_LIVE),
+    // e.g. "Ctrl+Shift+V", "Alt+F9", "F12". Invalid values fall back to defaults.
+    let dir = project_dir();
+    let voice_spec = get_env_value(&dir, "HOTKEY_VOICE").unwrap_or_else(|| "Ctrl+Shift+V".to_string());
+    let voice_num0_spec = get_env_value(&dir, "HOTKEY_VOICE_NUM").unwrap_or_else(|| "Ctrl+Num0".to_string());
+    let live_spec = get_env_value(&dir, "HOTKEY_LIVE").unwrap_or_else(|| "Ctrl+Shift+L".to_string());
+
+    let voice_shortcut = parse_shortcut(&voice_spec).unwrap_or_else(|| {
+        error!("Invalid HOTKEY_VOICE='{}', falling back to Ctrl+Shift+V", voice_spec);
+        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV)
+    });
+    let live_shortcut = parse_shortcut(&live_spec).unwrap_or_else(|| {
+        error!("Invalid HOTKEY_LIVE='{}', falling back to Ctrl+Shift+L", live_spec);
+        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyL)
+    });
+    let voice_num0_shortcut = parse_shortcut(&voice_num0_spec).unwrap_or_else(|| {
+        error!("Invalid HOTKEY_VOICE_NUM='{}', falling back to Ctrl+Num0", voice_num0_spec);
+        Shortcut::new(Some(Modifiers::CONTROL), Code::Numpad0)
+    });
     
     let app_handle = app.clone();
+    let voice_spec_log = voice_spec.clone();
     if let Err(e) = app.global_shortcut().on_shortcut(voice_shortcut, move |_app, _shortcut, _event| {
-        info!("Hotkey: Voice Input (Ctrl+Shift+V)");
+        info!("Hotkey: Voice Input ({})", voice_spec_log);
         if let Some(window) = app_handle.get_webview_window("main") {
             let _ = window.emit("hotkey-voice", ());
         }
     }) {
-        error!("Failed to register Ctrl+Shift+V: {:?}", e);
+        error!("Failed to register {}: {:?}", voice_spec, e);
     }
-    
+
     let app_handle2 = app.clone();
+    let live_spec_log = live_spec.clone();
     if let Err(e) = app.global_shortcut().on_shortcut(live_shortcut, move |_app, _shortcut, _event| {
-        info!("Hotkey: Live Mode (Ctrl+Shift+L)");
+        info!("Hotkey: Live Mode ({})", live_spec_log);
         if let Some(window) = app_handle2.get_webview_window("main") {
             let _ = window.emit("hotkey-live", ());
         }
     }) {
-        error!("Failed to register Ctrl+Shift+L: {:?}", e);
+        error!("Failed to register {}: {:?}", live_spec, e);
     }
-    
-    // Ctrl+Num0 для голосового ввода
+
+    // Second shortcut for voice input
     let app_handle3 = app.clone();
+    let voice_num0_spec_log = voice_num0_spec.clone();
     if let Err(e) = app.global_shortcut().on_shortcut(voice_num0_shortcut, move |_app, _shortcut, _event| {
-        info!("Hotkey: Voice Input (Ctrl+Num0)");
+        info!("Hotkey: Voice Input ({})", voice_num0_spec_log);
         if let Some(window) = app_handle3.get_webview_window("main") {
             let _ = window.emit("hotkey-voice", ());
         }
     }) {
-        error!("Failed to register Ctrl+Num0: {:?}", e);
+        error!("Failed to register {}: {:?}", voice_num0_spec, e);
     }
-    
-    info!("Global shortcuts registered: Ctrl+Shift+V, Ctrl+Num0 (voice), Ctrl+Shift+L (live)");
+
+    info!("Global shortcuts registered: {}, {} (voice), {} (live)", voice_spec, voice_num0_spec, live_spec);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

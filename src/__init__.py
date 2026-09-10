@@ -1,19 +1,19 @@
 """
-Local Assistant - Ядро локального AI-ассистента.
+Local Assistant - Core of the local AI assistant.
 
-Модульная архитектура для масштабируемого проекта:
-- LLM Engine: Работа с языковыми моделями через Ollama API
-- Memory Manager: Долговременная память на основе ChromaDB
-- TTS Engine: Синтез речи (опционально)
-- Tools: Система функций для расширения возможностей
+Modular architecture for a scalable project:
+- LLM Engine: Work with language models via Ollama API
+- Memory Manager: Long-term memory based on ChromaDB
+- TTS Engine: Speech synthesis (optional)
+- Tools: Function system for extending capabilities
 
-Пример использования:
+Example usage:
     from src import Assistant
-    
+
     async def main():
         assistant = Assistant()
         await assistant.initialize()
-        response = await assistant.chat("Привет!")
+        response = await assistant.process_message("Hello!")
         print(response)
 """
 

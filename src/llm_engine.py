@@ -1,13 +1,13 @@
 """
-LLM Engine - Универсальный движок для работы с языковыми моделями.
+LLM Engine - Universal engine for working with language models.
 
-Поддерживаемые провайдеры:
+Supported providers:
 - Ollama: http://localhost:11434/v1/chat/completions
 - LM Studio: http://localhost:1234/v1/chat/completions
 - OpenRouter: https://openrouter.ai/api/v1/chat/completions
 
-Все провайдеры используют OpenAI-совместимый API, поэтому
-код одинаковый для всех — меняется только URL и API-ключ.
+All providers use an OpenAI-compatible API, so
+the code is the same for all of them — only the URL and API key change.
 """
 
 import asyncio
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class MessageRole(str, Enum):
-    """Роли messages в диалоге."""
+    """Dialog message roles."""
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
@@ -43,7 +43,7 @@ class MessageRole(str, Enum):
 
 @dataclass
 class Message:
-    """Сообщение в диалоге."""
+    """Dialog message."""
     role: MessageRole
     content: str
     images: list[str] = field(default_factory=list)
@@ -69,7 +69,7 @@ class Message:
 
 @dataclass
 class ToolCall:
-    """Вызов функции (инструмента) из LLM."""
+    """Function (tool) call from the LLM."""
     id: str
     name: str
     arguments: dict[str, Any]
@@ -77,7 +77,7 @@ class ToolCall:
 
 @dataclass
 class LLMResponse:
-    """Ответ от языковой модели."""
+    """Response from the language model."""
     content: str
     model: str
     done: bool = True
@@ -88,15 +88,15 @@ class LLMResponse:
 
 class LLMEngine:
     """
-    Асинхронный движок для работы с LLM через OpenAI-совместимый API.
-    
-    Автоматически определяет провайдер из конфигурации и использует
-    правильный URL и API-ключ.
-    
-    Пример использования:
+    Async engine for working with LLMs via OpenAI-compatible API.
+
+    Automatically detects the provider from the configuration and uses
+    the right URL and API key.
+
+    Example usage:
         engine = LLMEngine()
         await engine.initialize()
-        response = await engine.generate("Привет!")
+        response = await engine.generate("Hello!")
         print(response.content)
     """
     
@@ -260,7 +260,7 @@ class LLMEngine:
                 return None
     
     async def initialize(self) -> None:
-        """Инициализировать HTTP клиент и проверить доступность провайдера."""
+        """Initialize the HTTP client and check provider availability."""
         if self._initialized:
             return
         
@@ -273,7 +273,7 @@ class LLMEngine:
                 )
             headers["Authorization"] = f"Bearer {self._config.api_key}"
         
-        # OpenRouter требует дополнительный заголовок
+        # OpenRouter requires an extra header
         if self._config.provider == LLMProvider.OPENROUTER:
             headers["HTTP-Referer"] = "http://localhost:8000"
             headers["X-Title"] = "Local AI Assistant"
@@ -288,17 +288,17 @@ class LLMEngine:
             ),
         )
         
-        # Проверяем доступность
+        # Check availability
         try:
             if self._config.is_local:
-                # Для локальных провайдеров проверяем базовый URL
+                # For local providers check the base URL
                 await self._check_local_availability()
             else:
-                # Для OpenRouter делаем тестовый запрос
+                # For OpenRouter make a test request
                 await self._check_openrouter_availability()
         except Exception as e:
             logger.warning(f"Provider check: {e}")
-            # Не блокируем запуск — может быть временная проблема
+            # Do not block startup — may be a temporary issue
         
         self._initialized = True
         logger.info(
@@ -308,11 +308,11 @@ class LLMEngine:
         )
     
     async def _check_local_availability(self) -> None:
-        """Проверить доступность локального сервера."""
+        """Check local server availability."""
         try:
-            # Ollama имеет /api/tags, LM Studio имеет /v1/models
+            # Ollama has /api/tags, LM Studio has /v1/models
             if self._config.provider == LLMProvider.OLLAMA:
-                # Проверяем базовый хост (без /v1)
+                # Check the base host (without /v1)
                 base_client = httpx.AsyncClient(
                     base_url=self._config.host,
                     timeout=10.0,
@@ -332,7 +332,7 @@ class LLMEngine:
             raise
     
     async def _check_openrouter_availability(self) -> None:
-        """Проверить доступность OpenRouter."""
+        """Check OpenRouter availability."""
         try:
             resp = await self._client.get("/models")
             resp.raise_for_status()
@@ -341,7 +341,7 @@ class LLMEngine:
             logger.warning(f"OpenRouter check: {e}")
     
     async def close(self) -> None:
-        """Закрыть HTTP клиент."""
+        """Close the HTTP client."""
         if self._client:
             await self._client.aclose()
             self._client = None
@@ -349,17 +349,17 @@ class LLMEngine:
             logger.info("LLM Engine closed")
     
     def set_system_prompt(self, prompt: str) -> None:
-        """Установить системный промпт."""
+        """Set the system prompt."""
         self._system_prompt = prompt
         logger.debug(f"System prompt updated: {len(prompt)} characters")
     
     def register_tool(self, name: str, func: Callable) -> None:
-        """Зарегистрировать функцию для Function Calling."""
+        """Register a function for Function Calling."""
         self._tools[name] = func
         logger.info(f"Registered tool: {name}")
     
     def add_to_history(self, message: Message) -> None:
-        """Добавить сообщение в историю диалога."""
+        """Add a message to the dialog history."""
         self._conversation_history.append(message)
         
         max_messages = get_config().memory.max_context_messages
@@ -368,16 +368,16 @@ class LLMEngine:
             logger.debug(f"History truncated to {max_messages} messages")
     
     def clear_history(self) -> None:
-        """Очистить историю диалога."""
+        """Clear the dialog history."""
         self._conversation_history.clear()
         logger.info("Dialog history cleared")
     
     def get_history(self) -> list[Message]:
-        """Получить копию истории диалога."""
+        """Get a copy of the dialog history."""
         return self._conversation_history.copy()
     
     def _format_user_content(self, text: str, images: list[str] | None = None) -> list[dict] | str:
-        """Форматировать контент пользователя для OpenAI Vision API."""
+        """Format user content for the OpenAI Vision API."""
         if not images:
             return text
         
@@ -397,7 +397,7 @@ class LLMEngine:
         chat_history: list[dict] | None = None,
         images: list[str] | None = None,
     ) -> tuple[list[dict], bool]:
-        """Построить список messages для отправки."""
+        """Build the message list for sending."""
         messages = []
         
         # Language-aware system prompt (check language at generate time)
@@ -406,35 +406,34 @@ class LLMEngine:
         except Exception:
             lang = "en"
         system_prompt = self._get_system_prompt()
-        messages.append(
-            Message(role=MessageRole.SYSTEM, content=system_prompt).to_dict()
-        )
-        
         if additional_context:
+            # NOTE: merged into the single system message because chat templates
+            # (e.g. Qwen3 via LM Studio) reject more than one system message
+            # with "System message must be at the beginning".
             context_text = "\n\n".join(additional_context)
             if lang == "ru":
-                context_message = (
-                    f"=== КОНТЕКСТ ИЗ ПАМЯТИ ===\n"
+                system_prompt += (
+                    f"\n\n=== КОНТЕКСТ ИЗ ПАМЯТИ ===\n"
                     f"Следующая информация может быть полезна для ответа:\n\n"
                     f"{context_text}\n"
                     f"=== КОНЕЦ КОНТЕКСТА ==="
                 )
             else:
-                context_message = (
-                    f"=== MEMORY CONTEXT ===\n"
+                system_prompt += (
+                    f"\n\n=== MEMORY CONTEXT ===\n"
                     f"The following information may be useful for the answer:\n\n"
                     f"{context_text}\n"
                     f"=== END OF CONTEXT ==="
                 )
-            messages.append(
-                Message(role=MessageRole.SYSTEM, content=context_message).to_dict()
-            )
+        messages.append(
+            Message(role=MessageRole.SYSTEM, content=system_prompt).to_dict()
+        )
         
         history = chat_history if chat_history is not None else [msg.to_dict() for msg in self._conversation_history]
         for msg in history:
             messages.append(msg if isinstance(msg, dict) else msg.to_dict())
         
-        # Форматируем user message с изображениями для OpenAI Vision API
+        # Format the user message with images for the OpenAI Vision API
         user_content = self._format_user_content(user_message, images)
         user_msg_dict = {
             "role": MessageRole.USER.value,
@@ -455,18 +454,18 @@ class LLMEngine:
         images: list[str] | None = None,
     ) -> LLMResponse:
         """
-        Сгенерировать ответ на сообщение пользователя.
+        Generate a response to a user message.
 
         Args:
-            user_message: Сообщение пользователя
-            additional_context: Контекст из Memory Manager
-            stream: Если True, возвращать токены по мере генерации
-            thinking: Включить режим рассуждения (для Qwen3)
-            tools: Список определений инструментов (OpenAI tool format)
-            images: Список base64-encoded изображений
+            user_message: User message
+            additional_context: Context from Memory Manager
+            stream: If True, return tokens as they are generated
+            thinking: Enable reasoning mode (for Qwen3)
+            tools: List of tool definitions (OpenAI tool format)
+            images: List of base64-encoded images
 
         Returns:
-            LLMResponse: Ответ от модели.
+            LLMResponse: Response from the model.
         """
         if not self._initialized:
             raise RuntimeError("LLM Engine not initialized. Call initialize().")
@@ -485,7 +484,7 @@ class LLMEngine:
         if tools:
             payload["tools"] = tools
 
-        # num_ctx и thinking — специфичны для Ollama
+        # num_ctx and thinking are Ollama-specific
         if self._config.provider == LLMProvider.OLLAMA:
             thinking_type = "on" if thinking_enabled else "off"
             payload["options"] = {
@@ -559,7 +558,7 @@ class LLMEngine:
             raise
 
     async def _execute_tool(self, tool_call: ToolCall) -> str:
-        """Выполнить вызов инструмента и вернуть результат."""
+        """Execute a tool call and return the result."""
         if not hasattr(self, '_tools') or not self._tools:
             return f"[Error: инструмент '{tool_call.name}' не зарегистрирован]"
 
@@ -575,8 +574,8 @@ class LLMEngine:
             return f"[Error executing tool {tool_call.name}: {e}]"
     
     async def _generate_single(self, payload: dict) -> LLMResponse:
-        """Обычный режим (ждём полный ответ)."""
-        # Для Ollama используем /api/chat/completions
+        """Regular mode (wait for the full response)."""
+        # For Ollama use /api/chat/completions
         endpoint = "/chat/completions"
         if self._config.provider == LLMProvider.OLLAMA:
             endpoint = "/api/chat"
@@ -585,7 +584,7 @@ class LLMEngine:
         response.raise_for_status()
         data = response.json()
         
-        # Парсим ответ в зависимости от провайдера
+        # Parse the response depending on the provider
         if self._config.provider == LLMProvider.OLLAMA:
             # Ollama format: {"message": {"role": "assistant", "content": "..."}}
             message_data = data.get("message", {})
@@ -598,7 +597,7 @@ class LLMEngine:
             content = message_data.get("content", "")
             model = data.get("model", self._config.model)
         
-        # Парсим tool calls если есть
+        # Parse tool calls if present
         tool_calls = []
         if message_data.get("tool_calls"):
             for tc in message_data["tool_calls"]:
@@ -621,7 +620,7 @@ class LLMEngine:
                     f"{[tc.name for tc in tool_calls]}"
                 )
         
-        # Получаем duration информацию
+        # Get duration info
         total_duration = 0
         prompt_tokens = 0
         if self._config.provider == LLMProvider.OLLAMA:
@@ -651,7 +650,7 @@ class LLMEngine:
         return llm_response
     
     async def _generate_stream(self, payload: dict) -> LLMResponse:
-        """Streaming режим (токены по мере генерации)."""
+        """Streaming mode (tokens as they are generated)."""
         full_content = []
         model_name = self._config.model
         
@@ -662,7 +661,7 @@ class LLMEngine:
                 if not line:
                     continue
                 
-                # SSE формат: "data: {...}"
+                # SSE format: "data: {...}"
                 if line.startswith("data: "):
                     line = line[6:]
                 
@@ -697,7 +696,7 @@ class LLMEngine:
         self,
         messages: list[Message],
     ) -> LLMResponse:
-        """Сгенерировать ответ с произвольным контекстом."""
+        """Generate a response with arbitrary context."""
         if not self._initialized:
             raise RuntimeError("LLM Engine not initialized.")
         

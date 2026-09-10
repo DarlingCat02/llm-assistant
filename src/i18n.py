@@ -42,7 +42,7 @@ TRANSLATIONS = {
         "api.added": "Entry added",
         "api.not_found": "Entry not found",
         "api.deleted": "Entry {id} deleted",
-        "api.assistant_not_init": "Assistant not initialized. Make sure Ollama is running (ollama serve).",
+        "api.assistant_not_init": "Assistant not initialized. Make sure your LLM provider is running: {hint}.",
         "api.tts_not_init": "TTS not initialized",
         "api.text_not_provided": "Text not provided",
         "api.synthesis_error": "Synthesis error",
@@ -51,6 +51,7 @@ TRANSLATIONS = {
         "api.config_saved": "Configuration saved (hot-swap without restart)",
         "api.unsupported_format": "Unsupported format: {type}. Use webm, wav or mp3",
         "api.recognition_error": "Recognition error: {detail}",
+        "api.empty_audio": "Empty recording (no audio data). Check the microphone and speak closer",
     },
     "ru": {
         "cli.welcome.title": "🤖 LOCAL AI ASSISTANT",
@@ -87,7 +88,7 @@ TRANSLATIONS = {
         "api.added": "Запись добавлена",
         "api.not_found": "Запись не найдена",
         "api.deleted": "Запись {id} удалена",
-        "api.assistant_not_init": "Ассистент не инициализирован. Убедитесь, что Ollama запущена (ollama serve).",
+        "api.assistant_not_init": "Ассистент не инициализирован. Убедитесь, что провайдер запущен: {hint}.",
         "api.tts_not_init": "TTS не инициализирован",
         "api.text_not_provided": "Текст не предоставлен",
         "api.synthesis_error": "Ошибка синтеза",
@@ -96,6 +97,7 @@ TRANSLATIONS = {
         "api.config_saved": "Конфигурация сохранена (hot-swap без рестарта)",
         "api.unsupported_format": "Неподдерживаемый формат: {type}. Используйте webm, wav или mp3",
         "api.recognition_error": "Ошибка распознавания: {detail}",
+        "api.empty_audio": "Пустая запись (нет аудиоданных). Проверьте микрофон и говорите ближе",
     },
 }
 
@@ -111,3 +113,44 @@ def t(key: str, lang: str | None = None, **kwargs) -> str:
         return template.format(**kwargs)
     except:
         return template
+
+
+_PROVIDER_HINTS = {
+    "en": {
+        "ollama": "Ollama (run: ollama serve)",
+        "lm_studio": "LM Studio (load a model and start the server)",
+        "openrouter": "OpenRouter (check LLM_API_KEY in .env)",
+    },
+    "ru": {
+        "ollama": "Ollama (запустите: ollama serve)",
+        "lm_studio": "LM Studio (загрузите модель и запустите сервер)",
+        "openrouter": "OpenRouter (проверьте LLM_API_KEY в .env)",
+    },
+}
+
+
+def provider_hint(provider: str | None, lang: str | None = None) -> str:
+    """Human hint on how to start the given LLM provider."""
+    lang = lang if lang in _PROVIDER_HINTS else "en"
+    hints = _PROVIDER_HINTS[lang]
+    key = (provider or "").lower()
+    if key in hints:
+        return hints[key]
+    fallback = {
+        "en": "your LLM provider (check LLM_PROVIDER / LLM_HOST in .env)",
+        "ru": "ваш LLM-провайдер (проверьте LLM_PROVIDER / LLM_HOST в .env)",
+    }
+    return fallback[lang]
+
+
+def assistant_not_init_detail(lang: str | None = None) -> str:
+    """Build the 'assistant not initialized' error with a provider-specific hint."""
+    try:
+        resolved_lang = lang or get_config().general.language
+    except Exception:
+        resolved_lang = "en"
+    try:
+        provider = get_config().llm.provider.value
+    except Exception:
+        provider = None
+    return t("api.assistant_not_init", lang=resolved_lang, hint=provider_hint(provider, resolved_lang))

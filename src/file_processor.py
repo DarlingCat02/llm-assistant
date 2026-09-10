@@ -3,20 +3,20 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Максимальная длина текста для передачи в LLM (примерно 6000 символов ≈ 1500 токенов)
+# Maximum text length for passing to the LLM (approx. 6000 chars ~= 1500 tokens)
 MAX_TEXT_LENGTH = 6000
 
 
 async def extract_text(file_path: str, file_type: str) -> str:
     """
-    Извлечь текст из файла.
-    
+    Extract text from a file.
+
     Args:
-        file_path: Путь к файлу
-        file_type: Тип файла (txt, pdf, docx)
-    
+        file_path: Path to the file
+        file_type: File type (txt, pdf, docx)
+
     Returns:
-        str: Извлечённый текст
+        str: Extracted text
     """
     try:
         ext = file_type.lower().replace("application/", "").replace("text/", "")
@@ -36,7 +36,7 @@ async def extract_text(file_path: str, file_type: str) -> str:
 
 
 async def _extract_txt(file_path: str) -> str:
-    """Извлечь текст из TXT файла."""
+    """Extract text from a TXT file."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             text = f.read()
@@ -51,12 +51,12 @@ async def _extract_txt(file_path: str) -> str:
 
 
 async def _extract_pdf(file_path: str) -> str:
-    """Извлечь текст из PDF файла."""
+    """Extract text from a PDF file."""
     import pdfplumber
     
     text_parts = []
     with pdfplumber.open(file_path) as pdf:
-        for i, page in enumerate(pdf.pages[:20]):  # Максимум 20 страниц
+        for i, page in enumerate(pdf.pages[:20]):  # Max 20 pages
             page_text = page.extract_text()
             if page_text:
                 text_parts.append(f"[Страница {i + 1}]\n{page_text}")
@@ -73,7 +73,7 @@ async def _extract_pdf(file_path: str) -> str:
 
 
 async def _extract_docx(file_path: str) -> str:
-    """Извлечь текст из DOCX файла."""
+    """Extract text from a DOCX file."""
     from docx import Document
     
     doc = Document(file_path)
@@ -83,7 +83,7 @@ async def _extract_docx(file_path: str) -> str:
         if paragraph.text.strip():
             text_parts.append(paragraph.text)
     
-    # Также извлекаем текст из таблиц
+    # Also extract text from tables
     for table in doc.tables:
         for row in table.rows:
             row_text = " | ".join(cell.text for cell in row.cells if cell.text.strip())

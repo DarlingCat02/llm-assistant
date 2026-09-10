@@ -62,7 +62,7 @@ class DuckDuckGoSearchTool:
             self._initialized = True
             logger.info("WebSearchTool initialized (DuckDuckGo)")
         except ImportError:
-            logger.warning("duckduckgo_search not installed. Install: pip install duckduckgo-search")
+            logger.warning("ddgs not installed. Install: pip install ddgs")
             raise
 
     async def search(self, query: str, max_results: int = 5) -> str:
@@ -86,7 +86,7 @@ class DuckDuckGoSearchTool:
             results = []
 
         if not results:
-            # Fallback: прямой HTTP-запрос к DuckDuckGo HTML
+            # Fallback: direct HTTP request to DuckDuckGo HTML
             try:
                 import httpx
                 resp = await httpx.AsyncClient().post(

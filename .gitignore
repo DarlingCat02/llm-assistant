@@ -35,6 +35,9 @@ llm-assistant-tauri/src-tauri/Cargo.lock
 install.log
 ffmpeg/
 
+# Local model files (Whisper, OmniVoice)
+models/
+
 # Python bytecode
 *.py[cod]
 *$py.class

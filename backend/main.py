@@ -1,16 +1,16 @@
 """
-FastAPI бэкенд для Local AI Assistant.
+FastAPI backend for Local AI Assistant.
 
-Основное приложение, которое:
-1. Предоставляет REST API для всех функций ассистента
-2. Поддерживает WebSocket для real-time событий
+Main application that:
+1. Provides REST API for all assistant features
+2. Supports WebSocket for real-time events
 
-Архитектурные решения:
-1. API-first: бэкенд работает независимо от фронтенда
-2. CORS настроен для будущих внешних клиентов
-3. Подготовка к голосовому сервису (отдельный клиент API)
+Architecture decisions:
+1. API-first: backend works independently of the frontend
+2. CORS configured for future external clients
+3. Voice (STT/TTS) served as built-in endpoints of the same app
 
-Запуск:
+Run:
     uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 """
 
@@ -24,6 +24,47 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+
+class _CrashProofStderr:
+    """sys.stderr wrapper that never raises on write/flush.
+
+    The backend is spawned by Tauri with a piped stderr. Progress bars
+    (tqdm used by transformers model loading) flush that stream directly,
+    and the flush can fail with OSError(22) once the pipe is in a bad
+    state - killing model loading AFTER a previous engine already loaded.
+    Guarding the stream makes such failures impossible; normal logging
+    keeps working because it holds its own handler references.
+    """
+
+    def __init__(self, stream):
+        object.__setattr__(self, "_stream", stream)
+
+    def write(self, data):
+        try:
+            return self._stream.write(data)
+        except Exception:
+            return 0
+
+    def flush(self):
+        try:
+            return self._stream.flush()
+        except Exception:
+            return None
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_stream"), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_stream"), name, value)
+
+
+if not isinstance(getattr(sys, "stderr", None), _CrashProofStderr):
+    sys.stderr = _CrashProofStderr(sys.stderr)
+
+# No transformers/hub progress bars in production logs (they write/flush
+# stderr directly and are useless when piped). Respected by huggingface_hub.
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
 from dotenv import load_dotenv
 
 try:
@@ -31,24 +72,26 @@ try:
 except ImportError:
     Image = None
 
-# Загружаем .env в переменные окружения для поисковых инструментов
+# Load .env into environment variables for search tools
 load_dotenv()
 
 from fastapi import FastAPI, Request, HTTPException, Depends, WebSocket, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
-# Добавляем родительскую директорию в path для импортов
+# Add the parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import get_config, Config
 try:
-    from src.i18n import t
+    from src.i18n import t, assistant_not_init_detail
 except ImportError:
     try:
-        from i18n import t  # type: ignore
+        from i18n import t, assistant_not_init_detail  # type: ignore
     except ImportError:
         def t(key, lang=None, **kwargs):
             return key
+        def assistant_not_init_detail(lang=None):
+            return "Assistant not initialized"
 from backend.database import ChatDatabase
 from backend.api import (
     memory_router,
@@ -59,7 +102,7 @@ from backend.api import (
 )
 
 
-# === Настройка логирования ===
+# === Logging setup ===
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -67,14 +110,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# === Глобальные объекты ===
+# === Global objects ===
 _config: Config | None = None
 _assistant = None
 _db: ChatDatabase | None = None
 
 
 def get_assistant():
-    """Получить глобальный экземпляр ассистента."""
+    """Get the global assistant instance."""
     return _assistant
 
 
@@ -89,25 +132,33 @@ def get_db() -> ChatDatabase:
     return _db
 
 
-# Dependency для injection БД
+# Dependency for DB injection
 async def get_db_dependency() -> ChatDatabase:
-    """Dependency для получения БД в роутах."""
+    """Dependency for getting the DB in routes."""
     return get_db()
 
 
-# === Lifecycle события ===
+# === Lifecycle events ===
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """
-    Управление жизненным циклом приложения.
-    
-    Инициализирует и закрывает ресурсы при старте/остановке.
+    Manage the application lifecycle.
+
+    Initializes and closes resources on startup/shutdown.
     """
     global _config, _assistant, _db
     
     logger.info("Starting Local AI Assistant Backend...")
-    
+
+    # Disable transformers progress bars (they flush stderr directly;
+    # see _CrashProofStderr above for why that is fatal here)
+    try:
+        from transformers.utils import logging as hf_logging
+        hf_logging.disable_progress_bar()
+    except Exception:
+        pass
+
     # Load configuration
     _config = get_config()
     logger.info(f"Configuration loaded: provider={_config.llm.provider.value}, model={_config.llm.model}")
@@ -178,7 +229,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     logger.info("Backend stopped")
 
 
-# === Создание приложения ===
+# === Application setup ===
 
 app = FastAPI(
     title="Local AI Assistant API",
@@ -187,19 +238,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS для будущих внешних клиентов
+# CORS for future external clients
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В продакшене ограничить
+    allow_origins=["*"],  # Restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Middleware для обработки OPTIONS запросов (нужно для WebSocket)
+# Middleware for handling OPTIONS requests (needed for WebSocket)
 @app.middleware("http")
 async def handle_options(request: Request, call_next):
-    """Обрабатывает OPTIONS запросы для CORS."""
+    """Handle OPTIONS requests for CORS."""
     if request.method == "OPTIONS":
         from starlette.responses import Response
         response = Response(status_code=200)
@@ -211,12 +262,12 @@ async def handle_options(request: Request, call_next):
     return await call_next(request)
 
 
-# === Монтирование роутов ===
+# === Mounting routes ===
 
 app.include_router(memory_router)
 
-# Добавляем WebSocket роут напрямую к app
-# Это помогает обойти проверку origin
+# Add the WebSocket route directly to app
+# This helps bypass the origin check
 @app.websocket("/ws/events")
 async def global_websocket_endpoint(websocket: WebSocket):
     """Global WebSocket endpoint."""
@@ -245,12 +296,12 @@ async def global_websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
-# === API эндпоинты ===
+# === API endpoints ===
 
 
 @app.get("/api/chats")
 async def get_all_chats():
-    """Получить список всех чатов."""
+    """Get the list of all chats."""
     chats = await _db.get_all_chats()
     return [
         {
@@ -305,7 +356,7 @@ async def update_chat(chat_id: int, request: dict):
 
 @app.get("/api/chats/{chat_id}/messages")
 async def get_chat_messages(chat_id: int):
-    """Получить сообщения чата."""
+    """Get chat messages."""
     messages = await _db.get_chat_history(chat_id)
     return [
         {
@@ -334,14 +385,14 @@ async def delete_chat(chat_id: int):
 
 @app.delete("/api/chats/{chat_id}/messages")
 async def clear_chat_messages(chat_id: int):
-    """Очистить сообщения чата."""
+    """Clear chat messages."""
     await _db.clear_chat_history(chat_id)
     return {"status": "ok"}
 
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Загрузить файл (документ или изображение) и извлечь данные."""
+    """Upload a file (document or image) and extract data."""
     document_types = [
         "text/plain",
         "application/pdf",
@@ -369,23 +420,23 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         content = await file.read()
         
-        # Обработка изображений — кодируем в base64
+        # Handle images — encode to base64
         if file.content_type in image_types:
             import base64
             import io
             from PIL import Image
             
-            # Открываем изображение для получения размеров
+            # Open the image to get its dimensions
             img = Image.open(io.BytesIO(content))
             width, height = img.size
             
-            # Опционально: ресайз больших изображений (макс 1024px по большей стороне)
+            # Optionally: resize large images (max 1024px on the longer side)
             max_dim = 1024
             if max(width, height) > max_dim:
                 ratio = max_dim / max(width, height)
                 new_size = (int(width * ratio), int(height * ratio))
                 img = img.resize(new_size, Image.Resampling.LANCZOS)
-                # Сохраняем обратно в bytes
+                # Save back to bytes
                 buf = io.BytesIO()
                 img.save(buf, format=img.format or "PNG")
                 content = buf.getvalue()
@@ -401,7 +452,7 @@ async def upload_file(file: UploadFile = File(...)):
                 "height": img.height,
             }
         
-        # Документы — сохраняем во временный файл и извлекаем текст
+        # Documents — save to a temp file and extract text
         ext = file.filename.split(".")[-1] if "." in file.filename else "txt"
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
             tmp.write(content)
@@ -444,7 +495,7 @@ async def chat(request: ChatMessage):
             lang = "en"
         raise HTTPException(
             status_code=503,
-            detail=t("api.assistant_not_init", lang=lang),
+            detail=assistant_not_init_detail(lang),
         )
 
     # Create new chat if not specified
@@ -524,7 +575,7 @@ _cached_lm_model: str | None = None
 _cached_lm_model_time: float = 0.0
 
 async def get_lmstudio_loaded_model() -> str | None:
-    """Вернуть id загруженной модели в LM Studio (кеш 30с), чтобы не грузить вторую."""
+    """Return the ID of the model loaded in LM Studio (30s cache) to avoid loading a second one."""
     global _cached_lm_model, _cached_lm_model_time
     import time
     now = time.monotonic()
@@ -548,7 +599,7 @@ async def get_lmstudio_loaded_model() -> str | None:
     return None
 
 async def get_effective_context_length() -> int:
-    """Вернуть лимит контекста из конфига (для LM Studio — тоже из .env, без лишних запросов)."""
+    """Return the context limit from the config (for LM Studio — also from .env, no extra requests)."""
     cfg = get_config().llm
     return int(getattr(cfg, 'num_ctx', 8192))
 
@@ -556,7 +607,7 @@ async def get_effective_context_length() -> int:
 @app.get("/api/status")
 async def get_status():
     """
-    Получить статус сервиса.
+    Get the service status.
     """
     stats = {}
     
@@ -573,6 +624,7 @@ async def get_status():
     
     return {
         "status": "ok",
+        "assistant_ready": _assistant is not None,
         "provider": _config.llm.provider.value if _config else "unknown",
         "model": _config.llm.model if _config else "unknown",
         "supports_thinking": thinking_supported,
@@ -584,7 +636,7 @@ async def get_status():
 
 @app.get("/api/config")
 async def get_current_config():
-    """Получить текущую конфигурацию. Для LM Studio — возвращает реально загруженную модель."""
+    """Get the current configuration. For LM Studio — returns the actually loaded model."""
     if not _config:
         return {
             "provider": "ollama", "model": "", "ollama_host": "http://localhost:11434",
@@ -614,7 +666,7 @@ async def get_current_config():
 
 @app.put("/api/config")
 async def update_config(request: dict):
-    """Обновить конфигурацию (сохраняется в .env файл). При смене модели/контекста для LM Studio — автозагрузка."""
+    """Update the configuration (saved to the .env file). Applies without restart (hot-swap); the LM Studio model itself is switched in LM Studio."""
     from config import get_config, save_config, reload_config
     
     # Use None as default for partial updates (e.g. language-only from i18n.js)
@@ -636,17 +688,6 @@ async def update_config(request: dict):
         if isinstance(request.get("show_backend_console"), str):
             show_backend_console = request.get("show_backend_console").lower() == "true"
 
-    # Запомним предыдущую модель/контекст для определения смены
-    try:
-        prev_cfg = get_config()
-        prev_model = prev_cfg.llm.model
-        prev_provider = prev_cfg.llm.provider.value
-        prev_ctx = prev_cfg.llm.num_ctx
-    except:
-        prev_model = ""
-        prev_provider = ""
-        prev_ctx = None
-    
     save_config(
         provider=provider,
         model=model,
@@ -694,81 +735,6 @@ async def update_config(request: dict):
     except Exception as e:
         logger.warning(f"Hot-swap config failed: {e}")
 
-    # Для LM Studio — только сохранение, без автозагрузки (меняется в самом LM Studio, read-only в UI)
-    load_result = None
-    if False and provider == "lm_studio" and model and (model != prev_model or (num_ctx and num_ctx != prev_ctx)):
-        try:
-            import httpx
-            base = ollama_host.rstrip("/") if ollama_host else "http://localhost:1234"
-            if not base.startswith("http"):
-                base = "http://" + base
-            # Unload old loaded models before loading new (to avoid accumulating :2, :3)
-            # If same model with same context already loaded — skip unload
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    r = await client.get(f"{base}/api/v0/models")
-                    if r.status_code == 200:
-                        data = r.json()
-                        target_ctx = None
-                        try:
-                            target_ctx = int(num_ctx) if num_ctx else None
-                        except:
-                            pass
-                        already_ok = False
-                        for m in data.get("data", []):
-                            if m.get("state") == "loaded" and m.get("id") == model:
-                                if target_ctx is None or m.get("loaded_context_length") == target_ctx:
-                                    already_ok = True
-                                    break
-                        if not already_ok:
-                            for m in data.get("data", []):
-                                if m.get("state") == "loaded":
-                                    try:
-                                        await client.post(f"{base}/api/v1/models/unload", json={"instance_id": m.get("id")}, timeout=10.0)
-                                        logger.info(f"Unloaded old model: {m.get('id')}")
-                                    except Exception as ue:
-                                        logger.debug(f"Failed to unload {m.get('id')}: {ue}")
-            except Exception as e:
-                logger.debug(f"Error unloading old models: {e}")
-            payload = {"model": model}
-            if num_ctx:
-                try:
-                    payload["context_length"] = int(num_ctx)
-                except:
-                    pass
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                resp = await client.post(f"{base}/api/v1/models/load", json=payload)
-                if resp.status_code in (200, 204):
-                    load_result = {"ok": True}
-                else:
-                    try:
-                        data = resp.json()
-                    except:
-                        data = {"raw": resp.text[:500]}
-                    if resp.status_code == 400 and "already loaded" in str(data).lower():
-                        load_result = {"ok": True, "already_loaded": True}
-                    else:
-                        load_result = {"ok": False, "status": resp.status_code, "detail": data}
-        except Exception as e:
-            load_result = {"ok": False, "error": str(e)}
-
-    if load_result is not None:
-        if load_result.get("ok"):
-            try:
-                lang = get_config().general.language
-            except Exception:
-                lang = "en"
-            # Use translated config saved message
-            base_msg = t("api.config_saved", lang=lang)
-            return {"status": "ok", "message": base_msg + " - LM Studio model loaded", "load": load_result}
-        else:
-            try:
-                lang = get_config().general.language
-            except Exception:
-                lang = "en"
-            base_msg = t("api.config_saved", lang=lang)
-            return {"status": "ok", "message": base_msg + " - LM Studio auto-load failed, please load manually", "load": load_result, "warning": True}
-    
     try:
         lang = get_config().general.language
     except Exception:
@@ -790,7 +756,7 @@ async def toggle_tts(request: Request):
             lang = get_config().general.language
         except Exception:
             lang = "en"
-        raise HTTPException(status_code=503, detail=t("api.assistant_not_init", lang=lang))
+        raise HTTPException(status_code=503, detail=assistant_not_init_detail(lang))
     
     try:
         body = await request.json()
@@ -808,16 +774,18 @@ async def toggle_tts(request: Request):
     else:
         success = await _assistant._tts.disable_omnivoice()
     
+    loaded = _assistant._tts.is_omnivoice_loaded if enabled else False
     return {
         "status": "ok",
         "enabled": enabled,
-        "omnivoice_loaded": _assistant._tts.is_omnivoice_loaded if enabled else False,
+        "omnivoice_loaded": loaded,
+        "error": _assistant._tts.last_error if enabled and not loaded else None,
     }
 
 
 @app.get("/api/tts/status")
 async def get_tts_status():
-    """Получить статус TTS."""
+    """Get the TTS status."""
     if not _assistant or not _assistant._tts:
         return {"enabled": False, "omnivoice_loaded": False}
     
@@ -830,12 +798,12 @@ async def get_tts_status():
 @app.post("/api/tts/config")
 async def tts_config(request: dict):
     """
-    Настроить параметры TTS голоса.
-    
-    Параметры:
-    - instruct: описание голоса (female, male, female russian, и т.д.)
-    - position_temperature: 0 = стабильный, выше = случайный
-    - class_temperature: 0 = стабильный, выше = случайный
+    Configure TTS voice parameters.
+
+    Parameters:
+    - instruct: voice description (female, male, female russian, etc.)
+    - position_temperature: 0 = stable, higher = more random
+    - class_temperature: 0 = stable, higher = more random
     """
     if not _assistant or not _assistant._tts:
         try:
@@ -882,7 +850,7 @@ async def tts_config(request: dict):
 
 @app.get("/api/tts/voices")
 async def get_voices():
-    """Получить список доступных голосов для клонирования."""
+    """Get the list of available voices for cloning."""
     from pathlib import Path
     
     voices_dir = Path(__file__).parent.parent / "voices"
@@ -902,7 +870,7 @@ async def get_voices():
 
 @app.get("/api/tts/config")
 async def get_tts_config():
-    """Получить текущую конфигурацию TTS."""
+    """Get the current TTS configuration."""
     if not _assistant or not _assistant._tts:
         return {"instruct": "female", "position_temperature": 0.0, "class_temperature": 0.0}
     
@@ -939,9 +907,14 @@ async def tts_speak(request: dict):
     
     # Check OmniVoice loaded
     if not _assistant._tts.is_omnivoice_loaded:
-        # Try to load
-        await _assistant._tts.enable_omnivoice()
-    
+        # Try to load (honor the result - a failed load must not fall through to the dummy)
+        if not await _assistant._tts.enable_omnivoice() or not _assistant._tts.is_omnivoice_loaded:
+            try:
+                lang = get_config().general.language
+            except Exception:
+                lang = "en"
+            raise HTTPException(status_code=500, detail=t("api.tts_not_init", lang=lang))
+
     # Synthesize
     result = await _assistant._tts.speak(text)
     
@@ -952,7 +925,7 @@ async def tts_speak(request: dict):
             lang = "en"
         raise HTTPException(status_code=500, detail=result.error or t("api.synthesis_error", lang=lang))
     
-    # Возвращаем аудио
+    # Return the audio
     from fastapi.responses import Response
     return Response(
         content=result.audio_data,
@@ -963,7 +936,7 @@ async def tts_speak(request: dict):
 
 @app.get("/api/models")
 async def get_models(provider: str = "ollama", host: str = "http://localhost:11434"):
-    """Получить список моделей для провайдера."""
+    """Get the model list for a provider."""
     import httpx
     
     if provider == "ollama":
@@ -979,7 +952,7 @@ async def get_models(provider: str = "ollama", host: str = "http://localhost:114
     
     elif provider == "lm_studio":
         try:
-            # Уважать host параметр (как для ollama)
+            # Respect the host parameter (same as for Ollama)
             base = host.rstrip("/") if host else "http://localhost:1234"
             if not base.startswith("http"):
                 base = "http://" + base
@@ -993,8 +966,8 @@ async def get_models(provider: str = "ollama", host: str = "http://localhost:114
             return {"models": [], "error": str(e)}
     
     elif provider == "openrouter":
-        # OpenRouter не имеет простого API для списка моделей
-        # Используем популярные модели по умолчанию
+        # OpenRouter has no simple API for listing models
+        # Use popular default models
         return {
             "models": [
                 "qwen/qwen2.5-7b-instruct",
@@ -1010,7 +983,7 @@ async def get_models(provider: str = "ollama", host: str = "http://localhost:114
 
 @app.post("/api/models/load")
 async def load_model(request: dict):
-    """Загрузить модель в провайдере (LM Studio: POST /api/v1/models/load). Выгружает предыдущую если нужно."""
+    """Load a model in the provider (LM Studio: POST /api/v1/models/load). Unloads the previous one if needed."""
     provider = request.get("provider", "lm_studio")
     model = request.get("model", "")
     host = request.get("host", "http://localhost:1234")
@@ -1041,7 +1014,7 @@ async def load_model(request: dict):
                         target_ctx = int(context_length) if context_length else None
                     except:
                         pass
-                    # Проверить already loaded с тем же контекстом
+                    # Check if already loaded with the same context
                     already_ok = False
                     for m in data.get("data", []):
                         if m.get("state") == "loaded" and m.get("id") == model:
@@ -1072,14 +1045,14 @@ async def load_model(request: dict):
                 payload["context_length"] = int(context_length)
             except:
                 pass
-        # Попытка загрузить
+        # Try to load
         try:
             import httpx
             async with httpx.AsyncClient(timeout=90.0) as client:
                 resp = await client.post(f"{base}/api/v1/models/load", json=payload)
                 if resp.status_code in (200, 204):
                     return {"ok": True, "provider": provider, "model": model, "context_length": context_length}
-                # LM Studio может вернуть 400 если уже загружена — считаем ok
+                # LM Studio may return 400 if already loaded — treat as ok
                 try:
                     data = resp.json()
                 except:
@@ -1090,7 +1063,7 @@ async def load_model(request: dict):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"LM Studio load failed: {e}")
     elif provider == "ollama":
-        # Ollama грузит лениво, отдельная команда не нужна — hot-swap через payload.model
+        # Ollama loads lazily, no separate command needed — hot-swap via payload.model
         return {"ok": True, "provider": provider, "model": model, "jit": True}
     else:
         return {"ok": True, "provider": provider, "model": model}
@@ -1098,10 +1071,25 @@ async def load_model(request: dict):
 
 # === STT (Speech-to-Text) ===
 
+def _dump_failed_audio(audio_data: bytes | None, reason: str) -> None:
+    """Best-effort dump of audio that failed STT (for diagnostics)."""
+    try:
+        if not audio_data:
+            return
+        from datetime import datetime
+        debug_dir = Path(__file__).parent.parent / "debug_tts"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        name = f"stt_fail_{reason}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.webm"
+        (debug_dir / name).write_bytes(audio_data)
+        logger.info(f"Failed STT audio dumped: {name} ({len(audio_data)} bytes)")
+    except Exception as e:
+        logger.debug(f"Failed to dump audio: {e}")
+
+
 _stt_engine = None
 
 async def get_stt_engine():
-    """Получить или создать STT движок."""
+    """Get or create the STT engine."""
     global _stt_engine
     if _stt_engine is None:
         from src.stt_engine import get_stt_engine
@@ -1113,9 +1101,9 @@ async def get_stt_engine():
 @app.post("/api/stt")
 async def stt_transcribe(file: UploadFile = File(...)):
     """
-    Распознать речь из аудио файла.
-    
-    Принимает аудио файл (webm, wav, mp3) и возвращает распознанный текст.
+    Recognize speech from an audio file.
+
+    Accepts an audio file (webm, wav, mp3) and returns the recognized text.
     """
     logger.info(f"Received audio file: {file.filename}, type: {file.content_type}")
     
@@ -1127,32 +1115,52 @@ async def stt_transcribe(file: UploadFile = File(...)):
         except Exception:
             lang = "en"
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=t("api.unsupported_format", lang=lang, type=file.content_type)
         )
-    
+
+    # Read audio first so empty recordings fail fast with 422 (not 500)
+    audio_data = await file.read()
+    if not audio_data or len(audio_data) < 1024:
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(
+            status_code=422,
+            detail=t("api.empty_audio", lang=lang),
+        )
+
     try:
         # Initialize STT if needed
         stt = await get_stt_engine()
-        
-        # Read audio
-        audio_data = await file.read()
-        
+
         # Determine format
         ext = file.filename.split(".")[-1] if "." in file.filename else "webm"
-        
+
         # Recognize
         logger.info("Starting recognition...")
         text = await stt.transcribe_bytes(audio_data, format=ext)
-        
+
         logger.info(f"Recognized: {text[:100]}...")
-        
+
         return {"text": text, "success": True}
-        
+
+    except ValueError as e:
+        # Bad audio data (empty/silence after decoding) - client-side problem
+        logger.warning(f"STT rejected audio: {e}")
+        _dump_failed_audio(audio_data, "rejected")
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=422, detail=t("api.recognition_error", lang=lang, detail=str(e) or "invalid audio"))
     except Exception as e:
         logger.error(f"STT error: {e}", exc_info=True)
+        _dump_failed_audio(audio_data, "error")
         # If error empty — show repr and traceback for diagnostics
-        detail = str(e) or repr(e) or e.__class__.__name__
+        # (type name first so OSError vs RuntimeError vs OOM are distinguishable in UI)
+        detail = f"{type(e).__name__}: {e}" if str(e) else (repr(e) or e.__class__.__name__)
         if not detail.strip():
             import traceback
             detail = traceback.format_exc()[-500:]
@@ -1163,17 +1171,17 @@ async def stt_transcribe(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=t("api.recognition_error", lang=lang, detail=detail))
 
 
-# === Запуск ===
+# === Entrypoint ===
 
 if __name__ == "__main__":
     import uvicorn
     
-    # Запускаем с отключенной проверкой host для WebSocket
+    # Run with host check disabled for WebSocket
     uvicorn.run(
         app,
-        host="0.0.0.0",  # Слушаем все интерфейсы
+        host="0.0.0.0",  # Listen on all interfaces
         port=8000,
         reload=False,
-        ws_ping_interval=None,  # Отключаем ping для стабильности
+        ws_ping_interval=None,  # Disable ping for stability
         ws_ping_timeout=None,
     )

@@ -1,21 +1,21 @@
 """
-GUI на CustomTkinter для Local AI Assistant.
+CustomTkinter GUI for the Local AI Assistant.
 
-Модуль предоставляет графический интерфейс на базе customtkinter —
-стабильной кроссплатформенной библиотеки с современным видом.
+The module provides a graphical interface based on customtkinter —
+a stable cross-platform library with a modern look.
 
-Архитектурные решения:
-1. GUI принимает экземпляр Assistant и использует его методы
-2. Долгие операции (LLM, память) выполняются в отдельном потоке
-3. Обновление GUI происходит в главном потоке через after()
+Architectural decisions:
+1. The GUI takes an Assistant instance and uses its methods
+2. Long operations (LLM, memory) run in a separate thread
+3. GUI updates happen in the main thread via after()
 
-Требования:
+Requirements:
 - customtkinter>=5.2.0
 
-Пример использования:
+Example usage:
     from src.main import Assistant
     from src.gui_ctk import AssistantGUI
-    
+
     async def main():
         assistant = Assistant()
         await assistant.initialize()
@@ -41,10 +41,10 @@ logger = logging.getLogger(__name__)
 
 class ChatMessageFrame(ctk.CTkFrame):
     """
-    Фрейм сообщения в чате.
-    
-    Отображает сообщение в виде "пузыря" с указанием
-    отправителя (пользователь или ассистент).
+    Chat message frame.
+
+    Displays a message as a "bubble" indicating
+    the sender (user or assistant).
     """
     
     def __init__(
@@ -60,23 +60,23 @@ class ChatMessageFrame(ctk.CTkFrame):
         self.is_user = is_user
         self.timestamp = timestamp or datetime.now()
         
-        # Цвета
+        # Colors
         self.user_color = "#1E90FF"  # DodgerBlue
         self.assistant_color = "#2E8B57"  # SeaGreen
         
         self._build()
     
     def _build(self) -> None:
-        """Построить фрейм сообщения."""
-        # Настраиваем цвета и выравнивание
+        """Build the message frame."""
+        # Set up colors and alignment
         bg_color = self.user_color if self.is_user else self.assistant_color
         anchor = "e" if self.is_user else "w"
         
-        # Контейнер для выравнивания
+        # Container for alignment
         align_frame = ctk.CTkFrame(self, fg_color="transparent")
         align_frame.pack(fill="both", expand=True, padx=5, pady=2)
         
-        # Пузырь сообщения
+        # Message bubble
         bubble = ctk.CTkLabel(
             align_frame,
             text=self.text,
@@ -89,13 +89,13 @@ class ChatMessageFrame(ctk.CTkFrame):
             justify="left",
         )
         
-        # Выравнивание
+        # Alignment
         if self.is_user:
             bubble.pack(side="right", anchor="e")
         else:
             bubble.pack(side="left", anchor="w")
         
-        # Время
+        # Time
         time_str = self.timestamp.strftime("%H:%M")
         time_label = ctk.CTkLabel(
             self,
@@ -112,104 +112,105 @@ class ChatMessageFrame(ctk.CTkFrame):
 
 class AssistantGUI:
     """
-    Графический интерфейс для AI ассистента на CustomTkinter.
-    
-    Использует threading для асинхронных операций,
-    чтобы GUI не зависал во время генерации ответов.
-    
-    Структура интерфейса:
+    Graphical interface for the AI assistant on CustomTkinter.
+
+    Uses threading for async operations
+    so the GUI does not freeze while generating responses.
+
+    Interface structure:
     ┌─────────────────────────────────────────┐
     │  Local AI Assistant               [_][X]│
     ├─────────────────────────────────────────┤
     │  ┌───────────────────────────────────┐  │
-    │  │ 🤖 Привет! Чем могу помочь?       │  │
+    │  │ 🤖 Hello! How can I help?         │  │
     │  │                            10:30  │  │
     │  │ ┌─────────────────────────────┐   │  │
-    │  │ │    Привет! Расскажи о себе  │   │  │
+    │  │ │    Hello! Tell me about     │   │  │
+    │  │ │    yourself                 │   │  │
     │  │ │                      10:31  │   │  │
     │  └─┴─────────────────────────────┴───┘  │
     │                                         │
-    │  Статус: Печатает...                    │
+    │  Status: Typing...                      │
     ├─────────────────────────────────────────┤
-    │  [Поле ввода...]          [Отправить]   │
+    │  [Input field...]          [Send]       │
     ├─────────────────────────────────────────┤
-    │  [Очистить] [Статистика]          [Выход]│
+    │  [Clear] [Stats]              [Exit]    │
     └─────────────────────────────────────────┘
     """
     
     def __init__(self, assistant: Assistant):
         """
-        Инициализировать GUI.
-        
+        Initialize the GUI.
+
         Args:
-            assistant: Инициализированный экземпляр Assistant.
+            assistant: Initialized Assistant instance.
         """
         self.assistant = assistant
         self.config = assistant._config
         
-        # Основное окно
+        # Main window
         self.root: Optional[ctk.CTk] = None
         
-        # Элементы интерфейса
+        # Interface elements
         self._chat_frame: Optional[ctk.CTkScrollableFrame] = None
         self._message_input: Optional[ctk.CTkEntry] = None
         self._status_label: Optional[ctk.CTkLabel] = None
         
-        # Очередь для сообщений из потока
+        # Queue for messages from the thread
         self._message_queue: queue.Queue = queue.Queue()
         
-        # Флаг работы
+        # Running flag
         self._running = False
         
         logger.info("AssistantGUI (CustomTkinter) initialized")
     
     def build(self) -> None:
         """
-        Построить и показать интерфейс.
-        
-        Запускает главный цикл tkinter.
+        Build and show the interface.
+
+        Runs the main tkinter loop.
         """
-        # Создаём главное окно
+        # Create the main window
         self.root = ctk.CTk()
         self.root.title(self.config.gui.title)
         self.root.geometry(f"{self.config.gui.width}x{self.config.gui.height}")
         
-        # Настраиваем тему
+        # Set up the theme
         ctk.set_appearance_mode(self.config.gui.theme)
         ctk.set_default_color_theme("blue")
         
-        # Центрирование окна
+        # Center the window
         self._center_window()
         
-        # Создаём элементы
+        # Create elements
         self._create_chat_area()
         self._create_status_bar()
         self._create_input_area()
         self._create_button_bar()
         
-        # Обработчик закрытия
+        # Close handler
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         
-        # Добавляем приветственное сообщение
+        # Add a welcome message
         self._add_message("🤖 Привет! Я ваш локальный AI-ассистент.\n\n"
                          f"Провайдер: {self.config.llm.provider.value}\n"
                          f"Модель: {self.config.llm.model}\n"
                          f"Память: ChromaDB\n\n"
                          f"Чем могу помочь?", is_user=False)
-        
+
         self._update_status("Готов к работе")
-        
-        # Запускаем обработку очереди сообщений
+
+        # Start queue processing
         self._running = True
         self._process_queue()
         
         logger.debug("GUI built")
         
-        # Запускаем главный цикл
+        # Start the main loop
         self.root.mainloop()
     
     def _center_window(self) -> None:
-        """Центрировать окно на экране."""
+        """Center the window on the screen."""
         self.root.update_idletasks()
         width = self.root.winfo_width()
         height = self.root.winfo_height()
@@ -218,12 +219,12 @@ class AssistantGUI:
         self.root.geometry(f'{width}x{height}+{x}+{y}')
     
     def _create_chat_area(self) -> None:
-        """Создать область чата с историей сообщений."""
-        # Контейнер
+        """Create the chat area with message history."""
+        # Container
         chat_container = ctk.CTkFrame(self.root, fg_color="transparent")
         chat_container.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Заголовок
+        # Title
         title_label = ctk.CTkLabel(
             chat_container,
             text="💬 История диалога",
@@ -231,14 +232,14 @@ class AssistantGUI:
         )
         title_label.pack(anchor="w", pady=(0, 5))
         
-        # Прокручиваемая область для сообщений
+        # Scrollable area for messages
         self._chat_frame = ctk.CTkScrollableFrame(
             chat_container,
         )
         self._chat_frame.pack(fill="both", expand=True)
     
     def _create_status_bar(self) -> None:
-        """Создать строку статуса."""
+        """Create the status bar."""
         status_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         status_frame.pack(fill="x", padx=10, pady=5)
         
@@ -251,11 +252,11 @@ class AssistantGUI:
         self._status_label.pack(anchor="w")
     
     def _create_input_area(self) -> None:
-        """Создать область ввода сообщения."""
+        """Create the message input area."""
         input_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         input_frame.pack(fill="x", padx=10, pady=10)
         
-        # Поле ввода
+        # Input field
         self._message_input = ctk.CTkEntry(
             input_frame,
             placeholder_text="Введите сообщение...",
@@ -265,7 +266,7 @@ class AssistantGUI:
         self._message_input.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self._message_input.bind("<Return>", lambda e: self._on_send())
         
-        # Кнопка отправки
+        # Send button
         send_button = ctk.CTkButton(
             input_frame,
             text="➤ Отправить",
@@ -277,11 +278,11 @@ class AssistantGUI:
         send_button.pack(side="right")
     
     def _create_button_bar(self) -> None:
-        """Создать панель кнопок команд."""
+        """Create the command button bar."""
         button_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         button_frame.pack(fill="x", padx=10, pady=(0, 10))
         
-        # Кнопка очистки
+        # Clear button
         clear_button = ctk.CTkButton(
             button_frame,
             text="🧹 Очистить",
@@ -290,7 +291,7 @@ class AssistantGUI:
         )
         clear_button.pack(side="left", padx=5)
         
-        # Кнопка статистики
+        # Stats button
         stats_button = ctk.CTkButton(
             button_frame,
             text="📊 Статистика",
@@ -299,11 +300,11 @@ class AssistantGUI:
         )
         stats_button.pack(side="left", padx=5)
         
-        # Распорка
+        # Spacer
         spacer = ctk.CTkFrame(button_frame, fg_color="transparent", width=1)
         spacer.pack(side="left", fill="x", expand=True)
         
-        # Кнопка выхода
+        # Exit button
         exit_button = ctk.CTkButton(
             button_frame,
             text="❌ Выход",
@@ -316,13 +317,13 @@ class AssistantGUI:
     
     def _add_message(self, text: str, is_user: bool = False) -> None:
         """
-        Добавить сообщение в чат.
-        
+        Add a message to the chat.
+
         Args:
-            text: Текст сообщения.
-            is_user: True если сообщение от пользователя.
+            text: Message text.
+            is_user: True if the message is from the user.
         """
-        # Создаём фрейм сообщения
+        # Create the message frame
         message_frame = ChatMessageFrame(
             self._chat_frame,
             text=text,
@@ -330,28 +331,28 @@ class AssistantGUI:
         )
         message_frame.pack(fill="x", pady=5)
         
-        # Автопрокрутка вниз
+        # Auto-scroll down
         self._chat_frame._scrollbar.set(1.0, 1.0)
         self._chat_frame.update_idletasks()
     
     def _update_status(self, status: str) -> None:
         """
-        Обновить текст статуса.
-        
+        Update the status text.
+
         Args:
-            status: Новый текст статуса.
+            status: New status text.
         """
         if self._status_label:
             self._status_label.configure(text=f"Статус: {status}")
     
     def _on_send(self) -> None:
         """
-        Обработать отправку сообщения.
-        
-        1. Получает текст из поля ввода
-        2. Добавляет сообщение пользователя в чат
-        3. Запускает обработку в отдельном потоке
-        4. Очищает поле ввода
+        Handle message sending.
+
+        1. Gets text from the input field
+        2. Adds the user message to the chat
+        3. Starts processing in a separate thread
+        4. Clears the input field
         """
         if not self._message_input:
             return
@@ -360,14 +361,14 @@ class AssistantGUI:
         if not user_text:
             return
         
-        # Очищаем поле ввода
+        # Clear the input field
         self._message_input.delete(0, "end")
         
-        # Добавляем сообщение пользователя
+        # Add the user message
         self._add_message(user_text, is_user=True)
         self._update_status("Обработка...")
         
-        # Запускаем обработку в отдельном потоке
+        # Start processing in a separate thread
         thread = threading.Thread(
             target=self._process_message_thread,
             args=(user_text,),
@@ -377,16 +378,16 @@ class AssistantGUI:
     
     def _process_message_thread(self, user_text: str) -> None:
         """
-        Поток обработки сообщения.
-        
+        Message processing thread.
+
         Args:
-            user_text: Сообщение пользователя.
+            user_text: User message.
         """
         try:
-            # Используем синхронную версию для работы в потоке
+            # Use the sync version for working in a thread
             answer = self.assistant.process_message_sync(user_text)
             
-            # Ставим ответ в очередь для обновления GUI
+            # Put the answer into the queue for GUI update
             self._message_queue.put(("answer", answer))
                 
         except Exception as e:
@@ -395,10 +396,10 @@ class AssistantGUI:
     
     def _process_queue(self) -> None:
         """
-        Обработать очередь сообщений.
-        
-        Вызывается периодически из главного потока для
-        обновления GUI результатами из потока обработки.
+        Process the message queue.
+
+        Called periodically from the main thread to
+        update the GUI with results from the processing thread.
         """
         try:
             while True:
@@ -414,20 +415,20 @@ class AssistantGUI:
         except queue.Empty:
             pass
         
-        # Планируем следующую проверку через 100мс
+        # Schedule the next check in 100ms
         if self._running and self.root:
             self.root.after(100, self._process_queue)
     
     def _on_clear(self) -> None:
-        """Очистить историю диалога."""
-        # Очищаем историю в ассистенте
+        """Clear the dialog history."""
+        # Clear history in the assistant
         self.assistant._llm.clear_history()
         
-        # Очищаем GUI
+        # Clear the GUI
         for widget in self._chat_frame.winfo_children():
             widget.destroy()
         
-        # Добавляем приветственное сообщение
+        # Add a welcome message
         self._add_message(
             "🤖 Привет! Я ваш локальный AI-ассистент.\n\n"
             f"Провайдер: {self.config.llm.provider.value}\n"
@@ -441,8 +442,8 @@ class AssistantGUI:
         logger.info("Dialog history cleared")
     
     def _on_stats(self) -> None:
-        """Показать статистику."""
-        # Получаем статистику
+        """Show statistics."""
+        # Get statistics
         stats = {
             "Сообщений в сессии": self.assistant._message_count,
         }
@@ -451,7 +452,7 @@ class AssistantGUI:
             duration = datetime.now() - self.assistant._start_time
             stats["Время работы"] = str(duration).split('.')[0]
         
-        # Получаем статистику памяти в отдельном потоке
+        # Get memory stats in a separate thread
         def get_memory_stats_sync():
             loop = asyncio.new_event_loop()
             try:
@@ -474,32 +475,32 @@ class AssistantGUI:
         except Exception:
             stats["Записей в памяти"] = "N/A"
         
-        # Форматируем в текст
+        # Format as text
         stats_text = "📊 Статистика:\n\n"
         for key, value in stats.items():
             stats_text += f"• {key}: {value}\n"
         
-        # Показываем в диалоге
+        # Show in a dialog
         self._show_dialog("📊 Статистика", stats_text)
     
     def _show_dialog(self, title: str, message: str) -> None:
         """
-        Показать диалоговое окно.
-        
+        Show a dialog window.
+
         Args:
-            title: Заголовок диалога.
-            message: Текст сообщения.
+            title: Dialog title.
+            message: Message text.
         """
         dialog = ctk.CTkToplevel(self.root)
         dialog.title(title)
         dialog.geometry("400x300")
         dialog.resizable(False, False)
         
-        # Центрирование
+        # Centering
         dialog.transient(self.root)
         dialog.grab_set()
         
-        # Текст сообщения
+        # Message text
         text_widget = ctk.CTkTextbox(
             dialog,
             wrap="word",
@@ -509,7 +510,7 @@ class AssistantGUI:
         text_widget.insert("1.0", message)
         text_widget.configure(state="disabled")
         
-        # Кнопка закрытия
+        # Close button
         close_button = ctk.CTkButton(
             dialog,
             text="Закрыть",
@@ -519,22 +520,22 @@ class AssistantGUI:
         close_button.pack(pady=(0, 20))
     
     def _on_exit(self) -> None:
-        """Выйти из приложения."""
+        """Exit the application."""
         logger.info("Exit via GUI")
         self._running = False
         self.root.destroy()
     
     def _on_close(self) -> None:
-        """Обработчик закрытия окна."""
+        """Window close handler."""
         self._on_exit()
 
 
 def run_gui(assistant: Assistant) -> None:
     """
-    Запустить GUI в отдельном потоке.
-    
+    Run the GUI in a separate thread.
+
     Args:
-        assistant: Инициализированный экземпляр Assistant.
+        assistant: Initialized Assistant instance.
     """
     gui = AssistantGUI(assistant)
     gui.build()
