@@ -63,7 +63,7 @@
         {
             "name": "replays",
             "aliases": ["реплеи", "повторы"],
-            "path": "E:\\###NVIDIA photo video"
+            "path": "E:\\Videos"
         }
     ],
     "default_browser": "yandex",
