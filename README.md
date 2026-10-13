@@ -13,11 +13,15 @@ Local AI assistant with voice input/output, web search, **Vision-Language (VL) c
 - 🔊 **Voice output (TTS)** — OmniVoice synthesis and voice cloning
 - 🌐 **Web search** — DuckDuckGo (free, no API keys)
 - 📁 **Agent skills** — file creation, opening apps, websites and folders
+- 🔧 **Visible agent actions** — every tool call the assistant made is shown above the answer (collapsible)
+- 🎭 **Personas** — switchable behaviour presets, applied instantly without a restart
+- ✍️ **Personality editor** — extra instructions layered on top of the system prompt (per language)
+- 🧠 **Long-term memory** — ChromaDB, with shared user facts and per-persona notes
+- 👤 **Avatars** — pick an emoji or upload your own picture for you and the assistant
 - 📎 **File attachments** — TXT, PDF, DOCX, **images (PNG, JPG, WebP, GIF, BMP, TIFF)** supported
 - 🖥️ **Desktop app** — Tauri (exe file)
-- 🧠 **Long-term memory** — ChromaDB
 - ⚡ **Fast** — runs on local models via Ollama / LM Studio
-- ⌨️ **Global hotkeys** — work outside the app window
+- ⌨️ **Global hotkeys** — work outside the app window, editable in Settings → General
 - 🎛️ **Customizable UI** — resizable sidebar, settings tabs
 - 🧵 **Per-chat context** — each chat has isolated history
 - 📊 **Context indicator** — shows used tokens / limit
@@ -148,6 +152,96 @@ Each chat has **isolated message history**. Switching chats does not mix context
 - Visual progress bar (green → yellow → red)
 
 Updates after each model response.
+
+## Agent skills
+
+The assistant can work with files, apps and websites on your computer.
+
+### Seeing what the assistant did
+
+Every tool call made during a turn is reported back and rendered as a collapsible
+**"Выполненные действия"** block above the answer:
+
+```
+▾ Выполненные действия (2)
+  🔧 app_open      name=notepad        → Запущено: notepad
+  ⚠️ file_create   path=demo.txt       → Ошибка: [WinError 5] доступ запрещён
+```
+
+- The block is collapsed by default so it does not clutter the chat.
+- Failed calls are highlighted in red with a ⚠️ marker.
+- Arguments and results are truncated (200 characters) — long tool output (for
+  example a base64 screenshot) is never dumped into the chat.
+
+> Small models sometimes answer with code instead of actually calling a tool.
+> That is a model limitation, not a bug: no tool was executed, so nothing is shown.
+
+### Personas
+
+A persona is a **behaviour layer** on top of the system prompt — tone, style,
+role. It never replaces the service rules (search policy, tool usage, language).
+
+- Switch in the chat header (the 🎭 pill) or manage the catalog in
+  **Settings → 🎭🎭 Персоны**.
+- Switching is instant: the new prompt is used from the very next message, no
+  restart.
+- **"Без персоны"** = the standard system prompt.
+- Each persona can carry its own `temperature`; empty = use the model setting.
+- The catalog lives in `personas.json` next to `apps.json` (git-ignored).
+  `personas.json.example` shows the format.
+
+If `personas.json` is missing or corrupted the app logs a warning and falls back
+to the standard prompt — it never overwrites a file it could not parse.
+
+### Personality layer (extra instructions)
+
+**Settings → 🎭 Личность** holds two text boxes (Russian / English) that are
+appended to the system prompt. The service rules stay system-managed and are
+read-only; here you only set style and character.
+
+Priority: active persona → personality layer → standard prompt.
+
+### The two prompt blocks (RU / EN)
+
+A persona stores `prompt_ru` and `prompt_en`. These are **two different prompts
+for two interface languages**, not translations of one another — fill in the one
+that matches your language and leave the other empty.
+
+**Why:** the base system prompt is bilingual too, and its content differs between
+the two rather than just its wording. The Russian version teaches the model the
+tool triggers "открой блокнот" / "посмотри на экран"; the English one teaches
+"open notepad" / "look at screen". Pairing a Russian base with an English persona
+hands the model a blend of two rule sets, which noticeably degrades small models.
+
+**How the choice is made:** `_get_personality_layer()` in `src/llm_engine.py`
+reads `GENERAL_LANGUAGE` (Settings → General → Language) and applies exactly one
+block. The other is ignored until you switch the interface language.
+
+The field in use is marked with a **"используется"** badge in both the Personas
+and the Personality tabs.
+
+### Avatars
+
+Click the 👤 / 🤖 buttons in the chat header to change either avatar:
+
+- pick one of the preset emoji,
+- upload your own image (PNG / JPG / WebP / GIF, up to 5 MB),
+- delete an uploaded avatar.
+
+Uploaded images are centre-cropped to a square and stored at 128×128 in
+`avatars/` (git-ignored). The selection is kept in the browser's local storage;
+a reference to a file that no longer exists is replaced by the default emoji.
+
+### Memory scopes
+
+Memory uses one ChromaDB collection with a `scope` field in the metadata:
+
+- `user` — facts about you, shared by every persona;
+- `<persona_id>` — notes that belong to one persona only.
+
+With a persona active the assistant searches `["user", <persona_id>]`; with no
+persona it searches everything. Extracted facts about you are always stored in
+`user`, so switching personas never loses them.
 
 ## Agent skills
 
@@ -359,6 +453,11 @@ LLM_TEMPERATURE=0.7
 # === General ===
 GENERAL_LANGUAGE=en           # en / ru
 
+# === Personality (extra instructions appended to the system prompt) ===
+# Edited in Settings -> Personality; newlines are stored as \n
+PERSONALITY_RU=
+PERSONALITY_EN=
+
 # === ChromaDB ===
 CHROMA_PERSIST_DIR=./storage/chroma
 
@@ -385,17 +484,28 @@ HOTKEY_LIVE=Ctrl+Shift+L
 LOG_LEVEL=INFO
 ```
 
+> `STT_MODEL` and `HOTKEY_*` can be edited in the app (Settings → 🎙 Голос and
+> Settings → Общие) and are applied after a restart. `PERSONALITY_*` apply
+> immediately — no restart needed.
+
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |-------|----------|----------|
 | GET | `/api/status` | App status |
-| POST | `/api/chat` | Send message (returns `used_context_tokens`, `max_context_tokens`, supports `images` array) |
+| POST | `/api/chat` | Send message (returns `used_context_tokens`, `max_context_tokens`, `actions`, supports `images` array) |
 | POST | `/api/stt` | Voice recognition |
 | POST | `/api/upload` | Upload file (document or image) |
 | GET | `/api/chats` | List chats |
 | GET | `/api/config` | Current config |
 | PUT | `/api/config` | Update config |
+| GET | `/api/personas` | Persona catalog + active selection |
+| PUT | `/api/personas` | Replace the persona catalog |
+| POST | `/api/personas/activate` | Switch persona at runtime (`{"id": "editor"}`, `{"id": null}` for none) |
+| GET | `/api/avatars` | List uploaded avatars |
+| POST | `/api/avatars` | Upload an avatar (multipart `file`, resized to 128×128 PNG) |
+| GET | `/api/avatars/{name}` | Serve an avatar image |
+| DELETE | `/api/avatars/{name}` | Delete an avatar |
 | POST | `/api/tts/toggle` | Enable/disable TTS |
 | POST | `/api/tts/config` | Configure voice |
 | POST | `/api/tts/speak` | Synthesize speech |
@@ -407,8 +517,14 @@ local_assistant/
 ├── .env                    # Configuration
 ├── apps.json               # Apps config (git-ignored)
 ├── apps.json.example       # Template apps.json
+├── personas.json           # Persona catalog (git-ignored)
+├── personas.json.example   # Template personas.json
+├── avatars/                # Uploaded avatars (git-ignored)
 ├── config.py               # Python config
 ├── requirements.txt        # Python dependencies
+├── requirements-dev.txt    # Test dependencies (pytest)
+├── pytest.ini              # Test config
+├── tests/                  # Automated tests
 ├── README.md               # This file
 ├── backend/
 │   ├── main.py             # FastAPI backend
@@ -419,6 +535,7 @@ local_assistant/
 │   ├── i18n.py             # Backend i18n
 │   ├── main.py             # Assistant logic
 │   ├── llm_engine.py       # LLM + Tool Calling
+│   ├── personas.py         # Persona storage
 │   ├── stt_engine.py       # Whisper STT (Russian)
 │   ├── tts_engine.py       # OmniVoice TTS
 │   ├── web_search.py       # DuckDuckGo search
@@ -430,6 +547,8 @@ local_assistant/
 │   ├── index.html           # Vite entry
 │   ├── src/                 # Frontend sources
 │   │   ├── app.js           # UI logic
+│   │   ├── avatars.js       # User/bot avatars
+│   │   ├── personas.js      # Persona switcher + catalog editor
 │   │   ├── i18n.js          # Frontend i18n
 │   │   ├── locales/en.json  # English translations
 │   │   ├── locales/ru.json  # Russian translations
@@ -459,6 +578,22 @@ The assistant uses the following tools:
 | `file_open` | Open file with associated app |
 | `browser_open` | Open website in browser |
 | `capture_screen` | Screenshot + VL analysis |
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+The suite never needs a GPU, an LLM server, STT or TTS — everything heavy is
+mocked or replaced with `tmp_path`. It covers import smoke tests, prompt assembly
+(base + personality + persona), the persona store (including broken/missing
+files), avatar endpoints (including path traversal), memory scopes, config
+round-trips and the tool-action payload.
+
+Run it after changing config, prompts, personas or memory logic — it needs about
+a second and catches the regressions that are hard to see in the UI.
 
 ## Troubleshooting
 
@@ -526,11 +661,15 @@ MIT
 - 🔊 **Голосовой вывод (TTS)** — OmniVoice синтез и клонирование голоса
 - 🌐 **Поиск в интернете** — DuckDuckGo (бесплатно, без API ключей)
 - 📁 **Агентные способности** — создание файлов, открытие приложений, сайтов и папок
+- 🔧 **Видимые действия ассистента** — каждый вызов инструмента показан над ответом (сворачиваемый блок)
+- 🎭 **Персоны** — переключаемые пресеты поведения, применяются мгновенно без перезапуска
+- ✍️ **Редактор личности** — дополнительные инструкции поверх системного промпта (для каждого языка)
+- 🧠 **Долговременная память** — ChromaDB: общие факты о вас и заметки отдельных персон
+- 👤 **Аватары** — эмодзи или своя картинка для вас и для ассистента
 - 📎 **Прикрепление файлов** — поддержка TXT, PDF, DOCX, **изображений (PNG, JPG, WebP, GIF, BMP, TIFF)**
 - 🖥️ **Desktop app** — Tauri (exe файл)
-- 🧠 **Долговременная память** — ChromaDB
 - ⚡ **Быстрый** — работает на локальных моделях через Ollama/LM Studio
-- ⌨️ **Глобальные горячие клавиши** — работают вне окна приложения
+- ⌨️ **Глобальные горячие клавиши** — работают вне окна приложения, меняются в Настройки → Общие
 - 🎛️ **Настраиваемый UI** — изменяемая ширина боковой панели, вкладки настроек
 - 🧵 **Контекст по чатам** — каждый чат имеет свою историю, не смешивается
 - 📊 **Индикатор контекста** — показывает использованные токены / лимит
@@ -665,6 +804,95 @@ npm run tauri build
 ## Агентные способности
 
 Ассистент умеет работать с файлами, приложениями и сайтами на компьютере.
+
+### Что ассистент делал
+
+Каждый вызов инструмента за ход возвращается в интерфейс и показывается
+сворачиваемым блоком **«Выполненные действия»** над ответом:
+
+```
+▾ Выполненные действия (2)
+  🔧 app_open      name=notepad        → Запущено: notepad
+  ⚠️ file_create   path=demo.txt       → Ошибка: [WinError 5] доступ запрещён
+```
+
+- Блок свёрнут по умолчанию, чтобы не засорять чат.
+- Неудачные вызовы подсвечиваются красным с меткой ⚠️.
+- Аргументы и результаты обрезаются до 200 символов — длинный вывод (например,
+  base64 скриншота) в чат не попадает.
+
+> Небольшие модели иногда отвечают кодом вместо реального вызова инструмента.
+> Это ограничение модели, а не ошибка: инструмент не вызывался — блока нет.
+
+### Персоны
+
+Персона — это **слой поведения** поверх системного промпта: тон, стиль, роль.
+Служебные правила (политика поиска, работа с инструментами, язык) она не заменяет.
+
+- Переключение — в шапке чата (плашка 🎭) или каталог в
+  **Настройки → 🎭🎭 Персоны**.
+- Переключение мгновенное: новый промпт применяется уже со следующего сообщения,
+  перезапуск не нужен.
+- **«Без персоны»** = стандартный системный промпт.
+- У каждой персоны может быть своя `temperature`; пусто = настройка модели.
+- Каталог хранится в `personas.json` рядом с `apps.json` (в git не попадает),
+  формат показан в `personas.json.example`.
+
+Если `personas.json` отсутствует или повреждён, приложение пишет предупреждение
+и возвращается к стандартному промпту — файл, который не удалось разобрать, не
+перезаписывается.
+
+### Слой личности (дополнительные инструкции)
+
+**Настройки → 🎭 Личность** — два текстовых поля (русский / английский),
+которые добавляются к системному промпту. Служебные правила остаются
+нередактируемыми, здесь задаётся только стиль и характер.
+
+Приоритет: активная персона → слой личности → стандартный промпт.
+
+### Два блока промптов (RU / EN)
+
+У персоны хранятся `prompt_ru` и `prompt_en`. Это **два разных промпта под два
+языка интерфейса**, а не перевод одного на другой — заполняйте только тот
+блок, который соответствует вашему языку, второй оставляйте пустым.
+
+**Зачем:** базовый системный промпт тоже двуязычный, причём содержание в нём
+различается, а не только формулировки. Русская версия учит модель триггерам
+инструментов «открой блокнот» / «посмотри на экран», английская — «open notepad» /
+«look at screen». Если смешать русскую базу с английской персоной, модель
+получает смесь двух наборов правил, что заметно ухудшает качество на малых
+моделях.
+
+**Как выбирается:** функция `_get_personality_layer()` в `src/llm_engine.py`
+читает `GENERAL_LANGUAGE` (Настройки → Общие → Язык) и применяет ровно один
+блок. Второй игнорируется, пока вы не переключите язык интерфейса.
+
+Используемый сейчас блок помечен плашкой **«используется»** — и во вкладке
+«🎭🎭 Персоны», и во вкладке «✍️ Личность».
+
+### Аватары
+
+Нажмите кнопки 👤 / 🤖 в шапке чата, чтобы сменить свой аватар или аватар
+ассистента:
+
+- выбрать готовый эмодзи,
+- загрузить свою картинку (PNG / JPG / WebP / GIF, до 5 МБ),
+- удалить загруженную картинку.
+
+Загруженные изображения кадрируются в квадрат и хранятся в 128×128 в папке
+`avatars/` (в git не попадает). Выбор хранится в localStorage браузера; ссылка на
+несуществующий файл автоматически заменяется эмодзи по умолчанию.
+
+### Скоупы памяти
+
+Память — одна коллекция ChromaDB, в метаданных есть поле `scope`:
+
+- `user` — факты о вас, общие для всех персон;
+- `<persona_id>` — заметки, относящиеся только к одной персоне.
+
+При активной персоне ассистент ищет по `["user", <persona_id>]`, без персоны —
+по всем записям. Извлечённые факты о вас всегда пишутся в `user`, поэтому смена
+персоны их не теряет.
 
 ### Открытие приложений
 
@@ -872,6 +1100,11 @@ LLM_TEMPERATURE=0.7
 # === General ===
 GENERAL_LANGUAGE=en           # en / ru
 
+# === Личность (доп. инструкции к системному промпту) ===
+# Меняются в Настройки -> Личность; переносы строк сохраняются как \n
+PERSONALITY_RU=
+PERSONALITY_EN=
+
 # === ChromaDB ===
 CHROMA_PERSIST_DIR=./storage/chroma
 
@@ -898,17 +1131,28 @@ HOTKEY_LIVE=Ctrl+Shift+L
 LOG_LEVEL=INFO
 ```
 
+> `STT_MODEL` и `HOTKEY_*` меняются прямо в приложении (Настройки → 🎙 Голос и
+> Настройки → Общие) и применяются после перезапуска. `PERSONALITY_*` применяются
+> сразу, перезапуск не нужен.
+
 ## API Endpoints
 
 | Метод | Эндпоинт | Описание |
 |-------|----------|----------|
 | GET | `/api/status` | Статус приложения |
-| POST | `/api/chat` | Отправить сообщение (возвращает `used_context_tokens`, `max_context_tokens`, поддерживает `images` массив) |
+| POST | `/api/chat` | Отправить сообщение (возвращает `used_context_tokens`, `max_context_tokens`, `actions`, поддерживает `images` массив) |
 | POST | `/api/stt` | Распознать голос |
 | POST | `/api/upload` | Загрузить файл (документ или изображение) |
 | GET | `/api/chats` | Список чатов |
 | GET | `/api/config` | Текущая конфигурация |
 | PUT | `/api/config` | Обновить конфигурацию |
+| GET | `/api/personas` | Каталог персон + активная |
+| PUT | `/api/personas` | Заменить каталог персон |
+| POST | `/api/personas/activate` | Переключить персону на лету (`{"id": "editor"}`, `{"id": null}` — без персоны) |
+| GET | `/api/avatars` | Список загруженных аватаров |
+| POST | `/api/avatars` | Загрузить аватар (multipart `file`, ресайз до 128×128 PNG) |
+| GET | `/api/avatars/{name}` | Отдать картинку аватара |
+| DELETE | `/api/avatars/{name}` | Удалить аватар |
 | POST | `/api/tts/toggle` | Включить/выключить TTS |
 | POST | `/api/tts/config` | Настроить голос |
 | POST | `/api/tts/speak` | Озвучить текст |
@@ -920,8 +1164,14 @@ local_assistant/
 ├── .env                    # Конфигурация
 ├── apps.json               # Конфиг приложений (игнорируется git'ом)
 ├── apps.json.example       # Шаблон apps.json
+├── personas.json           # Каталог персон (игнорируется git'ом)
+├── personas.json.example   # Шаблон personas.json
+├── avatars/                # Загруженные аватары (игнорируется git'ом)
 ├── config.py               # Python конфиг
 ├── requirements.txt        # Зависимости Python
+├── requirements-dev.txt    # Зависимости для тестов (pytest)
+├── pytest.ini              # Конфигурация тестов
+├── tests/                  # Автотесты
 ├── README.md               # Этот файл
 ├── backend/
 │   ├── main.py             # FastAPI backend
@@ -932,6 +1182,7 @@ local_assistant/
 │   ├── i18n.py             # Backend i18n
 │   ├── main.py             # Assistant логика
 │   ├── llm_engine.py       # LLM + Tool Calling
+│   ├── personas.py         # Хранилище персон
 │   ├── stt_engine.py       # Whisper STT (русский)
 │   ├── tts_engine.py       # OmniVoice TTS
 │   ├── web_search.py       # DuckDuckGo поиск
@@ -943,6 +1194,8 @@ local_assistant/
 │   ├── index.html           # Точка входа Vite
 │   ├── src/                 # Исходники фронтенда
 │   │   ├── app.js           # UI логика
+│   │   ├── avatars.js       # Аватары пользователя и ассистента
+│   │   ├── personas.js      # Переключатель и редактор персон
 │   │   ├── i18n.js          # Frontend i18n
 │   │   ├── locales/en.json  # English translations
 │   │   ├── locales/ru.json  # Russian translations
@@ -972,6 +1225,22 @@ local_assistant/
 | `file_open` | Открытие файла в ассоциированной программе |
 | `browser_open` | Открытие сайта в браузере |
 | `capture_screen` | Скриншот экрана + анализ через VL |
+
+## Тесты
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Тестам не нужны GPU, LLM-сервер, STT или TTS — всё тяжёлое мокается или
+подменяется на `tmp_path`. Покрыты: проверка импортов, сборка промпта
+(база + личность + персона), хранилище персон (включая битые и отсутствующие
+файлы), эндпоинты аватаров (включая path traversal), скоупы памяти, round-trip
+конфига и payload выполненных действий.
+
+Запускайте после правок конфига, промптов, персон или логики памяти — тесты
+работают около секунды и ловят регрессии, которые в UI не видны.
 
 ## Устранение проблем
 

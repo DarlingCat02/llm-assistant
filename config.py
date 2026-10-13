@@ -225,7 +225,7 @@ class TTSConfig(BaseConfig):
 class STTConfig(BaseConfig):
     """Speech-to-Text configuration."""
 
-    model: str = Field(default="large-v3-turbo", description="Модель Whisper: алиас (tiny/base/small/medium/large/large-v3-turbo), 'owner/repo' или путь к папке")
+    model: str = Field(default="large-v3-turbo", description="Модель Whisper: алиас, 'owner/repo' или путь к папке")
 
     model_config = SettingsConfigDict(env_prefix="STT_")
 
@@ -272,6 +272,33 @@ class ScreenConfig(BaseConfig):
     triggers: str = Field(default="экран,скриншот,смотри на экран,покажи экран,что на экране,сделай скриншот", description="Триггеры через запятую")
     
     model_config = SettingsConfigDict(env_prefix="SCREENSHOT_")
+
+
+class PersonalityConfig(BaseConfig):
+    """Custom personality layer appended to the base system prompt."""
+
+    ru: str = Field(default="", description="Дополнительные инструкции для русского промпта")
+    en: str = Field(default="", description="Additional instructions for the English prompt")
+
+    @field_validator("ru", "en", mode="before")
+    @classmethod
+    def unescape_newlines(cls, v):
+        """.env is line-based, so newlines are stored escaped as \\n."""
+        if isinstance(v, str) and "\\n" in v:
+            return v.replace("\\n", "\n")
+        return v
+
+    model_config = SettingsConfigDict(env_prefix="PERSONALITY_")
+
+
+class HotkeyConfig(BaseConfig):
+    """Global hotkeys (read by the Tauri shell on startup)."""
+
+    voice: str = Field(default="Ctrl+Shift+V", description="Голосовой ввод (Ctrl+Shift+V)")
+    voice_num: str = Field(default="Ctrl+Num0", description="Голосовой ввод, доп. клавиша (Ctrl+Num0)")
+    live: str = Field(default="Ctrl+Shift+L", description="Live-режим (Ctrl+Shift+L)")
+
+    model_config = SettingsConfigDict(env_prefix="HOTKEY_", extra="ignore")
 
 
 class GeneralConfig(BaseConfig):
@@ -343,6 +370,14 @@ class Config(BaseSettings):
         default_factory=GeneralConfig,
         description="Общие настройки",
     )
+    personality: PersonalityConfig = Field(
+        default_factory=PersonalityConfig,
+        description="Настройки личности (дополнительный слой к системному промпту)",
+    )
+    hotkey: HotkeyConfig = Field(
+        default_factory=HotkeyConfig,
+        description="Глобальные горячие клавиши",
+    )
     
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -412,12 +447,24 @@ def save_config(
     memory_threshold: float = None,
     language: str = None,
     show_backend_console: bool | None = None,
+    personality_ru: str | None = None,
+    personality_en: str | None = None,
+    stt_model: str | None = None,
+    hotkey_voice: str | None = None,
+    hotkey_voice_num: str | None = None,
+    hotkey_live: str | None = None,
 ) -> None:
     """
     Save the configuration to the .env file.
+
+    The written values are also mirrored into os.environ: the backend calls
+    load_dotenv() at import time, and OS environment variables take priority
+    over the .env file in pydantic-settings. Without the mirror, a settings
+    change saved at runtime would never be picked up by reload_config().
     """
+    import os
     from pathlib import Path
-    
+
     env_path = Path(__file__).parent / ".env"
     
     # Read the current .env
@@ -480,8 +527,26 @@ def save_config(
 
     if show_backend_console is not None:
         env_vars["GENERAL_SHOW_BACKEND_CONSOLE"] = "true" if show_backend_console else "false"
+
+    if personality_ru is not None:
+        env_vars["PERSONALITY_RU"] = personality_ru.replace("\r\n", "\n").replace("\n", "\\n")
+
+    if personality_en is not None:
+        env_vars["PERSONALITY_EN"] = personality_en
+
+    if stt_model is not None and stt_model != "":
+        env_vars["STT_MODEL"] = stt_model.strip()
+
+    for key, val in (("HOTKEY_VOICE", hotkey_voice),
+                     ("HOTKEY_VOICE_NUM", hotkey_voice_num),
+                     ("HOTKEY_LIVE", hotkey_live)):
+        if val is not None and val != "":
+            env_vars[key] = val.strip().replace("\r\n", "\n").replace("\n", "\\n")
     
     # Write back
     with open(env_path, "w", encoding="utf-8") as f:
         for key, value in env_vars.items():
             f.write(f"{key}={value}\n")
+
+    # Keep the process environment in sync with the file (see docstring)
+    os.environ.update(env_vars)

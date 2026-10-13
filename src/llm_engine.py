@@ -76,6 +76,15 @@ class ToolCall:
 
 
 @dataclass
+class ToolAction:
+    """A tool call that was actually executed, with its result."""
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    result_preview: str = ""
+    ok: bool = True
+
+
+@dataclass
 class LLMResponse:
     """Response from the language model."""
     content: str
@@ -84,6 +93,8 @@ class LLMResponse:
     total_duration: int = 0
     prompt_tokens: int = 0
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # Executed tool calls across all rounds (for UI display)
+    actions: list[ToolAction] = field(default_factory=list)
 
 
 class LLMEngine:
@@ -179,11 +190,24 @@ class LLMEngine:
         # Keep instance copies for dynamic switching
         self._system_prompt_ru = self.__class__._system_prompt_ru
         self._system_prompt_en = self.__class__._system_prompt_en
+
+        # Active persona layer (set via set_persona_prompt)
+        self._persona_prompt = False
+        self._persona_prompt_ru = ""
+        self._persona_prompt_en = ""
         
         self._tools: dict[str, Callable] = {}
 
     def _get_system_prompt(self) -> str:
-        """Get system prompt based on current language setting."""
+        """Get the system prompt for the current language + personality layer."""
+        base = self._get_base_system_prompt()
+        layer = self._get_personality_layer()
+        if not layer:
+            return base
+        return f"{base}\n\n{layer}"
+
+    def _get_base_system_prompt(self) -> str:
+        """Base prompt (rules, search policy, agent capabilities) - not user-editable."""
         try:
             lang = get_config().general.language
         except Exception:
@@ -197,6 +221,39 @@ class LLMEngine:
         except Exception:
             pass
         return self._system_prompt_ru if lang == "ru" else self._system_prompt_en
+
+    def _get_personality_layer(self) -> str:
+        """Extra user instructions appended to the base prompt.
+
+        Priority: active persona prompt (if any) > PERSONALITY_* from .env.
+        """
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        if self._persona_prompt:
+            text = self._persona_prompt_ru if lang == "ru" else self._persona_prompt_en
+            text = (text or "").strip()
+            if text:
+                return text
+        try:
+            cfg = get_config().personality
+            text = (cfg.ru if lang == "ru" else cfg.en) or ""
+            return text.strip()
+        except Exception:
+            return ""
+
+    def set_persona_prompt(self, prompt_ru: str = "", prompt_en: str = "") -> None:
+        """Set the active persona prompt layer (empty strings -> back to default)."""
+        self._persona_prompt = bool((prompt_ru or "").strip() or (prompt_en or "").strip())
+        self._persona_prompt_ru = prompt_ru or ""
+        self._persona_prompt_en = prompt_en or ""
+        self.refresh_system_prompt()
+
+    def get_persona_prompt(self) -> dict:
+        """Return the active persona prompt layer."""
+        return {"ru": self._persona_prompt_ru, "en": self._persona_prompt_en,
+                "active": self._persona_prompt}
 
     def refresh_system_prompt(self) -> None:
         """Update system prompt when language changes."""
@@ -504,6 +561,7 @@ class LLMEngine:
 
         try:
             max_rounds = 5
+            executed_actions: list[ToolAction] = []
             for round_idx in range(max_rounds):
                 if stream and round_idx == 0:
                     response = await self._generate_stream(payload)
@@ -538,6 +596,9 @@ class LLMEngine:
 
                 for tc in response.tool_calls:
                     tool_result = await self._execute_tool(tc)
+                    executed_actions.append(
+                        self._make_action(tc, tool_result)
+                    )
                     tool_msg = Message(
                         role=MessageRole.TOOL,
                         content=tool_result,
@@ -551,11 +612,36 @@ class LLMEngine:
             if response.tool_calls:
                 logger.info(f"Tools executed in {round_idx + 1} rounds")
 
+            response.actions = executed_actions
             return response
 
         except httpx.HTTPError as e:
             logger.error(f"Error requesting {self._config.provider.value}: {e}")
             raise
+
+    # Max length of a tool result preview shown in the UI
+    ACTION_PREVIEW_LIMIT = 200
+
+    # Prefixes used by agent_tools / _execute_tool to signal a failure
+    ERROR_PREFIXES = ("[error", "ошибка", "error:", "[winerror")
+
+    def _make_action(self, tool_call: ToolCall, result: str) -> ToolAction:
+        """Build a UI-friendly record of one executed tool call."""
+        text = str(result) if result is not None else ""
+        lowered = text.lstrip().lower()
+        is_error = any(lowered.startswith(p) for p in self.ERROR_PREFIXES)
+        preview = text[: self.ACTION_PREVIEW_LIMIT]
+        if len(text) > self.ACTION_PREVIEW_LIMIT:
+            preview += "..."
+        args = tool_call.arguments
+        if not isinstance(args, dict):
+            args = {"value": args}
+        return ToolAction(
+            name=tool_call.name,
+            arguments=args,
+            result_preview=preview.strip(),
+            ok=not is_error,
+        )
 
     async def _execute_tool(self, tool_call: ToolCall) -> str:
         """Execute a tool call and return the result."""

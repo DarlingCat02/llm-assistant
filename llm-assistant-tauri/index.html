@@ -32,6 +32,13 @@
         <!-- Основная область чата -->
         <main class="chat-area">
             <header class="chat-header">
+                <div class="avatar-picker">
+                    <button class="avatar-btn" id="user-avatar-btn" data-role="user"
+                            title="User avatar" data-i18n="avatar.user" data-i18n-attr="title">👤</button>
+                    <button class="avatar-btn" id="bot-avatar-btn" data-role="bot"
+                            title="Assistant avatar" data-i18n="avatar.bot" data-i18n-attr="title">🤖</button>
+                </div>
+                <button id="persona-btn" class="persona-btn" title="Switch persona"></button>
                 <h2 id="chat-title" data-i18n="chat.select">Выберите чат</h2>
                 <div class="context-indicator" id="context-indicator" style="display:none;">
                     <div class="context-bar-bg">
@@ -175,8 +182,10 @@
             <div class="settings-tabs">
                 <button class="settings-tab active" data-tab="general" data-i18n="settings.general">General</button>
                 <button class="settings-tab" data-tab="llm" data-i18n="settings.llm">🧠 LLM</button>
-                <button class="settings-tab" data-tab="tts" data-i18n="settings.tts">🔊 TTS</button>
+                <button class="settings-tab" data-tab="voice" data-i18n="settings.voice">🎙 Голос</button>
                 <button class="settings-tab" data-tab="memory" data-i18n="settings.memory">💾 Память</button>
+                <button class="settings-tab" data-tab="personality" data-i18n="settings.personality">✍️ Личность</button>
+                <button class="settings-tab" data-tab="personas" data-i18n="persona.tab">🎭 Персоны</button>
             </div>
 
             <!-- General Tab -->
@@ -195,6 +204,22 @@
                         <span data-i18n="settings.showConsole">Show external console window (requires restart)</span>
                     </label>
                     <div class="slider-hint" data-i18n="settings.showConsole.hint">If disabled (default), backend runs hidden and logs appear in the in-app Terminal.</div>
+                </div>
+                <div class="settings-section">
+                    <label data-i18n="settings.hotkeys">Hotkeys (global)</label>
+                    <div class="slider-hint" data-i18n="settings.hotkeys.hint">Format: Ctrl+Shift+V, Alt+F9, F12, Ctrl+Num0. Applied after restarting the app.</div>
+                </div>
+                <div class="settings-section">
+                    <label for="hotkey-voice-input" data-i18n="settings.hotkey.voice">Voice input</label>
+                    <input type="text" id="hotkey-voice-input" class="settings-input" value="Ctrl+Shift+V">
+                </div>
+                <div class="settings-section">
+                    <label for="hotkey-voice-num-input" data-i18n="settings.hotkey.voiceNum">Voice input (extra)</label>
+                    <input type="text" id="hotkey-voice-num-input" class="settings-input" value="Ctrl+Num0">
+                </div>
+                <div class="settings-section">
+                    <label for="hotkey-live-input" data-i18n="settings.hotkey.live">Live mode</label>
+                    <input type="text" id="hotkey-live-input" class="settings-input" value="Ctrl+Shift+L">
                 </div>
             </div>
 
@@ -237,8 +262,29 @@
                 </div>
             </div>
 
-            <!-- TTS Tab -->
-            <div class="settings-tab-content" id="tab-tts">
+            <!-- Voice Tab (STT + TTS) -->
+            <div class="settings-tab-content" id="tab-voice">
+                <div class="settings-section">
+                    <label data-i18n="settings.voice.sttTitle">Распознавание речи (STT)</label>
+                    <div class="slider-hint" data-i18n="settings.voice.sttHint">Модель Whisper. Недостающие модели скачиваются при первом использовании. Требуется перезапуск.</div>
+                </div>
+                <div class="settings-section">
+                    <label for="stt-model-select" data-i18n="settings.voice.sttModel">Модель Whisper</label>
+                    <select id="stt-model-select" class="settings-select">
+                        <option value="tiny">tiny (~1 GB)</option>
+                        <option value="base">base (~1 GB)</option>
+                        <option value="small">small (~2 GB)</option>
+                        <option value="medium">medium (~5 GB)</option>
+                        <option value="large">large (~10 GB)</option>
+                        <option value="large-v3-turbo">large-v3-turbo (~4 GB, по умолчанию)</option>
+                    </select>
+                    <input type="text" id="stt-model-custom" class="settings-input"
+                           data-i18n-attr="placeholder" data-i18n="settings.voice.sttCustom"
+                           placeholder="Другая модель: owner/repo или путь к папке">
+                </div>
+                <div class="settings-section">
+                    <label data-i18n="settings.voice.ttsTitle">Озвучка (TTS)</label>
+                </div>
                 <div class="settings-section">
                     <label data-i18n="settings.tts.steps">Шаги генерации: <span id="tts-steps-value">64</span></label>
                     <div class="slider-hint" data-i18n="settings.tts.steps.hint">Меньше = быстрее, больше = качественнее</div>
@@ -269,6 +315,67 @@
                 </div>
             </div>
 
+            <!-- Personas Tab -->
+            <div class="settings-tab-content" id="tab-personas">
+                <div class="settings-section">
+                    <label data-i18n="persona.catalog">Персоны</label>
+                    <div class="slider-hint" data-i18n="persona.hint">Персона — это слой поведения поверх системного промпта. Если ни одна не выбрана, используется стандартный системный промпт. Переключение мгновенное, без перезапуска.</div>
+                    <button id="persona-add-btn" class="btn-secondary" data-i18n="persona.add">Добавить персону</button>
+                </div>
+                <div id="persona-list" class="persona-list"></div>
+                <div id="persona-editor" class="settings-section hidden">
+                    <label data-i18n="persona.editor">Редактирование персоны</label>
+                    <div class="settings-section">
+                        <label for="persona-form-name" data-i18n="persona.form.name">Имя</label>
+                        <input type="text" id="persona-form-name" class="settings-input">
+                    </div>
+                    <div class="settings-section">
+                        <label for="persona-form-id" data-i18n="persona.form.id">ID</label>
+                        <input type="text" id="persona-form-id" class="settings-input" disabled>
+                    </div>
+                    <div class="settings-section">
+                        <div class="slider-hint" data-i18n="prompt.langHint">Используется только блок на языке интерфейса (Общие → Язык). Заполнять оба не нужно — второй сейчас не применяется.</div>
+                        <label for="persona-form-ru" data-i18n="settings.personality.ru" data-lang-field="ru">Русский промпт</label>
+                        <textarea id="persona-form-ru" class="settings-textarea" rows="4"></textarea>
+                    </div>
+                    <div class="settings-section">
+                        <label for="persona-form-en" data-i18n="settings.personality.en" data-lang-field="en">Английский промпт</label>
+                        <textarea id="persona-form-en" class="settings-textarea" rows="4"></textarea>
+                    </div>
+                    <div class="settings-section">
+                        <label for="persona-form-temp" data-i18n="persona.form.temp">Температура (пусто = из настроек модели)</label>
+                        <input type="number" id="persona-form-temp" class="settings-input" step="0.1" min="0" max="2" placeholder="0.7">
+                    </div>
+                    <div class="slider-hint" data-i18n="persona.editor.hint">Сохраните персону кнопкой внизу окна — отдельных кнопок здесь нет.</div>
+                </div>
+            </div>
+
+            <!-- Personality Tab -->
+            <div class="settings-tab-content" id="tab-personality">
+                <div class="settings-section">
+                    <label data-i18n="settings.personality.layer">Дополнительные инструкции (добавляются к системному промпту)</label>
+                    <div class="slider-hint" data-i18n="settings.personality.hint">Служебные правила (поиск, инструменты, язык) остаются системными и не редактируются — здесь только стиль и характер ассистента.</div>
+                </div>
+                <div class="settings-section">
+                    <div class="slider-hint" data-i18n="prompt.langHint">Используется только блок на языке интерфейса (Общие → Язык). Заполнять оба не нужно — второй сейчас не применяется.</div>
+                    <label for="personality-ru-input" data-i18n="settings.personality.ru" data-lang-field="ru">Русский промпт</label>
+                    <textarea id="personality-ru-input" class="settings-textarea" rows="6"
+                              data-i18n-attr="placeholder" data-i18n="settings.personality.placeholder.ru"
+                              placeholder="Например: Отвечай кратко, используй списки, без сленга"></textarea>
+                    <div class="slider-hint"><span id="personality-ru-count">0</span> / 8000</div>
+                </div>
+                <div class="settings-section">
+                    <label for="personality-en-input" data-i18n="settings.personality.en" data-lang-field="en">English prompt</label>
+                    <textarea id="personality-en-input" class="settings-textarea" rows="6"
+                              data-i18n-attr="placeholder" data-i18n="settings.personality.placeholder.en"
+                              placeholder="e.g. Be concise, use bullet points, no slang"></textarea>
+                    <div class="slider-hint"><span id="personality-en-count">0</span> / 8000</div>
+                </div>
+                <div class="settings-section">
+                    <button id="personality-reset-btn" class="btn-secondary" data-i18n="settings.personality.reset">Сбросить</button>
+                </div>
+            </div>
+
             <div class="settings-buttons">
                 <button id="save-settings-btn" class="btn-primary" data-i18n="settings.save">Сохранить</button>
                 <button id="close-settings-btn" class="btn-secondary" data-i18n="settings.cancel">Отмена</button>
@@ -276,6 +383,24 @@
         </div>
     </div>
     
+    <!-- Persona switcher popup -->
+    <div id="persona-menu" class="persona-menu hidden"></div>
+
+    <!-- Avatar selection popup -->
+    <div id="avatar-menu" class="avatar-menu hidden">
+        <div class="avatar-menu-header" id="avatar-menu-title">Avatar</div>
+        <div class="avatar-menu-presets" id="avatar-menu-presets"></div>
+        <div class="avatar-menu-uploaded" id="avatar-menu-uploaded"></div>
+        <div class="avatar-menu-actions">
+            <label class="btn-secondary avatar-upload-label">
+                <input type="file" id="avatar-file-input" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+                <span data-i18n="avatar.upload">Upload image</span>
+            </label>
+            <button class="btn-secondary" id="avatar-reset-btn" data-i18n="avatar.reset">Reset</button>
+            <button class="btn-secondary" id="avatar-delete-btn" data-i18n="avatar.delete">Delete selected</button>
+        </div>
+    </div>
+
     <div id="toast-container" aria-live="polite"></div>
     <script type="module" src="/src/app.js"></script>
 </body>

@@ -1,43 +1,63 @@
+# === Secrets and local config ===
+# Never commit: real settings may hold API keys.
 .env
-/storage/
+.env.local
+
+# === Runtime folders ===
+# Pattern below keeps the FOLDER in the repo (so a fresh clone has the same
+# structure) while never committing its contents.
+#
+#   <dir>/*        ignore everything inside
+#   !<dir>/.gitkeep except the placeholder that makes git keep the dir
+#
+# Git does not track empty directories, hence the .gitkeep files.
+
+# Uploaded avatars (user/bot pictures)
+avatars/*
+!avatars/.gitkeep
+
+# TTS voice files (cloned voices)
+voices/*
+!voices/.gitkeep
+
+# Local model files (Whisper, OmniVoice)
+models/*
+!models/.gitkeep
+
+# Runtime data: ChromaDB vector store and chat SQLite database
+storage/*
+!storage/.gitkeep
+
+# Pure output - no placeholder needed
 logs/
-*.pyc
-__pycache__/
+screenshots/
+debug_tts/
+ffmpeg/
+
+# Per-user configuration (real files are ignored, templates are committed)
+apps.json
+personas.json
+
+# === Python ===
 venv/
 .venv/
 *.egg-info/
+*.py[cod]
+*$py.class
+__pycache__/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 
-# TTS debug output
-debug_tts/
-
-# Screenshots (generated)
-screenshots/
-
-# Voices (TTS voice files)
-voices/
-
-# User-specific app config
-apps.json
-
-# Node modules (Tauri)
+# === Node / Tauri ===
 llm-assistant-tauri/node_modules/
 
-# Tauri build output (generated)
+# Build output (generated)
 llm-assistant-tauri/src-tauri/target/
 llm-assistant-tauri/dist/
 
 # Cargo lock (optional - generated)
 llm-assistant-tauri/src-tauri/Cargo.lock
 
-# Installer logs
+# === Installer logs ===
 install.log
-ffmpeg/
-
-# Local model files (Whisper, OmniVoice)
-models/
-
-# Python bytecode
-*.py[cod]
-*$py.class

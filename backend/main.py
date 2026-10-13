@@ -15,6 +15,7 @@ Run:
 """
 
 import logging
+import re
 import sys
 import os
 import tempfile
@@ -23,6 +24,25 @@ import io
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+
+
+def pick_lmstudio_model(configured: str, loaded: list[str]) -> str | None:
+    """
+    Decide which LM Studio model the assistant should talk to at startup.
+
+    Rules:
+    - if the configured model is loaded, keep it - the user chose it;
+    - otherwise fall back to the first loaded model, so a stale .env does not
+      make the backend request a second model and waste VRAM;
+    - nothing loaded -> keep the configuration and let the request fail loudly.
+
+    Returns the model to use, or None when the configuration should be kept.
+    """
+    if not loaded:
+        return None
+    if configured in loaded:
+        return None
+    return loaded[0]
 
 
 class _CrashProofStderr:
@@ -92,7 +112,10 @@ except ImportError:
             return key
         def assistant_not_init_detail(lang=None):
             return "Assistant not initialized"
+from dataclasses import asdict
+
 from backend.database import ChatDatabase
+from src.personas import Persona
 from backend.api import (
     memory_router,
     manager,
@@ -176,22 +199,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _assistant = Assistant(_config)
         await _assistant.initialize()
         logger.info("Assistant initialized for API")
-        # For LM Studio — sync model with actually loaded in LM Studio (once at startup)
+        # For LM Studio — align the model with what is actually loaded, but
+        # never override a model the user configured that IS loaded. Taking the
+        # first loaded model unconditionally used to swap qwen-3.5-4b for a 2B
+        # that happened to be loaded too, silently breaking tool calling.
         if _config.llm.provider.value == "lm_studio":
             try:
                 import httpx
                 async with httpx.AsyncClient(timeout=3.0) as client:
                     resp = await client.get(f"{_config.llm.host}/api/v0/models")
                     if resp.status_code == 200:
-                        for m in resp.json().get("data", []):
-                            if m.get("state") == "loaded":
-                                loaded_id = m.get("id")
-                                if loaded_id and loaded_id != _config.llm.model:
-                                    logger.info(f"Syncing LM Studio model: {_config.llm.model} -> {loaded_id} (loaded in LM Studio)")
-                                    _config.llm.model = loaded_id
-                                    if _assistant and _assistant._llm:
-                                        _assistant._llm._config.model = loaded_id
-                                break
+                        loaded = [
+                            m.get("id")
+                            for m in resp.json().get("data", [])
+                            if m.get("state") == "loaded" and m.get("id")
+                        ]
+                        chosen = pick_lmstudio_model(_config.llm.model, loaded)
+                        if chosen and chosen != _config.llm.model:
+                            logger.info(
+                                f"Syncing LM Studio model: {_config.llm.model} -> {chosen} "
+                                f"(loaded in LM Studio)"
+                            )
+                            _config.llm.model = chosen
+                            if _assistant and _assistant._llm:
+                                _assistant._llm._config.model = chosen
+                        elif _config.llm.model in loaded:
+                            logger.info(f"LM Studio model in use: {_config.llm.model}")
             except Exception as e:
                 logger.debug(f"Failed to sync LM Studio model: {e}")
     except Exception as e:
@@ -526,12 +559,15 @@ async def chat(request: ChatMessage):
         if msg.role in ("user", "assistant")
     ]
 
-    # For LM Studio — replace model with actually loaded (1 request per 30s)
-    if _config and _config.llm.provider.value == "lm_studio":
-        loaded = await get_lmstudio_loaded_model()
-        if loaded and _assistant and _assistant._llm and loaded != _assistant._llm._config.model:
-            logger.info(f"Replacing model {_assistant._llm._config.model} -> {loaded} (loaded in LM Studio)")
-            _assistant._llm._config.model = loaded
+    # For LM Studio — follow the loaded model, but never swap away from a model
+    # the user configured that IS loaded (see pick_lmstudio_model). Cached 30s.
+    if _config and _config.llm.provider.value == "lm_studio" and _assistant and _assistant._llm:
+        current = _assistant._llm._config.model
+        loaded = await get_lmstudio_loaded_models()
+        target = pick_lmstudio_model(current, loaded)
+        if target and target != current:
+            logger.info(f"Replacing model {current} -> {target} (loaded in LM Studio)")
+            _assistant._llm._config.model = target
 
     # Get response from assistant
     try:
@@ -544,6 +580,10 @@ async def chat(request: ChatMessage):
         )
         response_text = llm_response.content
         used_tokens = llm_response.prompt_tokens
+        import dataclasses as _dataclasses
+        actions = [
+            _dataclasses.asdict(a) for a in getattr(llm_response, "actions", []) or []
+        ]
     except Exception as e:
         logger.error(f"Error generating response: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -568,35 +608,44 @@ async def chat(request: ChatMessage):
         message_id=0,
         used_context_tokens=used_tokens,
         max_context_tokens=max_ctx,
+        actions=actions,
     )
 
 
-_cached_lm_model: str | None = None
+_cached_lm_models: list[str] | None = None
 _cached_lm_model_time: float = 0.0
 
-async def get_lmstudio_loaded_model() -> str | None:
-    """Return the ID of the model loaded in LM Studio (30s cache) to avoid loading a second one."""
-    global _cached_lm_model, _cached_lm_model_time
+async def get_lmstudio_loaded_models() -> list[str]:
+    """IDs of every model currently loaded in LM Studio (30s cache)."""
+    global _cached_lm_models, _cached_lm_model_time
     import time
     now = time.monotonic()
-    if _cached_lm_model is not None and (now - _cached_lm_model_time) < 30.0:
-        return _cached_lm_model
+    if _cached_lm_models is not None and (now - _cached_lm_model_time) < 30.0:
+        return _cached_lm_models
     try:
         cfg = get_config().llm
         if cfg.provider.value != "lm_studio":
-            return None
+            return []
         import httpx
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{cfg.host}/api/v0/models")
             if resp.status_code == 200:
-                for m in resp.json().get("data", []):
-                    if m.get("state") == "loaded":
-                        _cached_lm_model = m.get("id")
-                        _cached_lm_model_time = now
-                        return _cached_lm_model
-    except:
+                loaded = [
+                    m.get("id")
+                    for m in resp.json().get("data", [])
+                    if m.get("state") == "loaded" and m.get("id")
+                ]
+                _cached_lm_models = loaded
+                _cached_lm_model_time = now
+                return loaded
+    except Exception:
         pass
-    return None
+    return []
+
+async def get_lmstudio_loaded_model() -> str | None:
+    """First model loaded in LM Studio, or None. Used for status display."""
+    loaded = await get_lmstudio_loaded_models()
+    return loaded[0] if loaded else None
 
 async def get_effective_context_length() -> int:
     """Return the context limit from the config (for LM Studio — also from .env, no extra requests)."""
@@ -645,6 +694,10 @@ async def get_current_config():
             "memory_max_context": 20, "memory_search_results": 3, "memory_threshold": 0.3,
             "language": "en",
             "show_backend_console": False,
+            "personality_ru": "", "personality_en": "",
+            "stt_model": "large-v3-turbo",
+            "hotkey_voice": "Ctrl+Shift+V", "hotkey_voice_num": "Ctrl+Num0",
+            "hotkey_live": "Ctrl+Shift+L",
         }
     
     return {
@@ -661,6 +714,12 @@ async def get_current_config():
         "memory_threshold": _config.memory.similarity_threshold,
         "language": _config.general.language,
         "show_backend_console": _config.general.show_backend_console,
+        "personality_ru": _config.personality.ru,
+        "personality_en": _config.personality.en,
+        "stt_model": _config.stt.model,
+        "hotkey_voice": _config.hotkey.voice,
+        "hotkey_voice_num": _config.hotkey.voice_num,
+        "hotkey_live": _config.hotkey.live,
     }
 
 
@@ -688,6 +747,18 @@ async def update_config(request: dict):
         if isinstance(request.get("show_backend_console"), str):
             show_backend_console = request.get("show_backend_console").lower() == "true"
 
+    personality_ru = request.get("personality_ru")
+    personality_en = request.get("personality_en")
+    stt_model = request.get("stt_model")
+    hotkey_voice = request.get("hotkey_voice")
+    hotkey_voice_num = request.get("hotkey_voice_num")
+    hotkey_live = request.get("hotkey_live")
+    for name, val in (("personality_ru", personality_ru), ("personality_en", personality_en)):
+        if val is not None and not isinstance(val, str):
+            raise HTTPException(status_code=400, detail=f"{name} must be a string")
+        if isinstance(val, str) and len(val) > 8000:
+            raise HTTPException(status_code=400, detail=f"{name} is too long (max 8000 chars)")
+
     save_config(
         provider=provider,
         model=model,
@@ -702,6 +773,12 @@ async def update_config(request: dict):
         memory_threshold=memory_threshold,
         language=language,
         show_backend_console=show_backend_console,
+        personality_ru=personality_ru,
+        personality_en=personality_en,
+        stt_model=stt_model,
+        hotkey_voice=hotkey_voice,
+        hotkey_voice_num=hotkey_voice_num,
+        hotkey_live=hotkey_live,
     )
     # Hot-swap without restart
     try:
@@ -932,6 +1009,180 @@ async def tts_speak(request: dict):
         media_type="audio/wav",
         headers={"Content-Disposition": "inline"},
     )
+
+
+# === Personas ===
+
+@app.get("/api/personas")
+async def get_personas():
+    """List the persona catalog and the active selection."""
+    from src import personas as P
+    data = P.load()
+    return {
+        "personas": [asdict(p) for p in data.personas],
+        "active": data.active_id,
+        "exists": data.exists,
+        "error": data.parse_error,
+    }
+
+
+@app.put("/api/personas")
+async def update_personas(request: dict):
+    """Replace the persona catalog and the active selection."""
+    from src import personas as P
+    from dataclasses import asdict
+
+    items = request.get("personas")
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="personas must be a list")
+
+    try:
+        raw = [Persona(**i) if isinstance(i, dict) and "id" in i else i for i in items]
+    except TypeError as e:
+        raise HTTPException(status_code=400, detail=f"Malformed persona entry: {e}")
+
+    clean, active, errors = P.validate(raw, request.get("active"))
+    saved = P.save(P.PersonasFile(personas=clean, active_id=active))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Cannot write personas.json")
+
+    if _assistant is not None:
+        _reapply_active_persona()
+    return {"status": "ok", "personas": [asdict(p) for p in clean],
+            "active": active, "warnings": errors}
+
+
+@app.post("/api/personas/activate")
+async def activate_persona(request: dict):
+    """Switch the active persona at runtime (id or null for the default prompt)."""
+    from src import personas as P
+
+    pid = request.get("id")
+    pid = str(pid).strip().lower() if isinstance(pid, str) and pid.strip() else None
+
+    data = P.load()
+    persona = None
+    if pid is not None:
+        persona = next((p for p in data.personas if p.id == pid), None)
+        if persona is None:
+            raise HTTPException(status_code=404, detail=f"Persona '{pid}' not found")
+
+    data.active_id = persona.id if persona else None
+    P.save(data)
+
+    if _assistant is not None:
+        _assistant.apply_persona(persona)
+
+    return {"status": "ok", "active": data.active_id,
+            "persona": asdict(persona) if persona else None}
+
+
+def _reapply_active_persona() -> None:
+    """Re-apply the saved persona after the catalog changed."""
+    from src import personas as P
+    try:
+        persona = P.resolve_active(P.load())
+        if _assistant is not None:
+            _assistant.apply_persona(persona)
+    except Exception as e:
+        logger.warning(f"Cannot apply persona: {e}")
+
+
+# === Avatars ===
+
+AVATARS_DIR = Path(__file__).parent.parent / "avatars"
+AVATAR_MAX_SIZE = 5 * 1024 * 1024
+AVATAR_MAX_DIM = 128
+AVATAR_ALLOWED_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]
+_AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+
+def _validate_avatar_name(name: str) -> str:
+    """Reject anything that could escape the avatars folder."""
+    if not name or not _AVATAR_NAME_RE.match(name) or ".." in name:
+        raise HTTPException(status_code=400, detail="Invalid avatar name")
+    return name
+
+
+def _avatar_path(name: str) -> Path:
+    return AVATARS_DIR / _validate_avatar_name(name)
+
+
+@app.get("/api/avatars")
+async def list_avatars():
+    """List uploaded avatars."""
+    if not AVATARS_DIR.exists():
+        return {"avatars": []}
+    items = []
+    for f in sorted(AVATARS_DIR.iterdir()):
+        if f.is_file() and _AVATAR_NAME_RE.match(f.name):
+            items.append({"name": f.name, "url": f"/api/avatars/{f.name}"})
+    return {"avatars": items}
+
+
+@app.post("/api/avatars")
+async def upload_avatar(file: UploadFile = File(...)):
+    """Upload an avatar image (resized to a small square)."""
+    if file.content_type not in AVATAR_ALLOWED_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image type: {file.content_type}. Use PNG, JPG, WEBP or GIF",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > AVATAR_MAX_SIZE:
+        raise HTTPException(status_code=400, detail="Image is too large (max 5 MB)")
+
+    if Image is None:
+        raise HTTPException(status_code=500, detail="Pillow is not installed")
+
+    import io
+    import uuid
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img = img.convert("RGBA")
+        # Center-crop to a square, then downscale
+        w, h = img.size
+        side = min(w, h)
+        img = img.crop(((w - side) // 2, (h - side) // 2,
+                        (w - side) // 2 + side, (h - side) // 2 + side))
+        img = img.resize((AVATAR_MAX_DIM, AVATAR_MAX_DIM), Image.Resampling.LANCZOS)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Cannot read image: {e}")
+
+    AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"avatar_{uuid.uuid4().hex[:12]}.png"
+    img.save(AVATARS_DIR / name, format="PNG")
+    logger.info(f"Avatar saved: {name}")
+    return {"status": "ok", "name": name, "url": f"/api/avatars/{name}"}
+
+
+@app.get("/api/avatars/{name}")
+async def get_avatar(name: str):
+    """Serve an avatar image file."""
+    from fastapi.responses import FileResponse
+    path = _avatar_path(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Avatar not found")
+    return FileResponse(path)
+
+
+@app.delete("/api/avatars/{name}")
+async def delete_avatar(name: str):
+    """Delete an uploaded avatar."""
+    path = _avatar_path(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Avatar not found")
+    try:
+        path.unlink()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cannot delete avatar: {e}")
+    return {"status": "ok"}
 
 
 @app.get("/api/models")

@@ -8,6 +8,9 @@
  */
 
 import { initI18n, t, setLanguage, getLang } from './i18n.js';
+import { initAvatars, avatarHtml } from './avatars.js';
+import { initPersonas, renderPersonaSettings, loadPersonas, renderPersonaSelector,
+         isPersonaEditorOpen, savePersonaEditor, closePersonaEditor } from './personas.js';
 
 const API_BASE = 'http://127.0.0.1:8000';
 let currentChatId = null;
@@ -62,6 +65,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ready = await waitForApi();
     if (ready) {
         console.log('API готово, загрузка...');
+        initAvatars();
+        initPersonas();
+        window.addEventListener('lai:avatar-changed', () => {
+            if (currentChatId) loadChatMessages(currentChatId);
+        });
         initEventListeners();
         loadChats();
         connectWebSocket();
@@ -239,16 +247,8 @@ function initEventListeners() {
     if (termClear) termClear.addEventListener('click', clearTerminal);
     const termCopy = document.getElementById('terminal-copy-btn');
     if (termCopy) termCopy.addEventListener('click', copyTerminal);
-    // Listen for backend logs from Rust
-    if (isTauri) {
-        import('@tauri-apps/api/event').then(({ listen }) => {
-            listen('backend-log', (e) => appendTerminal(e.payload));
-        }).catch(()=>{});
-        // Load existing logs
-        import('@tauri-apps/api/core').then(({ invoke }) => {
-            invoke('get_backend_logs').then(lines => lines.forEach(appendTerminal)).catch(()=>{});
-        }).catch(()=>{});
-    }
+    // Listen for backend logs from Rust (with a polling fallback)
+    startTerminalLogBridge();
     const langSel = document.getElementById('lang-select');
     if (langSel) {
         langSel.value = getLang();
@@ -691,7 +691,7 @@ async function sendMessage() {
         }
         
         // Render the response from the HTTP response
-        appendMessage('assistant', data.response);
+        appendMessage('assistant', data.response, null, data.actions || null);
         hideTypingIndicator();
         
         // Update the context indicator
@@ -710,7 +710,31 @@ async function sendMessage() {
     }
 }
 
-function appendMessage(role, content, timestamp = null) {
+function renderActions(actions) {
+    // Minimal collapsible list of tool calls executed during this turn
+    if (!Array.isArray(actions) || actions.length === 0) return '';
+    const rows = actions.map((a) => {
+        const args = a.arguments || {};
+        const argText = Object.entries(args)
+            .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+            .join(', ');
+        const short = argText.length > 120 ? argText.slice(0, 120) + '…' : argText;
+        const ok = a.ok !== false;
+        const preview = escapeHtml(a.result_preview || '');
+        return `<div class="action-row${ok ? '' : ' action-error'}">
+            <span class="action-icon">${ok ? '🔧' : '⚠️'}</span>
+            <span class="action-name">${escapeHtml(a.name || 'tool')}</span>
+            ${short ? `<span class="action-args">${escapeHtml(short)}</span>` : ''}
+            ${preview ? `<span class="action-result">→ ${preview}</span>` : ''}
+        </div>`;
+    }).join('');
+    return `<details class="actions-block">
+        <summary class="actions-summary">${t('chat.actions.title')} (${actions.length})</summary>
+        <div class="actions-list">${rows}</div>
+    </details>`;
+}
+
+function appendMessage(role, content, timestamp = null, actions = null) {
     const container = document.getElementById('messages-container');
     
     // Remove the welcome message if present
@@ -722,7 +746,7 @@ function appendMessage(role, content, timestamp = null) {
     const div = document.createElement('div');
     div.className = `message ${role}`;
     
-    const avatar = role === 'user' ? '👤' : '🤖';
+    const avatar = avatarHtml(role === 'user' ? 'user' : 'bot');
     const time = timestamp 
         ? new Date(timestamp).toLocaleTimeString(getLang()==='ru'?'ru-RU':'en-US', { hour: '2-digit', minute: '2-digit' })
         : new Date().toLocaleTimeString(getLang()==='ru'?'ru-RU':'en-US', { hour: '2-digit', minute: '2-digit' });
@@ -730,6 +754,7 @@ function appendMessage(role, content, timestamp = null) {
     div.innerHTML = `
         <div class="message-avatar">${avatar}</div>
         <div class="message-content">
+            ${role === 'assistant' ? renderActions(actions) : ''}
             <div class="message-text">${escapeHtml(content)}</div>
             <div class="message-time">${time}</div>
         </div>
@@ -967,17 +992,70 @@ function toggleTerminalPanel() {
     const panel = document.getElementById('terminal-panel');
     if (panel) panel.classList.toggle('hidden');
 }
+
+// Incremental: appending a text node instead of `textContent += ...`
+// (which re-parses the whole buffer on every line).
 function appendTerminal(line) {
     const pre = document.getElementById('terminal-log');
     if (!pre) return;
-    pre.textContent += line + '\n';
-    const lines = pre.textContent.split('\n');
-    if (lines.length > 2000) pre.textContent = lines.slice(-2000).join('\n');
+    if (typeof line !== 'string') line = String(line ?? '');
+    line = line.replace(/\r?\n$/, '');
+    if (!line.trim()) return;
+
+    terminalLineCount += 1;
+    pre.appendChild(document.createTextNode(line + '\n'));
+
+    // Keep memory bounded: drop the oldest text nodes, never rebuild the buffer
+    while (terminalLineCount > 2000 && pre.firstChild) {
+        pre.removeChild(pre.firstChild);
+        terminalLineCount -= 1;
+    }
     pre.scrollTop = pre.scrollHeight;
 }
+
+let terminalLineCount = 0;
+let terminalCursor = 0;   // how many log lines were already consumed
+let terminalEventsAlive = false;
+
+// Fallback for when the live Tauri event stream does not deliver: poll the
+// backend log buffer and print whatever is new. Cheap (one IPC call every few
+// seconds) and it makes the terminal work even if events are lost.
+async function terminalPollOnce() {
+    try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const lines = await invoke('get_backend_logs');
+        if (!Array.isArray(lines)) return;
+        if (lines.length < terminalCursor) terminalCursor = 0; // buffer cleared
+        for (let i = terminalCursor; i < lines.length; i++) {
+            appendTerminal(lines[i]);
+        }
+        terminalCursor = lines.length;
+    } catch (e) {
+        console.warn('Ошибка опроса логов бэкенда:', e);
+    }
+}
+
+function startTerminalLogBridge() {
+    if (!isTauri) return;
+
+    import('@tauri-apps/api/event')
+        .then(({ listen }) => listen('backend-log', (e) => {
+            terminalEventsAlive = true;
+            appendTerminal(e.payload);
+        }))
+        .then((unlisten) => { if (typeof unlisten === 'function') window.__laiUnlistenLogs = unlisten; })
+        .catch((e) => console.error('Tauri log events error:', e));
+
+    // Initial buffer + slow poll safety net
+    terminalPollOnce();
+    setInterval(terminalPollOnce, 5000);
+}
+
 async function clearTerminal() {
     const pre = document.getElementById('terminal-log');
     if (pre) pre.textContent = '';
+    terminalLineCount = 0;
+    terminalCursor = 0;
     try {
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('clear_backend_logs');
@@ -1006,6 +1084,31 @@ async function openSettings() {
         }
         const consoleToggle = document.getElementById('show-console-toggle');
         if (consoleToggle) consoleToggle.checked = !!config.show_backend_console;
+
+        // Personality layer
+        const pRu = document.getElementById('personality-ru-input');
+        const pEn = document.getElementById('personality-en-input');
+        if (pRu) pRu.value = config.personality_ru || '';
+        if (pEn) pEn.value = config.personality_en || '';
+        updatePersonalityCounters();
+
+        // Voice: STT model
+        const sttCustom = document.getElementById('stt-model-custom');
+        const sttSelect = document.getElementById('stt-model-select');
+        const sttModel = config.stt_model || 'large-v3-turbo';
+        if (sttSelect) {
+            const known = [...sttSelect.options].some((o) => o.value === sttModel);
+            sttSelect.value = known ? sttModel : 'large-v3-turbo';
+            if (sttCustom) sttCustom.value = known ? '' : sttModel;
+        }
+
+        // Hotkeys
+        const hkVoice = document.getElementById('hotkey-voice-input');
+        const hkVoiceNum = document.getElementById('hotkey-voice-num-input');
+        const hkLive = document.getElementById('hotkey-live-input');
+        if (hkVoice) hkVoice.value = config.hotkey_voice || 'Ctrl+Shift+V';
+        if (hkVoiceNum) hkVoiceNum.value = config.hotkey_voice_num || 'Ctrl+Num0';
+        if (hkLive) hkLive.value = config.hotkey_live || 'Ctrl+Shift+L';
         
         document.getElementById('provider-select').value = config.provider || 'ollama';
         document.getElementById('ollama-host-input').value = config.ollama_host || 'http://localhost:11434';
@@ -1059,11 +1162,48 @@ async function openSettings() {
     // Initialize the tabs
     initSettingsTabs();
     initSliders();
+    initPersonalityInputs();
+    updateLangFieldBadges();
+    loadPersonas().then(() => {
+        renderPersonaSelector();
+        renderPersonaSettings();
+    });
 }
 
 function closeSettings() {
+    // Cancel persona editing first, so "Cancel" never throws away form changes
+    // by silently reloading the whole modal.
+    if (isPersonaEditorOpen() && isSettingsTabActive('personas')) {
+        closePersonaEditor();
+        return;
+    }
     const modal = document.getElementById('settings-modal');
     modal.classList.add('hidden');
+}
+
+// Only the prompt block matching the interface language is actually sent to the
+// LLM (see _get_personality_layer in src/llm_engine.py). Mark it in the UI so
+// it is obvious which of the two fields to fill in.
+function updateLangFieldBadges() {
+    const active = getLang() === 'ru' ? 'ru' : 'en';
+    document.querySelectorAll('[data-lang-field]').forEach(label => {
+        const on = label.dataset.langField === active;
+        label.classList.toggle('lang-field-active', on);
+        let badge = label.querySelector('.lang-field-badge');
+        if (on && !badge) {
+            badge = document.createElement('span');
+            badge.className = 'lang-field-badge';
+            badge.textContent = t('prompt.langActive');
+            label.appendChild(badge);
+        } else if (!on && badge) {
+            badge.remove();
+        }
+    });
+}
+
+function isSettingsTabActive(name) {
+    const tab = document.querySelector(`.settings-tab[data-tab="${name}"]`);
+    return !!(tab && tab.classList.contains('active'));
 }
 
 function initSettingsTabs() {
@@ -1072,7 +1212,8 @@ function initSettingsTabs() {
             document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.settings-tab-content').forEach(c => c.classList.remove('active'));
             tab.classList.add('active');
-            document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            const content = document.getElementById('tab-' + tab.dataset.tab);
+            if (content) content.classList.add('active');
         });
     });
 }
@@ -1205,7 +1346,46 @@ async function loadModelsForProvider(provider) {
     }
 }
 
+// === Personality layer ===
+
+function updatePersonalityCounters() {
+    ['ru', 'en'].forEach(lang => {
+        const input = document.getElementById(`personality-${lang}-input`);
+        const counter = document.getElementById(`personality-${lang}-count`);
+        if (input && counter) {
+            counter.textContent = input.value.length;
+            counter.style.color = input.value.length > 8000 ? 'var(--danger, #e06c75)' : '';
+        }
+    });
+}
+
+function initPersonalityInputs() {
+    ['ru', 'en'].forEach(lang => {
+        const input = document.getElementById(`personality-${lang}-input`);
+        if (input) input.addEventListener('input', updatePersonalityCounters);
+    });
+    const resetBtn = document.getElementById('personality-reset-btn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+            ['ru', 'en'].forEach(lang => {
+                const input = document.getElementById(`personality-${lang}-input`);
+                if (input) input.value = '';
+            });
+            updatePersonalityCounters();
+        });
+    }
+    updatePersonalityCounters();
+}
+
 async function saveSettings() {
+    // The persona editor has no buttons of its own - while it is open the modal
+    // footer works on the persona instead of on the global settings. Only while
+    // the Personas tab is actually on screen, otherwise Save would silently
+    // store a persona when the user thinks they are saving settings.
+    if (isPersonaEditorOpen() && isSettingsTabActive('personas')) {
+        await savePersonaEditor();
+        return;
+    }
     const provider = document.getElementById('provider-select').value;
     const modelSelect = document.getElementById('model-select');
     const model = modelSelect.disabled ? null : modelSelect.value;
@@ -1220,6 +1400,14 @@ async function saveSettings() {
     const memoryThreshold = parseInt(document.getElementById('memory-threshold-slider').value) / 10;
     const language = document.getElementById('lang-select') ? document.getElementById('lang-select').value : getLang();
     const showConsole = document.getElementById('show-console-toggle') ? document.getElementById('show-console-toggle').checked : false;
+    const personalityRu = document.getElementById('personality-ru-input') ? document.getElementById('personality-ru-input').value : null;
+    const personalityEn = document.getElementById('personality-en-input') ? document.getElementById('personality-en-input').value : null;
+    const sttCustom = document.getElementById('stt-model-custom') ? document.getElementById('stt-model-custom').value.trim() : '';
+    const sttSelect = document.getElementById('stt-model-select');
+    const sttModel = sttCustom || (sttSelect ? sttSelect.value : null);
+    const hotkeyVoice = document.getElementById('hotkey-voice-input') ? document.getElementById('hotkey-voice-input').value.trim() : null;
+    const hotkeyVoiceNum = document.getElementById('hotkey-voice-num-input') ? document.getElementById('hotkey-voice-num-input').value.trim() : null;
+    const hotkeyLive = document.getElementById('hotkey-live-input') ? document.getElementById('hotkey-live-input').value.trim() : null;
 
     // Apply language immediately so alert is in chosen language
     if (language !== getLang()) {
@@ -1234,6 +1422,11 @@ async function saveSettings() {
         if (model !== null && model !== initialSettings.model) needsRestart = true;
         if (numCtx !== null && numCtx !== initialSettings.num_ctx) needsRestart = true;
         if (showConsole !== !!initialSettings.show_backend_console) needsRestart = true;
+        // STT model and hotkeys are applied by the backend / the app shell at startup
+        if (sttModel && sttModel !== initialSettings.stt_model) needsRestart = true;
+        if (hotkeyVoice && hotkeyVoice !== initialSettings.hotkey_voice) needsRestart = true;
+        if (hotkeyVoiceNum && hotkeyVoiceNum !== initialSettings.hotkey_voice_num) needsRestart = true;
+        if (hotkeyLive && hotkeyLive !== initialSettings.hotkey_live) needsRestart = true;
         // apiKey change also needs restart for some providers, but is hot-swapped, so not required
     } else {
         // Fallback: if we have no initial, assume restart only for provider/host/model/numCtx/showConsole
@@ -1257,6 +1450,12 @@ async function saveSettings() {
                 memory_threshold: memoryThreshold,
                 language: language,
                 show_backend_console: showConsole,
+                personality_ru: personalityRu,
+                personality_en: personalityEn,
+                stt_model: sttModel,
+                hotkey_voice: hotkeyVoice,
+                hotkey_voice_num: hotkeyVoiceNum,
+                hotkey_live: hotkeyLive,
             }),
         });
         
