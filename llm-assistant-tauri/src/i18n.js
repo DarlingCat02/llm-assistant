@@ -77,13 +77,31 @@ export async function setLanguage(lang) {
   } catch {}
 }
 
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = String(str == null ? '' : str);
+  return d.innerHTML;
+}
+
 function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
     const attr = el.getAttribute('data-i18n-attr');
     const val = t(key);
-    if (attr) el.setAttribute(attr, val);
-    else el.textContent = val;
+    if (attr) { el.setAttribute(attr, val); return; }
+
+    // Slider labels look like "Temperature: {value}" and carry a live
+    // <span id="...-value"> child. textContent would wipe that span, so the
+    // placeholder is replaced by the span itself.
+    if (val.includes('{value}')) {
+      const holder = el.querySelector('span[id]');
+      if (holder) {
+        const inner = `<span id="${holder.id}">${escapeHtml(holder.textContent)}</span>`;
+        el.innerHTML = escapeHtml(val).split('{value}').join(inner);
+        return;
+      }
+    }
+    el.textContent = val;
   });
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
     el.placeholder = t(el.getAttribute('data-i18n-placeholder'));

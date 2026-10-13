@@ -59,10 +59,27 @@ function setAvatar(role, value) {
 export function avatarHtml(role) {
     const val = getAvatar(role);
     if (typeof val === 'object' && val.file) {
+        // The file may have been deleted outside the app -> fall back to the emoji
         return `<img src="${API_BASE_AVATARS}/api/avatars/${encodeURIComponent(val.file)}"
-                     alt="${esc(role)}" class="avatar-img">`;
+                     alt="" class="avatar-img"
+                     onerror="this.onerror=null;this.outerHTML='${AVATAR_DEFAULT[role]}'">`;
     }
     return esc(val);
+}
+
+// Drop references to avatars that no longer exist on disk
+function avatarPruneMissing(list) {
+    const store = avatarLoadStore();
+    let changed = false;
+    ['user', 'bot'].forEach(role => {
+        const val = store[role];
+        if (val && typeof val === 'object' && val.file
+            && !list.some(a => a.name === val.file)) {
+            store[role] = AVATAR_DEFAULT[role];
+            changed = true;
+        }
+    });
+    if (changed) avatarSaveStore(store);
 }
 
 function avatarRefreshHeader() {
@@ -189,6 +206,13 @@ async function avatarDeleteSelected() {
 
 export function initAvatars() {
     avatarRefreshHeader();
+
+    // Drop references to files that are gone, then repaint
+    avatarFetchUploaded().then(list => {
+        avatarUploaded = list;
+        avatarPruneMissing(list);
+        avatarRefreshHeader();
+    });
 
     ['user', 'bot'].forEach(role => {
         const btn = document.getElementById(`${role}-avatar-btn`);

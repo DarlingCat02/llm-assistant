@@ -182,7 +182,7 @@
             <div class="settings-tabs">
                 <button class="settings-tab active" data-tab="general" data-i18n="settings.general">General</button>
                 <button class="settings-tab" data-tab="llm" data-i18n="settings.llm">🧠 LLM</button>
-                <button class="settings-tab" data-tab="tts" data-i18n="settings.tts">🔊 TTS</button>
+                <button class="settings-tab" data-tab="voice" data-i18n="settings.voice">🎙 Голос</button>
                 <button class="settings-tab" data-tab="memory" data-i18n="settings.memory">💾 Память</button>
                 <button class="settings-tab" data-tab="personality" data-i18n="settings.personality">🎭 Личность</button>
                 <button class="settings-tab" data-tab="personas" data-i18n="persona.tab">🎭🎭 Персоны</button>
@@ -204,6 +204,22 @@
                         <span data-i18n="settings.showConsole">Show external console window (requires restart)</span>
                     </label>
                     <div class="slider-hint" data-i18n="settings.showConsole.hint">If disabled (default), backend runs hidden and logs appear in the in-app Terminal.</div>
+                </div>
+                <div class="settings-section">
+                    <label data-i18n="settings.hotkeys">Hotkeys (global)</label>
+                    <div class="slider-hint" data-i18n="settings.hotkeys.hint">Format: Ctrl+Shift+V, Alt+F9, F12, Ctrl+Num0. Applied after restarting the app.</div>
+                </div>
+                <div class="settings-section">
+                    <label for="hotkey-voice-input" data-i18n="settings.hotkey.voice">Voice input</label>
+                    <input type="text" id="hotkey-voice-input" class="settings-input" value="Ctrl+Shift+V">
+                </div>
+                <div class="settings-section">
+                    <label for="hotkey-voice-num-input" data-i18n="settings.hotkey.voiceNum">Voice input (extra)</label>
+                    <input type="text" id="hotkey-voice-num-input" class="settings-input" value="Ctrl+Num0">
+                </div>
+                <div class="settings-section">
+                    <label for="hotkey-live-input" data-i18n="settings.hotkey.live">Live mode</label>
+                    <input type="text" id="hotkey-live-input" class="settings-input" value="Ctrl+Shift+L">
                 </div>
             </div>
 
@@ -246,8 +262,29 @@
                 </div>
             </div>
 
-            <!-- TTS Tab -->
-            <div class="settings-tab-content" id="tab-tts">
+            <!-- Voice Tab (STT + TTS) -->
+            <div class="settings-tab-content" id="tab-voice">
+                <div class="settings-section">
+                    <label data-i18n="settings.voice.sttTitle">Распознавание речи (STT)</label>
+                    <div class="slider-hint" data-i18n="settings.voice.sttHint">Модель Whisper. Недостающие модели скачиваются при первом использовании. Требуется перезапуск.</div>
+                </div>
+                <div class="settings-section">
+                    <label for="stt-model-select" data-i18n="settings.voice.sttModel">Модель Whisper</label>
+                    <select id="stt-model-select" class="settings-select">
+                        <option value="tiny">tiny (~1 GB)</option>
+                        <option value="base">base (~1 GB)</option>
+                        <option value="small">small (~2 GB)</option>
+                        <option value="medium">medium (~5 GB)</option>
+                        <option value="large">large (~10 GB)</option>
+                        <option value="large-v3-turbo">large-v3-turbo (~4 GB, по умолчанию)</option>
+                    </select>
+                    <input type="text" id="stt-model-custom" class="settings-input"
+                           data-i18n-attr="placeholder" data-i18n="settings.voice.sttCustom"
+                           placeholder="Другая модель: owner/repo или путь к папке">
+                </div>
+                <div class="settings-section">
+                    <label data-i18n="settings.voice.ttsTitle">Озвучка (TTS)</label>
+                </div>
                 <div class="settings-section">
                     <label data-i18n="settings.tts.steps">Шаги генерации: <span id="tts-steps-value">64</span></label>
                     <div class="slider-hint" data-i18n="settings.tts.steps.hint">Меньше = быстрее, больше = качественнее</div>

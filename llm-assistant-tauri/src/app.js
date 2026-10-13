@@ -1045,6 +1045,24 @@ async function openSettings() {
         if (pRu) pRu.value = config.personality_ru || '';
         if (pEn) pEn.value = config.personality_en || '';
         updatePersonalityCounters();
+
+        // Voice: STT model
+        const sttCustom = document.getElementById('stt-model-custom');
+        const sttSelect = document.getElementById('stt-model-select');
+        const sttModel = config.stt_model || 'large-v3-turbo';
+        if (sttSelect) {
+            const known = [...sttSelect.options].some((o) => o.value === sttModel);
+            sttSelect.value = known ? sttModel : 'large-v3-turbo';
+            if (sttCustom) sttCustom.value = known ? '' : sttModel;
+        }
+
+        // Hotkeys
+        const hkVoice = document.getElementById('hotkey-voice-input');
+        const hkVoiceNum = document.getElementById('hotkey-voice-num-input');
+        const hkLive = document.getElementById('hotkey-live-input');
+        if (hkVoice) hkVoice.value = config.hotkey_voice || 'Ctrl+Shift+V';
+        if (hkVoiceNum) hkVoiceNum.value = config.hotkey_voice_num || 'Ctrl+Num0';
+        if (hkLive) hkLive.value = config.hotkey_live || 'Ctrl+Shift+L';
         
         document.getElementById('provider-select').value = config.provider || 'ollama';
         document.getElementById('ollama-host-input').value = config.ollama_host || 'http://localhost:11434';
@@ -1297,6 +1315,12 @@ async function saveSettings() {
     const showConsole = document.getElementById('show-console-toggle') ? document.getElementById('show-console-toggle').checked : false;
     const personalityRu = document.getElementById('personality-ru-input') ? document.getElementById('personality-ru-input').value : null;
     const personalityEn = document.getElementById('personality-en-input') ? document.getElementById('personality-en-input').value : null;
+    const sttCustom = document.getElementById('stt-model-custom') ? document.getElementById('stt-model-custom').value.trim() : '';
+    const sttSelect = document.getElementById('stt-model-select');
+    const sttModel = sttCustom || (sttSelect ? sttSelect.value : null);
+    const hotkeyVoice = document.getElementById('hotkey-voice-input') ? document.getElementById('hotkey-voice-input').value.trim() : null;
+    const hotkeyVoiceNum = document.getElementById('hotkey-voice-num-input') ? document.getElementById('hotkey-voice-num-input').value.trim() : null;
+    const hotkeyLive = document.getElementById('hotkey-live-input') ? document.getElementById('hotkey-live-input').value.trim() : null;
 
     // Apply language immediately so alert is in chosen language
     if (language !== getLang()) {
@@ -1311,6 +1335,11 @@ async function saveSettings() {
         if (model !== null && model !== initialSettings.model) needsRestart = true;
         if (numCtx !== null && numCtx !== initialSettings.num_ctx) needsRestart = true;
         if (showConsole !== !!initialSettings.show_backend_console) needsRestart = true;
+        // STT model and hotkeys are applied by the backend / the app shell at startup
+        if (sttModel && sttModel !== initialSettings.stt_model) needsRestart = true;
+        if (hotkeyVoice && hotkeyVoice !== initialSettings.hotkey_voice) needsRestart = true;
+        if (hotkeyVoiceNum && hotkeyVoiceNum !== initialSettings.hotkey_voice_num) needsRestart = true;
+        if (hotkeyLive && hotkeyLive !== initialSettings.hotkey_live) needsRestart = true;
         // apiKey change also needs restart for some providers, but is hot-swapped, so not required
     } else {
         // Fallback: if we have no initial, assume restart only for provider/host/model/numCtx/showConsole
@@ -1336,6 +1365,10 @@ async function saveSettings() {
                 show_backend_console: showConsole,
                 personality_ru: personalityRu,
                 personality_en: personalityEn,
+                stt_model: sttModel,
+                hotkey_voice: hotkeyVoice,
+                hotkey_voice_num: hotkeyVoiceNum,
+                hotkey_live: hotkeyLive,
             }),
         });
         

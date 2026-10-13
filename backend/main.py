@@ -655,6 +655,9 @@ async def get_current_config():
             "language": "en",
             "show_backend_console": False,
             "personality_ru": "", "personality_en": "",
+            "stt_model": "large-v3-turbo",
+            "hotkey_voice": "Ctrl+Shift+V", "hotkey_voice_num": "Ctrl+Num0",
+            "hotkey_live": "Ctrl+Shift+L",
         }
     
     return {
@@ -673,6 +676,10 @@ async def get_current_config():
         "show_backend_console": _config.general.show_backend_console,
         "personality_ru": _config.personality.ru,
         "personality_en": _config.personality.en,
+        "stt_model": _config.stt.model,
+        "hotkey_voice": _config.hotkey.voice,
+        "hotkey_voice_num": _config.hotkey.voice_num,
+        "hotkey_live": _config.hotkey.live,
     }
 
 
@@ -702,6 +709,10 @@ async def update_config(request: dict):
 
     personality_ru = request.get("personality_ru")
     personality_en = request.get("personality_en")
+    stt_model = request.get("stt_model")
+    hotkey_voice = request.get("hotkey_voice")
+    hotkey_voice_num = request.get("hotkey_voice_num")
+    hotkey_live = request.get("hotkey_live")
     for name, val in (("personality_ru", personality_ru), ("personality_en", personality_en)):
         if val is not None and not isinstance(val, str):
             raise HTTPException(status_code=400, detail=f"{name} must be a string")
@@ -724,6 +735,10 @@ async def update_config(request: dict):
         show_backend_console=show_backend_console,
         personality_ru=personality_ru,
         personality_en=personality_en,
+        stt_model=stt_model,
+        hotkey_voice=hotkey_voice,
+        hotkey_voice_num=hotkey_voice_num,
+        hotkey_live=hotkey_live,
     )
     # Hot-swap without restart
     try:
