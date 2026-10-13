@@ -26,6 +26,25 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 
+def pick_lmstudio_model(configured: str, loaded: list[str]) -> str | None:
+    """
+    Decide which LM Studio model the assistant should talk to at startup.
+
+    Rules:
+    - if the configured model is loaded, keep it - the user chose it;
+    - otherwise fall back to the first loaded model, so a stale .env does not
+      make the backend request a second model and waste VRAM;
+    - nothing loaded -> keep the configuration and let the request fail loudly.
+
+    Returns the model to use, or None when the configuration should be kept.
+    """
+    if not loaded:
+        return None
+    if configured in loaded:
+        return None
+    return loaded[0]
+
+
 class _CrashProofStderr:
     """sys.stderr wrapper that never raises on write/flush.
 
@@ -180,22 +199,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _assistant = Assistant(_config)
         await _assistant.initialize()
         logger.info("Assistant initialized for API")
-        # For LM Studio — sync model with actually loaded in LM Studio (once at startup)
+        # For LM Studio — align the model with what is actually loaded, but
+        # never override a model the user configured that IS loaded. Taking the
+        # first loaded model unconditionally used to swap qwen-3.5-4b for a 2B
+        # that happened to be loaded too, silently breaking tool calling.
         if _config.llm.provider.value == "lm_studio":
             try:
                 import httpx
                 async with httpx.AsyncClient(timeout=3.0) as client:
                     resp = await client.get(f"{_config.llm.host}/api/v0/models")
                     if resp.status_code == 200:
-                        for m in resp.json().get("data", []):
-                            if m.get("state") == "loaded":
-                                loaded_id = m.get("id")
-                                if loaded_id and loaded_id != _config.llm.model:
-                                    logger.info(f"Syncing LM Studio model: {_config.llm.model} -> {loaded_id} (loaded in LM Studio)")
-                                    _config.llm.model = loaded_id
-                                    if _assistant and _assistant._llm:
-                                        _assistant._llm._config.model = loaded_id
-                                break
+                        loaded = [
+                            m.get("id")
+                            for m in resp.json().get("data", [])
+                            if m.get("state") == "loaded" and m.get("id")
+                        ]
+                        chosen = pick_lmstudio_model(_config.llm.model, loaded)
+                        if chosen and chosen != _config.llm.model:
+                            logger.info(
+                                f"Syncing LM Studio model: {_config.llm.model} -> {chosen} "
+                                f"(loaded in LM Studio)"
+                            )
+                            _config.llm.model = chosen
+                            if _assistant and _assistant._llm:
+                                _assistant._llm._config.model = chosen
+                        elif _config.llm.model in loaded:
+                            logger.info(f"LM Studio model in use: {_config.llm.model}")
             except Exception as e:
                 logger.debug(f"Failed to sync LM Studio model: {e}")
     except Exception as e:
@@ -530,12 +559,15 @@ async def chat(request: ChatMessage):
         if msg.role in ("user", "assistant")
     ]
 
-    # For LM Studio — replace model with actually loaded (1 request per 30s)
-    if _config and _config.llm.provider.value == "lm_studio":
-        loaded = await get_lmstudio_loaded_model()
-        if loaded and _assistant and _assistant._llm and loaded != _assistant._llm._config.model:
-            logger.info(f"Replacing model {_assistant._llm._config.model} -> {loaded} (loaded in LM Studio)")
-            _assistant._llm._config.model = loaded
+    # For LM Studio — follow the loaded model, but never swap away from a model
+    # the user configured that IS loaded (see pick_lmstudio_model). Cached 30s.
+    if _config and _config.llm.provider.value == "lm_studio" and _assistant and _assistant._llm:
+        current = _assistant._llm._config.model
+        loaded = await get_lmstudio_loaded_models()
+        target = pick_lmstudio_model(current, loaded)
+        if target and target != current:
+            logger.info(f"Replacing model {current} -> {target} (loaded in LM Studio)")
+            _assistant._llm._config.model = target
 
     # Get response from assistant
     try:
@@ -580,32 +612,40 @@ async def chat(request: ChatMessage):
     )
 
 
-_cached_lm_model: str | None = None
+_cached_lm_models: list[str] | None = None
 _cached_lm_model_time: float = 0.0
 
-async def get_lmstudio_loaded_model() -> str | None:
-    """Return the ID of the model loaded in LM Studio (30s cache) to avoid loading a second one."""
-    global _cached_lm_model, _cached_lm_model_time
+async def get_lmstudio_loaded_models() -> list[str]:
+    """IDs of every model currently loaded in LM Studio (30s cache)."""
+    global _cached_lm_models, _cached_lm_model_time
     import time
     now = time.monotonic()
-    if _cached_lm_model is not None and (now - _cached_lm_model_time) < 30.0:
-        return _cached_lm_model
+    if _cached_lm_models is not None and (now - _cached_lm_model_time) < 30.0:
+        return _cached_lm_models
     try:
         cfg = get_config().llm
         if cfg.provider.value != "lm_studio":
-            return None
+            return []
         import httpx
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{cfg.host}/api/v0/models")
             if resp.status_code == 200:
-                for m in resp.json().get("data", []):
-                    if m.get("state") == "loaded":
-                        _cached_lm_model = m.get("id")
-                        _cached_lm_model_time = now
-                        return _cached_lm_model
-    except:
+                loaded = [
+                    m.get("id")
+                    for m in resp.json().get("data", [])
+                    if m.get("state") == "loaded" and m.get("id")
+                ]
+                _cached_lm_models = loaded
+                _cached_lm_model_time = now
+                return loaded
+    except Exception:
         pass
-    return None
+    return []
+
+async def get_lmstudio_loaded_model() -> str | None:
+    """First model loaded in LM Studio, or None. Used for status display."""
+    loaded = await get_lmstudio_loaded_models()
+    return loaded[0] if loaded else None
 
 async def get_effective_context_length() -> int:
     """Return the context limit from the config (for LM Studio — also from .env, no extra requests)."""
