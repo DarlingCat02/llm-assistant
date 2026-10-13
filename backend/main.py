@@ -651,6 +651,7 @@ async def get_current_config():
             "memory_max_context": 20, "memory_search_results": 3, "memory_threshold": 0.3,
             "language": "en",
             "show_backend_console": False,
+            "personality_ru": "", "personality_en": "",
         }
     
     return {
@@ -667,6 +668,8 @@ async def get_current_config():
         "memory_threshold": _config.memory.similarity_threshold,
         "language": _config.general.language,
         "show_backend_console": _config.general.show_backend_console,
+        "personality_ru": _config.personality.ru,
+        "personality_en": _config.personality.en,
     }
 
 
@@ -694,6 +697,14 @@ async def update_config(request: dict):
         if isinstance(request.get("show_backend_console"), str):
             show_backend_console = request.get("show_backend_console").lower() == "true"
 
+    personality_ru = request.get("personality_ru")
+    personality_en = request.get("personality_en")
+    for name, val in (("personality_ru", personality_ru), ("personality_en", personality_en)):
+        if val is not None and not isinstance(val, str):
+            raise HTTPException(status_code=400, detail=f"{name} must be a string")
+        if isinstance(val, str) and len(val) > 8000:
+            raise HTTPException(status_code=400, detail=f"{name} is too long (max 8000 chars)")
+
     save_config(
         provider=provider,
         model=model,
@@ -708,6 +719,8 @@ async def update_config(request: dict):
         memory_threshold=memory_threshold,
         language=language,
         show_backend_console=show_backend_console,
+        personality_ru=personality_ru,
+        personality_en=personality_en,
     )
     # Hot-swap without restart
     try:

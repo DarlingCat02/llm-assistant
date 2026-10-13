@@ -183,6 +183,7 @@
                 <button class="settings-tab" data-tab="llm" data-i18n="settings.llm">🧠 LLM</button>
                 <button class="settings-tab" data-tab="tts" data-i18n="settings.tts">🔊 TTS</button>
                 <button class="settings-tab" data-tab="memory" data-i18n="settings.memory">💾 Память</button>
+                <button class="settings-tab" data-tab="personality" data-i18n="settings.personality">🎭 Личность</button>
             </div>
 
             <!-- General Tab -->
@@ -272,6 +273,31 @@
                     <div class="slider-hint" data-i18n="settings.memory.threshold.hint">Фильтр релевантности RAG. 0.0 — находит всё подряд (шум), 0.3 — баланс, 0.6+ — только точные совпадения (часто пусто). Если «не нашёл в памяти» — понизьте до 0.2</div>
                     <input type="range" id="memory-threshold-slider" class="settings-slider" min="0" max="10" value="3" step="1">
                     <div class="slider-labels"><span>0.0</span><span>0.5</span><span>1.0</span></div>
+                </div>
+            </div>
+
+            <!-- Personality Tab -->
+            <div class="settings-tab-content" id="tab-personality">
+                <div class="settings-section">
+                    <label data-i18n="settings.personality.layer">Дополнительные инструкции (добавляются к системному промпту)</label>
+                    <div class="slider-hint" data-i18n="settings.personality.hint">Служебные правила (поиск, инструменты, язык) остаются системными и не редактируются — здесь только стиль и характер ассистента.</div>
+                </div>
+                <div class="settings-section">
+                    <label for="personality-ru-input" data-i18n="settings.personality.ru">Русский промпт</label>
+                    <textarea id="personality-ru-input" class="settings-textarea" rows="6"
+                              data-i18n-attr="placeholder" data-i18n="settings.personality.placeholder"
+                              placeholder="Например: Отвечай кратко, используй списки, без сленга"></textarea>
+                    <div class="slider-hint"><span id="personality-ru-count">0</span> / 8000</div>
+                </div>
+                <div class="settings-section">
+                    <label for="personality-en-input" data-i18n="settings.personality.en">English prompt</label>
+                    <textarea id="personality-en-input" class="settings-textarea" rows="6"
+                              data-i18n-attr="placeholder" data-i18n="settings.personality.placeholder"
+                              placeholder="e.g. Be concise, use bullet points, no slang"></textarea>
+                    <div class="slider-hint"><span id="personality-en-count">0</span> / 8000</div>
+                </div>
+                <div class="settings-section">
+                    <button id="personality-reset-btn" class="btn-secondary" data-i18n="settings.personality.reset">Сбросить</button>
                 </div>
             </div>
 

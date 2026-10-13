@@ -190,11 +190,24 @@ class LLMEngine:
         # Keep instance copies for dynamic switching
         self._system_prompt_ru = self.__class__._system_prompt_ru
         self._system_prompt_en = self.__class__._system_prompt_en
+
+        # Active persona layer (set via set_persona_prompt)
+        self._persona_prompt = False
+        self._persona_prompt_ru = ""
+        self._persona_prompt_en = ""
         
         self._tools: dict[str, Callable] = {}
 
     def _get_system_prompt(self) -> str:
-        """Get system prompt based on current language setting."""
+        """Get the system prompt for the current language + personality layer."""
+        base = self._get_base_system_prompt()
+        layer = self._get_personality_layer()
+        if not layer:
+            return base
+        return f"{base}\n\n{layer}"
+
+    def _get_base_system_prompt(self) -> str:
+        """Base prompt (rules, search policy, agent capabilities) - not user-editable."""
         try:
             lang = get_config().general.language
         except Exception:
@@ -208,6 +221,39 @@ class LLMEngine:
         except Exception:
             pass
         return self._system_prompt_ru if lang == "ru" else self._system_prompt_en
+
+    def _get_personality_layer(self) -> str:
+        """Extra user instructions appended to the base prompt.
+
+        Priority: active persona prompt (if any) > PERSONALITY_* from .env.
+        """
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        if self._persona_prompt:
+            text = self._persona_prompt_ru if lang == "ru" else self._persona_prompt_en
+            text = (text or "").strip()
+            if text:
+                return text
+        try:
+            cfg = get_config().personality
+            text = (cfg.ru if lang == "ru" else cfg.en) or ""
+            return text.strip()
+        except Exception:
+            return ""
+
+    def set_persona_prompt(self, prompt_ru: str = "", prompt_en: str = "") -> None:
+        """Set the active persona prompt layer (empty strings -> back to default)."""
+        self._persona_prompt = bool((prompt_ru or "").strip() or (prompt_en or "").strip())
+        self._persona_prompt_ru = prompt_ru or ""
+        self._persona_prompt_en = prompt_en or ""
+        self.refresh_system_prompt()
+
+    def get_persona_prompt(self) -> dict:
+        """Return the active persona prompt layer."""
+        return {"ru": self._persona_prompt_ru, "en": self._persona_prompt_en,
+                "active": self._persona_prompt}
 
     def refresh_system_prompt(self) -> None:
         """Update system prompt when language changes."""

@@ -274,6 +274,23 @@ class ScreenConfig(BaseConfig):
     model_config = SettingsConfigDict(env_prefix="SCREENSHOT_")
 
 
+class PersonalityConfig(BaseConfig):
+    """Custom personality layer appended to the base system prompt."""
+
+    ru: str = Field(default="", description="Дополнительные инструкции для русского промпта")
+    en: str = Field(default="", description="Additional instructions for the English prompt")
+
+    @field_validator("ru", "en", mode="before")
+    @classmethod
+    def unescape_newlines(cls, v):
+        """.env is line-based, so newlines are stored escaped as \\n."""
+        if isinstance(v, str) and "\\n" in v:
+            return v.replace("\\n", "\n")
+        return v
+
+    model_config = SettingsConfigDict(env_prefix="PERSONALITY_")
+
+
 class GeneralConfig(BaseConfig):
     """General settings (interface language)."""
     
@@ -342,6 +359,10 @@ class Config(BaseSettings):
     general: GeneralConfig = Field(
         default_factory=GeneralConfig,
         description="Общие настройки",
+    )
+    personality: PersonalityConfig = Field(
+        default_factory=PersonalityConfig,
+        description="Настройки личности (дополнительный слой к системному промпту)",
     )
     
     model_config = SettingsConfigDict(
@@ -412,6 +433,8 @@ def save_config(
     memory_threshold: float = None,
     language: str = None,
     show_backend_console: bool | None = None,
+    personality_ru: str | None = None,
+    personality_en: str | None = None,
 ) -> None:
     """
     Save the configuration to the .env file.
@@ -480,6 +503,12 @@ def save_config(
 
     if show_backend_console is not None:
         env_vars["GENERAL_SHOW_BACKEND_CONSOLE"] = "true" if show_backend_console else "false"
+
+    if personality_ru is not None:
+        env_vars["PERSONALITY_RU"] = personality_ru.replace("\r\n", "\n").replace("\n", "\\n")
+
+    if personality_en is not None:
+        env_vars["PERSONALITY_EN"] = personality_en.replace("\r\n", "\n").replace("\n", "\\n")
     
     # Write back
     with open(env_path, "w", encoding="utf-8") as f:

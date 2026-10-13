@@ -1036,6 +1036,13 @@ async function openSettings() {
         }
         const consoleToggle = document.getElementById('show-console-toggle');
         if (consoleToggle) consoleToggle.checked = !!config.show_backend_console;
+
+        // Personality layer
+        const pRu = document.getElementById('personality-ru-input');
+        const pEn = document.getElementById('personality-en-input');
+        if (pRu) pRu.value = config.personality_ru || '';
+        if (pEn) pEn.value = config.personality_en || '';
+        updatePersonalityCounters();
         
         document.getElementById('provider-select').value = config.provider || 'ollama';
         document.getElementById('ollama-host-input').value = config.ollama_host || 'http://localhost:11434';
@@ -1089,6 +1096,7 @@ async function openSettings() {
     // Initialize the tabs
     initSettingsTabs();
     initSliders();
+    initPersonalityInputs();
 }
 
 function closeSettings() {
@@ -1235,6 +1243,37 @@ async function loadModelsForProvider(provider) {
     }
 }
 
+// === Personality layer ===
+
+function updatePersonalityCounters() {
+    ['ru', 'en'].forEach(lang => {
+        const input = document.getElementById(`personality-${lang}-input`);
+        const counter = document.getElementById(`personality-${lang}-count`);
+        if (input && counter) {
+            counter.textContent = input.value.length;
+            counter.style.color = input.value.length > 8000 ? 'var(--danger, #e06c75)' : '';
+        }
+    });
+}
+
+function initPersonalityInputs() {
+    ['ru', 'en'].forEach(lang => {
+        const input = document.getElementById(`personality-${lang}-input`);
+        if (input) input.addEventListener('input', updatePersonalityCounters);
+    });
+    const resetBtn = document.getElementById('personality-reset-btn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+            ['ru', 'en'].forEach(lang => {
+                const input = document.getElementById(`personality-${lang}-input`);
+                if (input) input.value = '';
+            });
+            updatePersonalityCounters();
+        });
+    }
+    updatePersonalityCounters();
+}
+
 async function saveSettings() {
     const provider = document.getElementById('provider-select').value;
     const modelSelect = document.getElementById('model-select');
@@ -1250,6 +1289,8 @@ async function saveSettings() {
     const memoryThreshold = parseInt(document.getElementById('memory-threshold-slider').value) / 10;
     const language = document.getElementById('lang-select') ? document.getElementById('lang-select').value : getLang();
     const showConsole = document.getElementById('show-console-toggle') ? document.getElementById('show-console-toggle').checked : false;
+    const personalityRu = document.getElementById('personality-ru-input') ? document.getElementById('personality-ru-input').value : null;
+    const personalityEn = document.getElementById('personality-en-input') ? document.getElementById('personality-en-input').value : null;
 
     // Apply language immediately so alert is in chosen language
     if (language !== getLang()) {
@@ -1287,6 +1328,8 @@ async function saveSettings() {
                 memory_threshold: memoryThreshold,
                 language: language,
                 show_backend_console: showConsole,
+                personality_ru: personalityRu,
+                personality_en: personalityEn,
             }),
         });
         
