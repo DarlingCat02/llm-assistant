@@ -156,6 +156,66 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// Read the child's output line by line and forward every line to the in-app
+/// terminal.
+///
+/// Deliberately does NOT use `BufRead::lines()`: it fails with `InvalidData`
+/// on the first non-UTF-8 chunk (Windows code pages, tqdm bars, emoji split
+/// across reads) and `map_while(Result::ok)` would silently end the pump, so
+/// the terminal would freeze after a couple of lines. Reading raw bytes and
+/// decoding lossily keeps the stream alive no matter what the backend prints.
+fn spawn_log_pump<R>(
+    stream: R,
+    logs: Arc<Mutex<Vec<String>>>,
+    handle: AppHandle,
+    to_stderr: bool,
+) where
+    R: std::io::Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stream);
+        let mut buf: Vec<u8> = Vec::new();
+        let mut read_errors = 0u32;
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => break, // EOF
+                Ok(_) => read_errors = 0,
+                Err(_) => {
+                    // Transient read error: back off instead of dying, otherwise
+                    // the terminal stays frozen forever. Give up only if the
+                    // handle is really broken.
+                    read_errors += 1;
+                    if read_errors > 50 {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+            }
+            while matches!(buf.last(), Some(b'\n') | Some(b'\r')) {
+                buf.pop();
+            }
+            let line = String::from_utf8_lossy(&buf).to_string();
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(mut l) = logs.lock() {
+                l.push(line.clone());
+                if l.len() > 2000 {
+                    l.remove(0);
+                }
+            }
+            let _ = handle.emit("backend-log", line.clone());
+            if to_stderr {
+                eprintln!("{}", line);
+            } else {
+                println!("{}", line);
+            }
+        }
+    });
+}
+
 #[tauri::command]
 fn get_backend_logs(state: tauri::State<Mutex<AppState>>) -> Vec<String> {
     state.lock().map(|s| s.logs.lock().map(|l| l.clone()).unwrap_or_default()).unwrap_or_default()
@@ -266,49 +326,38 @@ fn start_python_backend(app_handle: AppHandle) {
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let pid = child.id();
-    let logs = Arc::new(Mutex::new(Vec::<String>::new()));
-    let logs_clone = logs.clone();
-    let handle_clone = app_handle.clone();
+
+    // Reuse the existing log buffer when the backend is restarted, otherwise
+    // create one. The pump threads must write into the very same Arc that
+    // get_backend_logs reads - swapping it would leave the state pointing at an
+    // orphaned buffer and the in-app terminal would go blank after the first
+    // lines.
+    let logs: Arc<Mutex<Vec<String>>> = match app_handle.try_state::<Mutex<AppState>>() {
+        Some(state) => match state.lock() {
+            Ok(s) => s.logs.clone(),
+            Err(_) => Arc::new(Mutex::new(Vec::<String>::new())),
+        },
+        None => Arc::new(Mutex::new(Vec::<String>::new())),
+    };
+
     // stdout thread
     if let Some(out) = stdout {
-        std::thread::spawn(move || {
-            let reader = BufReader::new(out);
-            for line in reader.lines().map_while(Result::ok) {
-                {
-                    let mut l = logs_clone.lock().unwrap();
-                    l.push(line.clone());
-                    if l.len() > 2000 { l.remove(0); }
-                }
-                let _ = handle_clone.emit("backend-log", line.clone());
-                println!("{}", line);
-            }
-        });
+        let logs_clone = logs.clone();
+        let handle_clone = app_handle.clone();
+        spawn_log_pump(out, logs_clone, handle_clone, false);
     }
-    let logs_clone2 = logs.clone();
-    let handle_clone2 = app_handle.clone();
+    // stderr thread
     if let Some(err) = stderr {
-        std::thread::spawn(move || {
-            let reader = BufReader::new(err);
-            for line in reader.lines().map_while(Result::ok) {
-                {
-                    let mut l = logs_clone2.lock().unwrap();
-                    l.push(line.clone());
-                    if l.len() > 2000 { l.remove(0); }
-                }
-                let _ = handle_clone2.emit("backend-log", line.clone());
-                eprintln!("{}", line);
-            }
-        });
+        let logs_clone = logs.clone();
+        let handle_clone = app_handle.clone();
+        spawn_log_pump(err, logs_clone, handle_clone, true);
     }
     info!("Python backend started with PID: {} (show_console={})", pid, show_console);
-    // Manage state (if already managed, replace)
-    if app_handle.try_state::<Mutex<AppState>>().is_some() {
-        if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
-            if let Ok(mut s) = state.lock() {
-                s.python_process = Some(child);
-                s.logs = logs;
-                return;
-            }
+    // Manage state (if already managed, just swap the child process)
+    if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
+        if let Ok(mut s) = state.lock() {
+            s.python_process = Some(child);
+            return;
         }
     }
     app_handle.manage(Mutex::new(AppState {

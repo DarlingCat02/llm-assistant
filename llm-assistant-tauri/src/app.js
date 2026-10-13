@@ -246,16 +246,8 @@ function initEventListeners() {
     if (termClear) termClear.addEventListener('click', clearTerminal);
     const termCopy = document.getElementById('terminal-copy-btn');
     if (termCopy) termCopy.addEventListener('click', copyTerminal);
-    // Listen for backend logs from Rust
-    if (isTauri) {
-        import('@tauri-apps/api/event').then(({ listen }) => {
-            listen('backend-log', (e) => appendTerminal(e.payload));
-        }).catch(()=>{});
-        // Load existing logs
-        import('@tauri-apps/api/core').then(({ invoke }) => {
-            invoke('get_backend_logs').then(lines => lines.forEach(appendTerminal)).catch(()=>{});
-        }).catch(()=>{});
-    }
+    // Listen for backend logs from Rust (with a polling fallback)
+    startTerminalLogBridge();
     const langSel = document.getElementById('lang-select');
     if (langSel) {
         langSel.value = getLang();
@@ -999,17 +991,70 @@ function toggleTerminalPanel() {
     const panel = document.getElementById('terminal-panel');
     if (panel) panel.classList.toggle('hidden');
 }
+
+// Incremental: appending a text node instead of `textContent += ...`
+// (which re-parses the whole buffer on every line).
 function appendTerminal(line) {
     const pre = document.getElementById('terminal-log');
     if (!pre) return;
-    pre.textContent += line + '\n';
-    const lines = pre.textContent.split('\n');
-    if (lines.length > 2000) pre.textContent = lines.slice(-2000).join('\n');
+    if (typeof line !== 'string') line = String(line ?? '');
+    line = line.replace(/\r?\n$/, '');
+    if (!line.trim()) return;
+
+    terminalLineCount += 1;
+    pre.appendChild(document.createTextNode(line + '\n'));
+
+    // Keep memory bounded: drop the oldest text nodes, never rebuild the buffer
+    while (terminalLineCount > 2000 && pre.firstChild) {
+        pre.removeChild(pre.firstChild);
+        terminalLineCount -= 1;
+    }
     pre.scrollTop = pre.scrollHeight;
 }
+
+let terminalLineCount = 0;
+let terminalCursor = 0;   // how many log lines were already consumed
+let terminalEventsAlive = false;
+
+// Fallback for when the live Tauri event stream does not deliver: poll the
+// backend log buffer and print whatever is new. Cheap (one IPC call every few
+// seconds) and it makes the terminal work even if events are lost.
+async function terminalPollOnce() {
+    try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const lines = await invoke('get_backend_logs');
+        if (!Array.isArray(lines)) return;
+        if (lines.length < terminalCursor) terminalCursor = 0; // buffer cleared
+        for (let i = terminalCursor; i < lines.length; i++) {
+            appendTerminal(lines[i]);
+        }
+        terminalCursor = lines.length;
+    } catch (e) {
+        console.warn('Ошибка опроса логов бэкенда:', e);
+    }
+}
+
+function startTerminalLogBridge() {
+    if (!isTauri) return;
+
+    import('@tauri-apps/api/event')
+        .then(({ listen }) => listen('backend-log', (e) => {
+            terminalEventsAlive = true;
+            appendTerminal(e.payload);
+        }))
+        .then((unlisten) => { if (typeof unlisten === 'function') window.__laiUnlistenLogs = unlisten; })
+        .catch((e) => console.error('Tauri log events error:', e));
+
+    // Initial buffer + slow poll safety net
+    terminalPollOnce();
+    setInterval(terminalPollOnce, 5000);
+}
+
 async function clearTerminal() {
     const pre = document.getElementById('terminal-log');
     if (pre) pre.textContent = '';
+    terminalLineCount = 0;
+    terminalCursor = 0;
     try {
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('clear_backend_logs');
@@ -1134,7 +1179,10 @@ function initSettingsTabs() {
             document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.settings-tab-content').forEach(c => c.classList.remove('active'));
             tab.classList.add('active');
-            document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            const content = document.getElementById('tab-' + tab.dataset.tab);
+            if (content) content.classList.add('active');
+            // The tab strip scrolls horizontally - keep the picked tab visible
+            tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         });
     });
 }
