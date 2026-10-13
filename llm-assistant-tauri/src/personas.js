@@ -266,33 +266,46 @@ async function handleSettingsClick(e) {
     }
 }
 
-async function handleEditorClick(e) {
-    const btn = e.target.closest('button[data-editor-act]');
-    if (!btn) return;
-    const act = btn.dataset.editorAct;
+// The persona editor has no buttons of its own - the settings modal footer
+// (Save / Cancel) drives it while it is open, so the user never sees two
+// identical pairs on screen.
+export function isPersonaEditorOpen() {
+    return editingId !== null;
+}
+
+export function closePersonaEditor() {
+    if (!editingId) return;
+    editingId = null;
+    renderPersonaEditor();
+}
+
+export async function savePersonaEditor() {
+    if (!editingId) return;
     const name = document.getElementById('persona-form-name').value.trim();
     const ru = document.getElementById('persona-form-ru').value;
     const en = document.getElementById('persona-form-en').value;
     const tempRaw = document.getElementById('persona-form-temp').value.trim();
     const temperature = tempRaw === '' ? null : parseFloat(tempRaw);
 
-    if (act === 'save') {
-        if (!name) { alert(getLang() === 'ru' ? 'Укажите имя персоны' : 'Persona name is required'); return; }
-        if (Number.isNaN(temperature)) { alert(getLang() === 'ru' ? 'Температура должна быть числом 0.0-2.0' : 'Temperature must be a number 0.0-2.0'); return; }
-        const idx = personasState.personas.findIndex((x) => x.id === editingId);
-        const updated = { id: editingId, name, prompt_ru: ru, prompt_en: en, temperature,
-                          avatar: (personasState.personas[idx] || {}).avatar || null };
-        const list = [...personasState.personas];
-        if (idx >= 0) list[idx] = updated; else list.push(updated);
-        try {
-            await savePersonas(list, personasState.active);
-            editingId = null;
-            renderPersonaEditor();
-        } catch (err) { alert(String(err.message || err)); }
-    } else if (act === 'cancel') {
+    if (!name) {
+        alert(getLang() === 'ru' ? 'Укажите имя персоны' : 'Persona name is required');
+        return;
+    }
+    if (Number.isNaN(temperature)) {
+        alert(getLang() === 'ru' ? 'Температура должна быть числом 0.0-2.0'
+                                : 'Temperature must be a number 0.0-2.0');
+        return;
+    }
+    const idx = personasState.personas.findIndex((x) => x.id === editingId);
+    const updated = { id: editingId, name, prompt_ru: ru, prompt_en: en, temperature,
+                      avatar: (personasState.personas[idx] || {}).avatar || null };
+    const list = [...personasState.personas];
+    if (idx >= 0) list[idx] = updated; else list.push(updated);
+    try {
+        await savePersonas(list, personasState.active);
         editingId = null;
         renderPersonaEditor();
-    }
+    } catch (err) { alert(String(err.message || err)); }
 }
 
 function newPersona() {
@@ -321,9 +334,6 @@ export async function initPersonas() {
 
     const list = document.getElementById('persona-list');
     if (list) list.addEventListener('click', handleSettingsClick);
-
-    const editor = document.getElementById('persona-editor');
-    if (editor) editor.addEventListener('click', handleEditorClick);
 
     const addBtn = document.getElementById('persona-add-btn');
     if (addBtn) addBtn.addEventListener('click', newPersona);

@@ -158,5 +158,6 @@
   "voice.loaded": "Загружено голосов для клонирования:",
   "voice.loadError": "Ошибка загрузки голосов:",
   "status.connected": "Статус",
-  "status.disconnected": "Статус"
+  "status.disconnected": "Статус",
+  "persona.editor.hint": "Сохраните персону кнопкой внизу окна — отдельных кнопок здесь нет."
 }

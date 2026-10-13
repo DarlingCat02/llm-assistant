@@ -158,5 +158,6 @@
   "voice.loaded": "Loaded voices for cloning:",
   "voice.loadError": "Failed to load voices:",
   "status.connected": "Status",
-  "status.disconnected": "Status"
+  "status.disconnected": "Status",
+  "persona.editor.hint": "Save the persona with the button at the bottom of the window - there are no separate buttons here."
 }

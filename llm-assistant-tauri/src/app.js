@@ -9,7 +9,8 @@
 
 import { initI18n, t, setLanguage, getLang } from './i18n.js';
 import { initAvatars, avatarHtml } from './avatars.js';
-import { initPersonas, renderPersonaSettings, loadPersonas, renderPersonaSelector } from './personas.js';
+import { initPersonas, renderPersonaSettings, loadPersonas, renderPersonaSelector,
+         isPersonaEditorOpen, savePersonaEditor, closePersonaEditor } from './personas.js';
 
 const API_BASE = 'http://127.0.0.1:8000';
 let currentChatId = null;
@@ -1169,8 +1170,19 @@ async function openSettings() {
 }
 
 function closeSettings() {
+    // Cancel persona editing first, so "Cancel" never throws away form changes
+    // by silently reloading the whole modal.
+    if (isPersonaEditorOpen() && isSettingsTabActive('personas')) {
+        closePersonaEditor();
+        return;
+    }
     const modal = document.getElementById('settings-modal');
     modal.classList.add('hidden');
+}
+
+function isSettingsTabActive(name) {
+    const tab = document.querySelector(`.settings-tab[data-tab="${name}"]`);
+    return !!(tab && tab.classList.contains('active'));
 }
 
 function initSettingsTabs() {
@@ -1345,6 +1357,14 @@ function initPersonalityInputs() {
 }
 
 async function saveSettings() {
+    // The persona editor has no buttons of its own - while it is open the modal
+    // footer works on the persona instead of on the global settings. Only while
+    // the Personas tab is actually on screen, otherwise Save would silently
+    // store a persona when the user thinks they are saving settings.
+    if (isPersonaEditorOpen() && isSettingsTabActive('personas')) {
+        await savePersonaEditor();
+        return;
+    }
     const provider = document.getElementById('provider-select').value;
     const modelSelect = document.getElementById('model-select');
     const model = modelSelect.disabled ? null : modelSelect.value;
