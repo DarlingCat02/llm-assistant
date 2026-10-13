@@ -182,6 +182,17 @@ class Assistant:
         """Currently active persona (None = standard prompt)."""
         return self._persona
 
+    def memory_scopes(self) -> list[str] | None:
+        """
+        Memory scopes visible to the current conversation.
+
+        Facts about the user live in the "user" scope and are shared by all
+        personas; persona notes are isolated. No persona -> everything.
+        """
+        if not self._persona:
+            return None
+        return ["user", self._persona.id]
+
     def apply_persona(self, persona=_UNSET) -> None:
         """
         Activate a persona, or go back to the standard prompt.
@@ -473,7 +484,7 @@ class Assistant:
         context = []
         if self._should_search_memory(user_message):
             self._logger.debug(f"Searching context for: {user_message[:50]}...")
-            context = await self._memory.search_context(user_message)
+            context = await self._memory.search_context(user_message, scopes=self.memory_scopes())
 
             if context:
                 self._logger.info(f"Found {len(context)} memory entries")
@@ -570,7 +581,7 @@ class Assistant:
         # 1. Smart memory search (RAG)
         context = []
         if self._should_search_memory(user_message):
-            context = asyncio.run(self._memory.search_context(user_message))
+            context = asyncio.run(self._memory.search_context(user_message, scopes=self.memory_scopes()))
             
             if context:
                 self._logger.info(f"Found {len(context)} memory entries")

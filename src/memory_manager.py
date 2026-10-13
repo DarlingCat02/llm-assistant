@@ -2,6 +2,9 @@
 Memory Manager - Long-term memory manager based on ChromaDB.
 """
 
+# Memory scope for facts about the user (shared by every persona)
+USER_SCOPE = "user"
+
 # Disable HuggingFace online requests BEFORE all imports
 import os
 os.environ["HF_HUB_OFFLINE"] = "1"
@@ -200,6 +203,7 @@ class ChromaStorage(IStorage):
         query: str,
         limit: int,
         min_similarity: float = 0.0,
+        scopes: list[str] | None = None,
     ) -> list[MemoryEntry]:
         """
         Find similar entries for a semantic query.
@@ -210,6 +214,8 @@ class ChromaStorage(IStorage):
             query: Query text.
             limit: Maximum number of results.
             min_similarity: Minimum similarity threshold.
+            scopes: Restrict to these scopes (e.g. ["user", "editor"]).
+                    None = no filtering.
 
         Returns:
             list[MemoryEntry]: Entries sorted by relevance.
@@ -221,10 +227,14 @@ class ChromaStorage(IStorage):
         query_embedding = self._create_embedding(query)
         
         # Find similar entries
+        kwargs = {}
+        if scopes:
+            kwargs["where"] = {"scope": {"$in": list(scopes)}}
         results = self._collection.query(
             query_embeddings=[query_embedding],
             n_results=limit,
             include=["documents", "metadatas", "distances"],
+            **kwargs,
         )
         
         # Convert to MemoryEntry
@@ -407,35 +417,39 @@ class MemoryManager:
         self._embedding_model = None
         logger.info("Memory Manager closed")
     
-    def _generate_id(self, text: str) -> str:
+    def _generate_id(self, text: str, scope: str = USER_SCOPE) -> str:
         """
         Generate a unique ID for a record.
 
-        Uses SHA-256 content hash for deduplication.
+        Uses SHA-256 of scope + content hash for deduplication, so the same
+        text saved by different personas stays as separate entries.
 
         Args:
             text: Record text.
+            scope: Memory scope ("user" or a persona id).
 
         Returns:
             str: Unique identifier.
         """
-        return hashlib.sha256(text.encode()).hexdigest()[:16]
+        return hashlib.sha256(f"{scope}\n{text}".encode()).hexdigest()[:16]
     
     async def save(
         self,
         text: str,
         entry_type: str = "general",
         metadata: dict | None = None,
+        scope: str = USER_SCOPE,
     ) -> bool:
         """
         Save a record to memory.
 
-        Automatically skips duplicates.
+        Automatically skips duplicates (per scope).
 
         Args:
             text: Text to save.
             entry_type: Entry type (general, dialog, fact, etc.)
             metadata: Additional metadata.
+            scope: Memory scope ("user" or a persona id).
 
         Returns:
             bool: True if the record was saved, False if duplicate.
@@ -443,8 +457,10 @@ class MemoryManager:
         if not self._initialized:
             raise RuntimeError("Memory Manager не инициализирован")
         
+        scope = scope or USER_SCOPE
+        
         # Check for duplicates
-        entry_hash = self._generate_id(text)
+        entry_hash = self._generate_id(text, scope)
         if entry_hash in self._seen_hashes:
             logger.debug(f"Duplicate memory skipped: {entry_hash}")
             return False
@@ -455,6 +471,7 @@ class MemoryManager:
             text=text,
             metadata={
                 "type": entry_type,
+                "scope": scope,
                 **(metadata or {}),
             },
         )
@@ -470,6 +487,7 @@ class MemoryManager:
         self,
         user_message: str,
         assistant_response: str,
+        scope: str = USER_SCOPE,
     ) -> bool:
         """
         Save a dialog to memory.
@@ -479,6 +497,7 @@ class MemoryManager:
         Args:
             user_message: User message.
             assistant_response: Assistant response.
+            scope: Memory scope ("user" or a persona id).
 
         Returns:
             bool: True if saved.
@@ -493,9 +512,11 @@ class MemoryManager:
                 "user_message": user_message,
                 "assistant_response": assistant_response,
             },
+            scope=scope,
         )
     
-    async def save_fact(self, fact: str, category: str = "general") -> bool:
+    async def save_fact(self, fact: str, category: str = "general",
+                        scope: str = USER_SCOPE) -> bool:
         """
         Save a fact to memory.
 
@@ -504,6 +525,7 @@ class MemoryManager:
         Args:
             fact: Fact text.
             category: Fact category.
+            scope: Memory scope ("user" or a persona id).
 
         Returns:
             bool: True if saved.
@@ -512,6 +534,7 @@ class MemoryManager:
             text=fact,
             entry_type="fact",
             metadata={"category": category},
+            scope=scope,
         )
     
     async def search(
@@ -519,6 +542,7 @@ class MemoryManager:
         query: str,
         limit: int | None = None,
         min_similarity: float | None = None,
+        scopes: list[str] | None = None,
     ) -> list[MemoryEntry]:
         """
         Find similar records in memory.
@@ -527,6 +551,7 @@ class MemoryManager:
             query: Query text for search.
             limit: Maximum number of results.
             min_similarity: Minimum similarity threshold.
+            scopes: Restrict to these scopes; None = no filtering.
 
         Returns:
             list[MemoryEntry]: Found records sorted by relevance.
@@ -541,9 +566,10 @@ class MemoryManager:
             query=query,
             limit=limit,
             min_similarity=min_similarity,
+            scopes=scopes,
         )
     
-    async def search_context(self, query: str) -> list[str]:
+    async def search_context(self, query: str, scopes: list[str] | None = None) -> list[str]:
         """
         Find context for a query.
 
@@ -552,11 +578,12 @@ class MemoryManager:
 
         Args:
             query: Query text for finding relevant context.
+            scopes: Restrict to these scopes; None = no filtering.
 
         Returns:
             list[str]: List of context texts to add to the prompt.
         """
-        entries = await self.search(query)
+        entries = await self.search(query, scopes=scopes)
         return [entry.text for entry in entries]
     
     async def get_stats(self) -> dict:
