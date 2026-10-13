@@ -1181,8 +1181,6 @@ function initSettingsTabs() {
             tab.classList.add('active');
             const content = document.getElementById('tab-' + tab.dataset.tab);
             if (content) content.classList.add('active');
-            // The tab strip scrolls horizontally - keep the picked tab visible
-            tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         });
     });
 }
