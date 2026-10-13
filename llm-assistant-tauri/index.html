@@ -38,6 +38,7 @@
                     <button class="avatar-btn" id="bot-avatar-btn" data-role="bot"
                             title="Assistant avatar" data-i18n="avatar.bot" data-i18n-attr="title">🤖</button>
                 </div>
+                <button id="persona-btn" class="persona-btn" title="Switch persona"></button>
                 <h2 id="chat-title" data-i18n="chat.select">Выберите чат</h2>
                 <div class="context-indicator" id="context-indicator" style="display:none;">
                     <div class="context-bar-bg">
@@ -184,6 +185,7 @@
                 <button class="settings-tab" data-tab="tts" data-i18n="settings.tts">🔊 TTS</button>
                 <button class="settings-tab" data-tab="memory" data-i18n="settings.memory">💾 Память</button>
                 <button class="settings-tab" data-tab="personality" data-i18n="settings.personality">🎭 Личность</button>
+                <button class="settings-tab" data-tab="personas" data-i18n="persona.tab">🎭🎭 Персоны</button>
             </div>
 
             <!-- General Tab -->
@@ -276,6 +278,43 @@
                 </div>
             </div>
 
+            <!-- Personas Tab -->
+            <div class="settings-tab-content" id="tab-personas">
+                <div class="settings-section">
+                    <label data-i18n="persona.catalog">Персоны</label>
+                    <div class="slider-hint" data-i18n="persona.hint">Персона — это слой поведения поверх системного промпта. Если ни одна не выбрана, используется стандартный системный промпт. Переключение мгновенное, без перезапуска.</div>
+                    <button id="persona-add-btn" class="btn-secondary" data-i18n="persona.add">Добавить персону</button>
+                </div>
+                <div id="persona-list" class="persona-list"></div>
+                <div id="persona-editor" class="settings-section hidden">
+                    <label data-i18n="persona.editor">Редактирование персоны</label>
+                    <div class="settings-section">
+                        <label for="persona-form-name" data-i18n="persona.form.name">Имя</label>
+                        <input type="text" id="persona-form-name" class="settings-input">
+                    </div>
+                    <div class="settings-section">
+                        <label for="persona-form-id" data-i18n="persona.form.id">ID</label>
+                        <input type="text" id="persona-form-id" class="settings-input" disabled>
+                    </div>
+                    <div class="settings-section">
+                        <label for="persona-form-ru" data-i18n="settings.personality.ru">Русский промпт</label>
+                        <textarea id="persona-form-ru" class="settings-textarea" rows="4"></textarea>
+                    </div>
+                    <div class="settings-section">
+                        <label for="persona-form-en" data-i18n="settings.personality.en">Английский промпт</label>
+                        <textarea id="persona-form-en" class="settings-textarea" rows="4"></textarea>
+                    </div>
+                    <div class="settings-section">
+                        <label for="persona-form-temp" data-i18n="persona.form.temp">Температура (пусто = из настроек модели)</label>
+                        <input type="number" id="persona-form-temp" class="settings-input" step="0.1" min="0" max="2" placeholder="0.7">
+                    </div>
+                    <div class="settings-buttons">
+                        <button class="btn-primary" data-editor-act="save" data-i18n="settings.save">Сохранить</button>
+                        <button class="btn-secondary" data-editor-act="cancel" data-i18n="settings.cancel">Отмена</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Personality Tab -->
             <div class="settings-tab-content" id="tab-personality">
                 <div class="settings-section">
@@ -308,6 +347,9 @@
         </div>
     </div>
     
+    <!-- Persona switcher popup -->
+    <div id="persona-menu" class="persona-menu hidden"></div>
+
     <!-- Avatar selection popup -->
     <div id="avatar-menu" class="avatar-menu hidden">
         <div class="avatar-menu-header" id="avatar-menu-title">Avatar</div>

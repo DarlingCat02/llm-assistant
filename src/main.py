@@ -49,6 +49,9 @@ except ImportError:
 # Module logger
 logger = logging.getLogger(__name__)
 
+# Sentinel: "argument not passed" (so we can tell it from an explicit None)
+_UNSET = object()
+
 
 # === Logging setup ===
 def setup_logging(config: Config) -> logging.Logger:
@@ -130,6 +133,9 @@ class Assistant:
         # Web search
         self._search_tool = None
         self._ddg_tool_def = None
+
+        # Active persona (None -> standard system prompt)
+        self._persona = None
     
     async def initialize(self) -> None:
         """
@@ -161,12 +167,49 @@ class Assistant:
         
         # Register tools (Function Calling stub)
         await self._register_tools()
-        
+
+        # Apply the saved persona (if any)
+        self.apply_persona()
+
         self._logger.info(
             f"Assistant ready. Model: {self._config.llm.model}, "
             f"Provider: {self._config.llm.provider.value}, "
             f"Memory: {self._config.chroma.persist_dir}"
         )
+
+    @property
+    def persona(self):
+        """Currently active persona (None = standard prompt)."""
+        return self._persona
+
+    def apply_persona(self, persona=_UNSET) -> None:
+        """
+        Activate a persona, or go back to the standard prompt.
+
+        Args:
+            persona: Persona object; None clears the persona. When the argument
+                     is omitted, the persona is loaded from personas.json.
+        """
+        if persona is _UNSET:
+            try:
+                from src.personas import load, resolve_active
+                persona = resolve_active(load())
+            except Exception as e:
+                self._logger.warning(f"Cannot load personas: {e}")
+                persona = None
+
+        self._persona = persona
+        if persona is not None:
+            self._llm.set_persona_prompt(persona.prompt_ru, persona.prompt_en)
+            if persona.temperature is not None:
+                try:
+                    self._llm._config.temperature = persona.temperature
+                except Exception:
+                    pass
+            self._logger.info(f"Persona applied: {persona.name} ({persona.id})")
+        else:
+            self._llm.set_persona_prompt("", "")
+            self._logger.info("Persona cleared - standard system prompt")
     
     def _should_search_memory(self, message: str) -> bool:
         """

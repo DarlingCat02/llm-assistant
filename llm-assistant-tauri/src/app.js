@@ -9,6 +9,7 @@
 
 import { initI18n, t, setLanguage, getLang } from './i18n.js';
 import { initAvatars, avatarHtml } from './avatars.js';
+import { initPersonas, renderPersonaSettings, loadPersonas, renderPersonaSelector } from './personas.js';
 
 const API_BASE = 'http://127.0.0.1:8000';
 let currentChatId = null;
@@ -64,6 +65,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (ready) {
         console.log('API готово, загрузка...');
         initAvatars();
+        initPersonas();
         window.addEventListener('lai:avatar-changed', () => {
             if (currentChatId) loadChatMessages(currentChatId);
         });
@@ -1097,6 +1099,10 @@ async function openSettings() {
     initSettingsTabs();
     initSliders();
     initPersonalityInputs();
+    loadPersonas().then(() => {
+        renderPersonaSelector();
+        renderPersonaSettings();
+    });
 }
 
 function closeSettings() {

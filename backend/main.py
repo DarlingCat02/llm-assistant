@@ -93,7 +93,10 @@ except ImportError:
             return key
         def assistant_not_init_detail(lang=None):
             return "Assistant not initialized"
+from dataclasses import asdict
+
 from backend.database import ChatDatabase
+from src.personas import Persona
 from backend.api import (
     memory_router,
     manager,
@@ -951,6 +954,83 @@ async def tts_speak(request: dict):
         media_type="audio/wav",
         headers={"Content-Disposition": "inline"},
     )
+
+
+# === Personas ===
+
+@app.get("/api/personas")
+async def get_personas():
+    """List the persona catalog and the active selection."""
+    from src import personas as P
+    data = P.load()
+    return {
+        "personas": [asdict(p) for p in data.personas],
+        "active": data.active_id,
+        "exists": data.exists,
+        "error": data.parse_error,
+    }
+
+
+@app.put("/api/personas")
+async def update_personas(request: dict):
+    """Replace the persona catalog and the active selection."""
+    from src import personas as P
+    from dataclasses import asdict
+
+    items = request.get("personas")
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="personas must be a list")
+
+    try:
+        raw = [Persona(**i) if isinstance(i, dict) and "id" in i else i for i in items]
+    except TypeError as e:
+        raise HTTPException(status_code=400, detail=f"Malformed persona entry: {e}")
+
+    clean, active, errors = P.validate(raw, request.get("active"))
+    saved = P.save(P.PersonasFile(personas=clean, active_id=active))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Cannot write personas.json")
+
+    if _assistant is not None:
+        _reapply_active_persona()
+    return {"status": "ok", "personas": [asdict(p) for p in clean],
+            "active": active, "warnings": errors}
+
+
+@app.post("/api/personas/activate")
+async def activate_persona(request: dict):
+    """Switch the active persona at runtime (id or null for the default prompt)."""
+    from src import personas as P
+
+    pid = request.get("id")
+    pid = str(pid).strip().lower() if isinstance(pid, str) and pid.strip() else None
+
+    data = P.load()
+    persona = None
+    if pid is not None:
+        persona = next((p for p in data.personas if p.id == pid), None)
+        if persona is None:
+            raise HTTPException(status_code=404, detail=f"Persona '{pid}' not found")
+
+    data.active_id = persona.id if persona else None
+    P.save(data)
+
+    if _assistant is not None:
+        _assistant.apply_persona(persona)
+
+    return {"status": "ok", "active": data.active_id,
+            "persona": asdict(persona) if persona else None}
+
+
+def _reapply_active_persona() -> None:
+    """Re-apply the saved persona after the catalog changed."""
+    from src import personas as P
+    try:
+        persona = P.resolve_active(P.load())
+        if _assistant is not None:
+            _assistant.apply_persona(persona)
+    except Exception as e:
+        logger.warning(f"Cannot apply persona: {e}")
 
 
 # === Avatars ===

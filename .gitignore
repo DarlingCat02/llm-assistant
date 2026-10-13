@@ -23,6 +23,7 @@ avatars/
 
 # User-specific app config
 apps.json
+personas.json
 
 # Node modules (Tauri)
 llm-assistant-tauri/node_modules/
