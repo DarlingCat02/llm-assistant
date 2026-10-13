@@ -544,6 +544,10 @@ async def chat(request: ChatMessage):
         )
         response_text = llm_response.content
         used_tokens = llm_response.prompt_tokens
+        import dataclasses as _dataclasses
+        actions = [
+            _dataclasses.asdict(a) for a in getattr(llm_response, "actions", []) or []
+        ]
     except Exception as e:
         logger.error(f"Error generating response: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -568,6 +572,7 @@ async def chat(request: ChatMessage):
         message_id=0,
         used_context_tokens=used_tokens,
         max_context_tokens=max_ctx,
+        actions=actions,
     )
 
 

@@ -691,7 +691,7 @@ async function sendMessage() {
         }
         
         // Render the response from the HTTP response
-        appendMessage('assistant', data.response);
+        appendMessage('assistant', data.response, null, data.actions || null);
         hideTypingIndicator();
         
         // Update the context indicator
@@ -710,7 +710,31 @@ async function sendMessage() {
     }
 }
 
-function appendMessage(role, content, timestamp = null) {
+function renderActions(actions) {
+    // Minimal collapsible list of tool calls executed during this turn
+    if (!Array.isArray(actions) || actions.length === 0) return '';
+    const rows = actions.map((a) => {
+        const args = a.arguments || {};
+        const argText = Object.entries(args)
+            .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+            .join(', ');
+        const short = argText.length > 120 ? argText.slice(0, 120) + '…' : argText;
+        const ok = a.ok !== false;
+        const preview = escapeHtml(a.result_preview || '');
+        return `<div class="action-row${ok ? '' : ' action-error'}">
+            <span class="action-icon">${ok ? '🔧' : '⚠️'}</span>
+            <span class="action-name">${escapeHtml(a.name || 'tool')}</span>
+            ${short ? `<span class="action-args">${escapeHtml(short)}</span>` : ''}
+            ${preview ? `<span class="action-result">→ ${preview}</span>` : ''}
+        </div>`;
+    }).join('');
+    return `<details class="actions-block">
+        <summary class="actions-summary">${t('chat.actions.title')} (${actions.length})</summary>
+        <div class="actions-list">${rows}</div>
+    </details>`;
+}
+
+function appendMessage(role, content, timestamp = null, actions = null) {
     const container = document.getElementById('messages-container');
     
     // Remove the welcome message if present
@@ -730,6 +754,7 @@ function appendMessage(role, content, timestamp = null) {
     div.innerHTML = `
         <div class="message-avatar">${avatar}</div>
         <div class="message-content">
+            ${role === 'assistant' ? renderActions(actions) : ''}
             <div class="message-text">${escapeHtml(content)}</div>
             <div class="message-time">${time}</div>
         </div>

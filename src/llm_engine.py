@@ -76,6 +76,15 @@ class ToolCall:
 
 
 @dataclass
+class ToolAction:
+    """A tool call that was actually executed, with its result."""
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    result_preview: str = ""
+    ok: bool = True
+
+
+@dataclass
 class LLMResponse:
     """Response from the language model."""
     content: str
@@ -84,6 +93,8 @@ class LLMResponse:
     total_duration: int = 0
     prompt_tokens: int = 0
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # Executed tool calls across all rounds (for UI display)
+    actions: list[ToolAction] = field(default_factory=list)
 
 
 class LLMEngine:
@@ -504,6 +515,7 @@ class LLMEngine:
 
         try:
             max_rounds = 5
+            executed_actions: list[ToolAction] = []
             for round_idx in range(max_rounds):
                 if stream and round_idx == 0:
                     response = await self._generate_stream(payload)
@@ -538,6 +550,9 @@ class LLMEngine:
 
                 for tc in response.tool_calls:
                     tool_result = await self._execute_tool(tc)
+                    executed_actions.append(
+                        self._make_action(tc, tool_result)
+                    )
                     tool_msg = Message(
                         role=MessageRole.TOOL,
                         content=tool_result,
@@ -551,11 +566,36 @@ class LLMEngine:
             if response.tool_calls:
                 logger.info(f"Tools executed in {round_idx + 1} rounds")
 
+            response.actions = executed_actions
             return response
 
         except httpx.HTTPError as e:
             logger.error(f"Error requesting {self._config.provider.value}: {e}")
             raise
+
+    # Max length of a tool result preview shown in the UI
+    ACTION_PREVIEW_LIMIT = 200
+
+    # Prefixes used by agent_tools / _execute_tool to signal a failure
+    ERROR_PREFIXES = ("[error", "ошибка", "error:", "[winerror")
+
+    def _make_action(self, tool_call: ToolCall, result: str) -> ToolAction:
+        """Build a UI-friendly record of one executed tool call."""
+        text = str(result) if result is not None else ""
+        lowered = text.lstrip().lower()
+        is_error = any(lowered.startswith(p) for p in self.ERROR_PREFIXES)
+        preview = text[: self.ACTION_PREVIEW_LIMIT]
+        if len(text) > self.ACTION_PREVIEW_LIMIT:
+            preview += "..."
+        args = tool_call.arguments
+        if not isinstance(args, dict):
+            args = {"value": args}
+        return ToolAction(
+            name=tool_call.name,
+            arguments=args,
+            result_preview=preview.strip(),
+            ok=not is_error,
+        )
 
     async def _execute_tool(self, tool_call: ToolCall) -> str:
         """Execute a tool call and return the result."""

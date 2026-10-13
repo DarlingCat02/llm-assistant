@@ -110,6 +110,8 @@ class ChatResponseMessage(BaseModel):
     message_id: int
     used_context_tokens: int = 0
     max_context_tokens: int = 8192
+    # Tool calls actually executed during this turn (for the UI)
+    actions: list[dict] = Field(default_factory=list)
 
 
 class MemoryEntry(BaseModel):

@@ -33,6 +33,7 @@
   "chat.file.docs": "Документы: {names}",
   "chat.file.images": "Изображения: {count}",
   "chat.file.count": "{count} файл(ов)",
+  "chat.actions.title": "Выполненные действия",
   "memory.title": "Память (ChromaDB)",
   "memory.search.placeholder": "Поиск в памяти...",
   "memory.add.placeholder": "Добавить запись в память...",
