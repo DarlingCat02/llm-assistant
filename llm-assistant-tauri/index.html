@@ -32,6 +32,12 @@
         <!-- Основная область чата -->
         <main class="chat-area">
             <header class="chat-header">
+                <div class="avatar-picker">
+                    <button class="avatar-btn" id="user-avatar-btn" data-role="user"
+                            title="User avatar" data-i18n="avatar.user" data-i18n-attr="title">👤</button>
+                    <button class="avatar-btn" id="bot-avatar-btn" data-role="bot"
+                            title="Assistant avatar" data-i18n="avatar.bot" data-i18n-attr="title">🤖</button>
+                </div>
                 <h2 id="chat-title" data-i18n="chat.select">Выберите чат</h2>
                 <div class="context-indicator" id="context-indicator" style="display:none;">
                     <div class="context-bar-bg">
@@ -276,6 +282,21 @@
         </div>
     </div>
     
+    <!-- Avatar selection popup -->
+    <div id="avatar-menu" class="avatar-menu hidden">
+        <div class="avatar-menu-header" id="avatar-menu-title">Avatar</div>
+        <div class="avatar-menu-presets" id="avatar-menu-presets"></div>
+        <div class="avatar-menu-uploaded" id="avatar-menu-uploaded"></div>
+        <div class="avatar-menu-actions">
+            <label class="btn-secondary avatar-upload-label">
+                <input type="file" id="avatar-file-input" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+                <span data-i18n="avatar.upload">Upload image</span>
+            </label>
+            <button class="btn-secondary" id="avatar-reset-btn" data-i18n="avatar.reset">Reset</button>
+            <button class="btn-secondary" id="avatar-delete-btn" data-i18n="avatar.delete">Delete selected</button>
+        </div>
+    </div>
+
     <div id="toast-container" aria-live="polite"></div>
     <script type="module" src="/src/app.js"></script>
 </body>

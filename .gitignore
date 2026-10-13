@@ -18,6 +18,9 @@ screenshots/
 # Voices (TTS voice files)
 voices/
 
+# Uploaded avatars (user/bot pictures)
+avatars/
+
 # User-specific app config
 apps.json
 

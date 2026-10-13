@@ -8,6 +8,7 @@
  */
 
 import { initI18n, t, setLanguage, getLang } from './i18n.js';
+import { initAvatars, avatarHtml } from './avatars.js';
 
 const API_BASE = 'http://127.0.0.1:8000';
 let currentChatId = null;
@@ -62,6 +63,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ready = await waitForApi();
     if (ready) {
         console.log('API готово, загрузка...');
+        initAvatars();
+        window.addEventListener('lai:avatar-changed', () => {
+            if (currentChatId) loadChatMessages(currentChatId);
+        });
         initEventListeners();
         loadChats();
         connectWebSocket();
@@ -746,7 +751,7 @@ function appendMessage(role, content, timestamp = null, actions = null) {
     const div = document.createElement('div');
     div.className = `message ${role}`;
     
-    const avatar = role === 'user' ? '👤' : '🤖';
+    const avatar = avatarHtml(role === 'user' ? 'user' : 'bot');
     const time = timestamp 
         ? new Date(timestamp).toLocaleTimeString(getLang()==='ru'?'ru-RU':'en-US', { hour: '2-digit', minute: '2-digit' })
         : new Date().toLocaleTimeString(getLang()==='ru'?'ru-RU':'en-US', { hour: '2-digit', minute: '2-digit' });

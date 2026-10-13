@@ -15,6 +15,7 @@ Run:
 """
 
 import logging
+import re
 import sys
 import os
 import tempfile
@@ -937,6 +938,103 @@ async def tts_speak(request: dict):
         media_type="audio/wav",
         headers={"Content-Disposition": "inline"},
     )
+
+
+# === Avatars ===
+
+AVATARS_DIR = Path(__file__).parent.parent / "avatars"
+AVATAR_MAX_SIZE = 5 * 1024 * 1024
+AVATAR_MAX_DIM = 128
+AVATAR_ALLOWED_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]
+_AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+
+def _validate_avatar_name(name: str) -> str:
+    """Reject anything that could escape the avatars folder."""
+    if not name or not _AVATAR_NAME_RE.match(name) or ".." in name:
+        raise HTTPException(status_code=400, detail="Invalid avatar name")
+    return name
+
+
+def _avatar_path(name: str) -> Path:
+    return AVATARS_DIR / _validate_avatar_name(name)
+
+
+@app.get("/api/avatars")
+async def list_avatars():
+    """List uploaded avatars."""
+    if not AVATARS_DIR.exists():
+        return {"avatars": []}
+    items = []
+    for f in sorted(AVATARS_DIR.iterdir()):
+        if f.is_file() and _AVATAR_NAME_RE.match(f.name):
+            items.append({"name": f.name, "url": f"/api/avatars/{f.name}"})
+    return {"avatars": items}
+
+
+@app.post("/api/avatars")
+async def upload_avatar(file: UploadFile = File(...)):
+    """Upload an avatar image (resized to a small square)."""
+    if file.content_type not in AVATAR_ALLOWED_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image type: {file.content_type}. Use PNG, JPG, WEBP or GIF",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > AVATAR_MAX_SIZE:
+        raise HTTPException(status_code=400, detail="Image is too large (max 5 MB)")
+
+    if Image is None:
+        raise HTTPException(status_code=500, detail="Pillow is not installed")
+
+    import io
+    import uuid
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img = img.convert("RGBA")
+        # Center-crop to a square, then downscale
+        w, h = img.size
+        side = min(w, h)
+        img = img.crop(((w - side) // 2, (h - side) // 2,
+                        (w - side) // 2 + side, (h - side) // 2 + side))
+        img = img.resize((AVATAR_MAX_DIM, AVATAR_MAX_DIM), Image.Resampling.LANCZOS)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Cannot read image: {e}")
+
+    AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"avatar_{uuid.uuid4().hex[:12]}.png"
+    img.save(AVATARS_DIR / name, format="PNG")
+    logger.info(f"Avatar saved: {name}")
+    return {"status": "ok", "name": name, "url": f"/api/avatars/{name}"}
+
+
+@app.get("/api/avatars/{name}")
+async def get_avatar(name: str):
+    """Serve an avatar image file."""
+    from fastapi.responses import FileResponse
+    path = _avatar_path(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Avatar not found")
+    return FileResponse(path)
+
+
+@app.delete("/api/avatars/{name}")
+async def delete_avatar(name: str):
+    """Delete an uploaded avatar."""
+    path = _avatar_path(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Avatar not found")
+    try:
+        path.unlink()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cannot delete avatar: {e}")
+    return {"status": "ok"}
 
 
 @app.get("/api/models")

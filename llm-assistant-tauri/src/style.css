@@ -361,6 +361,123 @@ body {
     word-wrap: break-word;
 }
 
+/* === Avatars === */
+.avatar-picker {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.avatar-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    padding: 0;
+}
+
+.avatar-btn:hover {
+    border-color: var(--accent-color);
+}
+
+.avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+}
+
+.message-avatar .avatar-img {
+    width: 26px;
+    height: 26px;
+}
+
+.avatar-menu {
+    position: fixed;
+    z-index: 300;
+    width: 250px;
+    padding: 10px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.avatar-menu.hidden {
+    display: none;
+}
+
+.avatar-menu-header {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.avatar-menu-presets,
+.avatar-menu-uploaded {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.avatar-menu-uploaded {
+    max-height: 92px;
+    overflow-y: auto;
+}
+
+.avatar-preset,
+.avatar-uploaded-item {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-primary);
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    padding: 0;
+}
+
+.avatar-uploaded-item.active {
+    border-color: var(--accent-color);
+}
+
+.avatar-uploaded-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.avatar-empty {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.avatar-menu-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.avatar-upload-label {
+    display: block;
+    text-align: center;
+    cursor: pointer;
+}
+
 /* === Executed tool calls (agent actions) === */
 .actions-block {
     margin-bottom: 8px;
