@@ -201,6 +201,25 @@ read-only; here you only set style and character.
 
 Priority: active persona → personality layer → standard prompt.
 
+### The two prompt blocks (RU / EN)
+
+A persona stores `prompt_ru` and `prompt_en`. These are **two different prompts
+for two interface languages**, not translations of one another — fill in the one
+that matches your language and leave the other empty.
+
+**Why:** the base system prompt is bilingual too, and its content differs between
+the two rather than just its wording. The Russian version teaches the model the
+tool triggers "открой блокнот" / "посмотри на экран"; the English one teaches
+"open notepad" / "look at screen". Pairing a Russian base with an English persona
+hands the model a blend of two rule sets, which noticeably degrades small models.
+
+**How the choice is made:** `_get_personality_layer()` in `src/llm_engine.py`
+reads `GENERAL_LANGUAGE` (Settings → General → Language) and applies exactly one
+block. The other is ignored until you switch the interface language.
+
+The field in use is marked with a **"используется"** badge in both the Personas
+and the Personality tabs.
+
 ### Avatars
 
 Click the 👤 / 🤖 buttons in the chat header to change either avatar:
@@ -830,6 +849,26 @@ npm run tauri build
 нередактируемыми, здесь задаётся только стиль и характер.
 
 Приоритет: активная персона → слой личности → стандартный промпт.
+
+### Два блока промптов (RU / EN)
+
+У персоны хранятся `prompt_ru` и `prompt_en`. Это **два разных промпта под два
+языка интерфейса**, а не перевод одного на другой — заполняйте только тот
+блок, который соответствует вашему языку, второй оставляйте пустым.
+
+**Зачем:** базовый системный промпт тоже двуязычный, причём содержание в нём
+различается, а не только формулировки. Русская версия учит модель триггерам
+инструментов «открой блокнот» / «посмотри на экран», английская — «open notepad» /
+«look at screen». Если смешать русскую базу с английской персоной, модель
+получает смесь двух наборов правил, что заметно ухудшает качество на малых
+моделях.
+
+**Как выбирается:** функция `_get_personality_layer()` в `src/llm_engine.py`
+читает `GENERAL_LANGUAGE` (Настройки → Общие → Язык) и применяет ровно один
+блок. Второй игнорируется, пока вы не переключите язык интерфейса.
+
+Используемый сейчас блок помечен плашкой **«используется»** — и во вкладке
+«🎭🎭 Персоны», и во вкладке «✍️ Личность».
 
 ### Аватары
 

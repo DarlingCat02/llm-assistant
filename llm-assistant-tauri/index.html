@@ -334,11 +334,12 @@
                         <input type="text" id="persona-form-id" class="settings-input" disabled>
                     </div>
                     <div class="settings-section">
-                        <label for="persona-form-ru" data-i18n="settings.personality.ru">Русский промпт</label>
+                        <div class="slider-hint" data-i18n="prompt.langHint">Используется только блок на языке интерфейса (Общие → Язык). Заполнять оба не нужно — второй сейчас не применяется.</div>
+                        <label for="persona-form-ru" data-i18n="settings.personality.ru" data-lang-field="ru">Русский промпт</label>
                         <textarea id="persona-form-ru" class="settings-textarea" rows="4"></textarea>
                     </div>
                     <div class="settings-section">
-                        <label for="persona-form-en" data-i18n="settings.personality.en">Английский промпт</label>
+                        <label for="persona-form-en" data-i18n="settings.personality.en" data-lang-field="en">Английский промпт</label>
                         <textarea id="persona-form-en" class="settings-textarea" rows="4"></textarea>
                     </div>
                     <div class="settings-section">
@@ -356,16 +357,17 @@
                     <div class="slider-hint" data-i18n="settings.personality.hint">Служебные правила (поиск, инструменты, язык) остаются системными и не редактируются — здесь только стиль и характер ассистента.</div>
                 </div>
                 <div class="settings-section">
-                    <label for="personality-ru-input" data-i18n="settings.personality.ru">Русский промпт</label>
+                    <div class="slider-hint" data-i18n="prompt.langHint">Используется только блок на языке интерфейса (Общие → Язык). Заполнять оба не нужно — второй сейчас не применяется.</div>
+                    <label for="personality-ru-input" data-i18n="settings.personality.ru" data-lang-field="ru">Русский промпт</label>
                     <textarea id="personality-ru-input" class="settings-textarea" rows="6"
-                              data-i18n-attr="placeholder" data-i18n="settings.personality.placeholder"
+                              data-i18n-attr="placeholder" data-i18n="settings.personality.placeholder.ru"
                               placeholder="Например: Отвечай кратко, используй списки, без сленга"></textarea>
                     <div class="slider-hint"><span id="personality-ru-count">0</span> / 8000</div>
                 </div>
                 <div class="settings-section">
-                    <label for="personality-en-input" data-i18n="settings.personality.en">English prompt</label>
+                    <label for="personality-en-input" data-i18n="settings.personality.en" data-lang-field="en">English prompt</label>
                     <textarea id="personality-en-input" class="settings-textarea" rows="6"
-                              data-i18n-attr="placeholder" data-i18n="settings.personality.placeholder"
+                              data-i18n-attr="placeholder" data-i18n="settings.personality.placeholder.en"
                               placeholder="e.g. Be concise, use bullet points, no slang"></textarea>
                     <div class="slider-hint"><span id="personality-en-count">0</span> / 8000</div>
                 </div>

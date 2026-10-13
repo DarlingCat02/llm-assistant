@@ -370,6 +370,24 @@ body {
 }
 
 /* === Personality editor === */
+/* Marks the prompt block that is actually used for the current UI language */
+[data-lang-field].lang-field-active {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.lang-field-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 500;
+    background: var(--accent-primary);
+    color: white;
+    vertical-align: middle;
+}
+
 .settings-textarea {
     width: 100%;
     min-height: 90px;

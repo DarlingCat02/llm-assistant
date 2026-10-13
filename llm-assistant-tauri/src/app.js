@@ -1163,6 +1163,7 @@ async function openSettings() {
     initSettingsTabs();
     initSliders();
     initPersonalityInputs();
+    updateLangFieldBadges();
     loadPersonas().then(() => {
         renderPersonaSelector();
         renderPersonaSettings();
@@ -1178,6 +1179,26 @@ function closeSettings() {
     }
     const modal = document.getElementById('settings-modal');
     modal.classList.add('hidden');
+}
+
+// Only the prompt block matching the interface language is actually sent to the
+// LLM (see _get_personality_layer in src/llm_engine.py). Mark it in the UI so
+// it is obvious which of the two fields to fill in.
+function updateLangFieldBadges() {
+    const active = getLang() === 'ru' ? 'ru' : 'en';
+    document.querySelectorAll('[data-lang-field]').forEach(label => {
+        const on = label.dataset.langField === active;
+        label.classList.toggle('lang-field-active', on);
+        let badge = label.querySelector('.lang-field-badge');
+        if (on && !badge) {
+            badge = document.createElement('span');
+            badge.className = 'lang-field-badge';
+            badge.textContent = t('prompt.langActive');
+            label.appendChild(badge);
+        } else if (!on && badge) {
+            badge.remove();
+        }
+    });
 }
 
 function isSettingsTabActive(name) {

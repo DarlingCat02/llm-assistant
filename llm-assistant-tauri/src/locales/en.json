@@ -159,5 +159,9 @@
   "voice.loadError": "Failed to load voices:",
   "status.connected": "Status",
   "status.disconnected": "Status",
-  "persona.editor.hint": "Save the persona with the button at the bottom of the window - there are no separate buttons here."
+  "persona.editor.hint": "Save the persona with the button at the bottom of the window - there are no separate buttons here.",
+  "prompt.langHint": "Only the block matching the interface language (Settings → General) is applied. You do not need to fill in both — the other one is inactive.",
+  "prompt.langActive": "in use",
+  "settings.personality.placeholder.ru": "Например: Отвечай кратко, используй списки, без сленга",
+  "settings.personality.placeholder.en": "e.g. Be concise, use bullet points, no slang"
 }

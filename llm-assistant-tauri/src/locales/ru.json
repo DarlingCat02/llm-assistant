@@ -159,5 +159,9 @@
   "voice.loadError": "Ошибка загрузки голосов:",
   "status.connected": "Статус",
   "status.disconnected": "Статус",
-  "persona.editor.hint": "Сохраните персону кнопкой внизу окна — отдельных кнопок здесь нет."
+  "persona.editor.hint": "Сохраните персону кнопкой внизу окна — отдельных кнопок здесь нет.",
+  "prompt.langHint": "Используется только блок на языке интерфейса (Общие → Язык). Заполнять оба не нужно — второй сейчас не применяется.",
+  "prompt.langActive": "используется",
+  "settings.personality.placeholder.ru": "Например: Отвечай кратко, используй списки, без сленга",
+  "settings.personality.placeholder.en": "e.g. Be concise, use bullet points, no slang"
 }
