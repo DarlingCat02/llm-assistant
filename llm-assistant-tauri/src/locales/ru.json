@@ -174,5 +174,16 @@
   "settings.wake.starting": "Запуск…",
   "settings.wake.error": "Не удалось включить: {msg}",
   "settings.wake.needPhrase": "Укажите пробуждающую фразу",
-  "settings.wake.saveError": "Ошибка сохранения: {msg}"
+  "settings.wake.saveError": "Ошибка сохранения: {msg}",
+  "settings.wake.device": "Микрофон",
+  "settings.wake.deviceDefault": "Системный по умолчанию",
+  "settings.wake.deviceSystem": "по умолчанию",
+  "settings.wake.deviceHint": "Устройство, которое постоянно слушает фон. Обычный голосовой ввод и wake-word могут использовать разные микрофоны.",
+  "settings.wake.listeningOn": "Микрофон «{device}» слушает фразу «{phrase}»",
+  "settings.wake.level": "Уровень сигнала",
+  "settings.wake.levelIdle": "Полоса не двигается — микрофон ничего не слышит.",
+  "settings.wake.levelOk": "Микрофон слышит звук. Если фраза не срабатывает — попробуйте модель base.",
+  "settings.wake.levelOff": "Прослушивание выключено.",
+  "settings.wake.levelOpening": "Открывается микрофон...",
+  "settings.wake.deviceMissing": "{name} — устройство не найдено"
 }

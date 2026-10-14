@@ -174,5 +174,16 @@
   "settings.wake.starting": "Starting…",
   "settings.wake.error": "Could not enable: {msg}",
   "settings.wake.needPhrase": "Enter a wake phrase",
-  "settings.wake.saveError": "Save failed: {msg}"
+  "settings.wake.saveError": "Save failed: {msg}",
+  "settings.wake.device": "Microphone",
+  "settings.wake.deviceDefault": "System default",
+  "settings.wake.deviceSystem": "default",
+  "settings.wake.deviceHint": "The device that listens continuously. Regular voice input and the wake word can use different microphones.",
+  "settings.wake.listeningOn": "Microphone \"{device}\" is listening for the phrase \"{phrase}\"",
+  "settings.wake.level": "Input level",
+  "settings.wake.levelIdle": "The bar is not moving - the microphone hears nothing.",
+  "settings.wake.levelOk": "The microphone hears sound. If the phrase still fails, try the base model.",
+  "settings.wake.levelOff": "Listening is off.",
+  "settings.wake.levelOpening": "Opening the microphone...",
+  "settings.wake.deviceMissing": "{name} - device not found"
 }

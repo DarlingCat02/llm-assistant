@@ -1025,24 +1025,46 @@ function appendTerminal(line) {
 }
 
 let terminalLineCount = 0;
-let terminalCursor = 0;   // how many log lines were already consumed
-let terminalEventsAlive = false;
+let terminalCursor = 0;      // how many lines the backend has produced that we showed
+let terminalTotalSeen = 0;   // last known cumulative count from the backend
+let terminalPollPending = false;
 
-// Fallback for when the live Tauri event stream does not deliver: poll the
-// backend log buffer and print whatever is new. Cheap (one IPC call every few
-// seconds) and it makes the terminal work even if events are lost.
+// The Rust buffer is the single source of truth. The live event is only a
+// "something changed" ping that makes us fetch immediately - it never appends
+// text itself. That keeps events and polling from delivering the same line
+// twice, and means a lost event costs latency, not content.
 async function terminalPollOnce() {
+    if (terminalPollPending) return;
+    terminalPollPending = true;
     try {
         const { invoke } = await import('@tauri-apps/api/core');
-        const lines = await invoke('get_backend_logs');
+        const data = await invoke('get_backend_logs');
+        const lines = Array.isArray(data) ? data : (data && data.lines);
         if (!Array.isArray(lines)) return;
-        if (lines.length < terminalCursor) terminalCursor = 0; // buffer cleared
-        for (let i = terminalCursor; i < lines.length; i++) {
+        const total = Array.isArray(data) ? terminalCursor + lines.length : data.total;
+
+        if (typeof total !== 'number' || total < terminalTotalSeen) {
+            // Buffer was cleared (or an older build) - start over.
+            const pre = document.getElementById('terminal-log');
+            if (pre) pre.textContent = '';
+            terminalLineCount = 0;
+            terminalCursor = 0;
+            terminalTotalSeen = 0;
+        }
+
+        // The buffer is capped and slides, so the oldest `total - lines.length`
+        // lines no longer exist and cannot be shown.
+        const skipped = Math.max(0, total - lines.length);
+        const from = Math.max(0, terminalCursor - skipped);
+        for (let i = from; i < lines.length; i++) {
             appendTerminal(lines[i]);
         }
-        terminalCursor = lines.length;
+        terminalTotalSeen = total;
+        terminalCursor = total;
     } catch (e) {
         console.warn('Ошибка опроса логов бэкенда:', e);
+    } finally {
+        terminalPollPending = false;
     }
 }
 
@@ -1050,16 +1072,17 @@ function startTerminalLogBridge() {
     if (!isTauri) return;
 
     import('@tauri-apps/api/event')
-        .then(({ listen }) => listen('backend-log', (e) => {
-            terminalEventsAlive = true;
-            appendTerminal(e.payload);
+        .then(({ listen }) => listen('backend-log', () => {
+            // Debounce: a burst of log lines should trigger one fetch.
+            clearTimeout(window.__laiLogPollTimer);
+            window.__laiLogPollTimer = setTimeout(terminalPollOnce, 120);
         }))
         .then((unlisten) => { if (typeof unlisten === 'function') window.__laiUnlistenLogs = unlisten; })
         .catch((e) => console.error('Tauri log events error:', e));
 
     // Initial buffer + slow poll safety net
     terminalPollOnce();
-    setInterval(terminalPollOnce, 5000);
+    setInterval(terminalPollOnce, 2000);
 }
 
 async function clearTerminal() {
@@ -1067,6 +1090,7 @@ async function clearTerminal() {
     if (pre) pre.textContent = '';
     terminalLineCount = 0;
     terminalCursor = 0;
+    terminalTotalSeen = 0;
     try {
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('clear_backend_logs');
@@ -1217,7 +1241,79 @@ function updateLangFieldBadges() {
 
 // === Wake word ===
 
-let wakeState = { enabled: false, phrase: '', model: 'tiny', listening: false, error: null };
+let wakeState = { enabled: false, phrase: '', model: 'tiny', input_device: '', listening: false, error: null };
+let wakeDevices = [];
+
+// dBFS-ish scale for the input meter: -60 dB is effectively silence, 0 dB is
+// clipping. Mapping RMS linearly would leave the bar pinned at zero for normal
+// speech, which is exactly the case we need to be able to see.
+function levelToPercent(level) {
+    if (!(level > 0)) return 0;
+    const db = 20 * Math.log10(level);
+    const pct = ((db + 60) / 60) * 100;
+    return Math.max(0, Math.min(100, pct));
+}
+
+function renderWakeLevel() {
+    const fill = document.getElementById('wake-level-fill');
+    const hint = document.getElementById('wake-level-hint');
+    if (!fill) return;
+    const lvl = wakeState.input_level || 0;
+    const pct = levelToPercent(lvl);
+    fill.style.width = pct.toFixed(1) + '%';
+    fill.classList.toggle('hot', pct > 85);
+
+    if (!hint) return;
+    if (!wakeState.listening) {
+        hint.textContent = t('settings.wake.levelOff');
+    } else if (!wakeState.mic_open) {
+        hint.textContent = t('settings.wake.levelOpening');
+    } else if (pct < 1) {
+        hint.textContent = t('settings.wake.levelIdle');
+    } else {
+        hint.textContent = t('settings.wake.levelOk');
+    }
+}
+
+async function loadWakeDevices(selected) {
+    const sel = document.getElementById('wake-device-select');
+    if (!sel) return;
+    try {
+        const resp = await fetch(`${API_BASE}/api/audio-inputs`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        wakeDevices = Array.isArray(data.devices) ? data.devices : [];
+        const want = selected !== undefined ? selected : sel.value;
+        sel.innerHTML = '';
+        const def = document.createElement('option');
+        def.value = '';
+        def.textContent = t('settings.wake.deviceDefault');
+        sel.appendChild(def);
+        wakeDevices.forEach(d => {
+            const opt = document.createElement('option');
+            // Value is the device NAME: PortAudio indices move when a device is
+            // reconnected, names do not.
+            opt.value = d.name.trim();
+            let label = d.name.trim();
+            if (d.default) label += ` · ${t('settings.wake.deviceSystem')}`;
+            if (d.aliases) label += ` (×${d.aliases + 1})`;
+            opt.textContent = label;
+            sel.appendChild(opt);
+        });
+        sel.value = want;
+        // A saved device can disappear (unplugged headset). Keep it visible so
+        // the select does not silently snap back to "default" on save.
+        if (want && sel.value !== want) {
+            const missing = document.createElement('option');
+            missing.value = want;
+            missing.textContent = t('settings.wake.deviceMissing', { name: want });
+            sel.appendChild(missing);
+            sel.value = want;
+        }
+    } catch (e) {
+        console.warn('Не удалось получить список микрофонов:', e);
+    }
+}
 
 function updateWakeFieldsVisibility() {
     const on = document.getElementById('wake-enabled-toggle').checked;
@@ -1241,6 +1337,8 @@ async function loadWakeSettings() {
         if (model) model.value = data.model || 'tiny';
         updateWakeFieldsVisibility();
         renderWakeStatus();
+        renderWakeLevel();
+        await loadWakeDevices(data.input_device || '');
     } catch (e) {
         console.warn('Не удалось загрузить настройки wake-word:', e);
     }
@@ -1256,7 +1354,10 @@ function renderWakeStatus() {
         text.textContent = t('settings.wake.error', { msg: wakeState.error });
         text.style.color = 'var(--danger, #e06c75)';
     } else if (wakeState.listening) {
-        text.textContent = t('settings.wake.listening', { phrase: wakeState.phrase });
+        const mic = wakeState.active_device
+            ? t('settings.wake.listeningOn', { phrase: wakeState.phrase, device: wakeState.active_device })
+            : t('settings.wake.listening', { phrase: wakeState.phrase });
+        text.textContent = mic;
         text.style.color = '';
     } else {
         text.textContent = t('settings.wake.starting');
@@ -1268,10 +1369,12 @@ async function saveWakeSettings() {
     const toggle = document.getElementById('wake-enabled-toggle');
     const phrase = document.getElementById('wake-phrase-input');
     const model = document.getElementById('wake-model-select');
+    const device = document.getElementById('wake-device-select');
     const payload = {
         enabled: !!(toggle && toggle.checked),
         phrase: phrase ? phrase.value.trim() : '',
         model: model ? model.value : 'tiny',
+        input_device: device ? device.value : '',
     };
     if (payload.enabled && !payload.phrase) {
         showToast(t('settings.wake.needPhrase'), 'error', 4000);

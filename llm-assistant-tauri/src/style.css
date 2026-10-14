@@ -1307,6 +1307,29 @@ body {
     margin-bottom: 6px;
 }
 
+/* Live input-level meter for the wake-word microphone. */
+.level-meter {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--bg-secondary, rgba(127, 127, 127, 0.18));
+    overflow: hidden;
+    margin-bottom: 6px;
+}
+
+.level-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 4px;
+    background: var(--accent, #4a9eff);
+    /* The bar is repainted on every status poll; without a transition the
+       motion is unreadable, with one it is legible. */
+    transition: width 90ms linear;
+}
+
+.level-fill.hot {
+    background: var(--danger, #e06c75);
+}
+
 .settings-hint {
     font-size: 12px;
     line-height: 1.4;

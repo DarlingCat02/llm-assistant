@@ -7,7 +7,13 @@ use tauri::{AppHandle, Emitter, Manager};
 struct AppState {
     python_process: Option<std::process::Child>,
     logs: Arc<Mutex<Vec<String>>>,
+    /// Monotonic count of every line ever captured. The buffer is capped, so
+    /// the UI cannot use its length to tell how much it already showed - this
+    /// counter is what makes a sliding buffer safe to follow.
+    total_logs: Arc<std::sync::atomic::AtomicU64>,
 }
+
+const LOG_BUFFER_MAX: usize = 2000;
 
 fn get_show_console(project_dir: &std::path::Path) -> bool {
     let env_path = project_dir.join(".env");
@@ -198,8 +204,12 @@ fn greet(name: &str) -> String {
 /// across reads) and `map_while(Result::ok)` would silently end the pump, so
 /// the terminal would freeze after a couple of lines. Reading raw bytes and
 /// decoding lossily keeps the stream alive no matter what the backend prints.
-fn spawn_log_pump<R>(stream: R, logs: Arc<Mutex<Vec<String>>>, handle: AppHandle, to_stderr: bool)
-where
+fn spawn_log_pump<R>(
+    stream: R,
+    logs: Arc<Mutex<Vec<String>>>,
+    total: Arc<std::sync::atomic::AtomicU64>,
+    handle: AppHandle,
+) where
     R: std::io::Read + Send + 'static,
 {
     std::thread::spawn(move || {
@@ -234,27 +244,43 @@ where
                 }
                 if let Ok(mut l) = logs.lock() {
                     l.push(line.clone());
-                    if l.len() > 2000 {
+                    while l.len() > LOG_BUFFER_MAX {
                         l.remove(0);
                     }
                 }
-                let _ = handle.emit("backend-log", line.clone());
-                if to_stderr {
-                    eprintln!("{}", line);
-                } else {
-                    println!("{}", line);
-                }
+                total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // No println!/eprintln! here on purpose: this is a GUI process
+                // whose stdout/stderr are not attached to anything, and the
+                // write blocks once the (undrained) pipe buffer fills - which
+                // wedged this thread and froze the terminal. The line already
+                // reaches the user through the event below.
+                let _ = handle.emit("backend-log", line);
             }
         }
     });
 }
 
+/// Log lines plus the cumulative counter, so a client can follow the capped
+/// buffer without missing or repeating lines.
 #[tauri::command]
-fn get_backend_logs(state: tauri::State<Mutex<AppState>>) -> Vec<String> {
+fn get_backend_logs(state: tauri::State<Mutex<AppState>>) -> serde_json::Value {
+    use std::sync::atomic::Ordering;
+    let payload = state.lock().map(|s| {
+        let lines = s.logs.lock().map(|l| l.clone()).unwrap_or_default();
+        let total = s.total_logs.load(Ordering::Relaxed);
+        serde_json::json!({ "lines": lines, "total": total })
+    });
+    payload
+        .unwrap_or_else(|_| serde_json::json!({ "lines": [], "total": 0 }))
+}
+
+#[tauri::command]
+fn get_backend_log_total(state: tauri::State<Mutex<AppState>>) -> u64 {
+    use std::sync::atomic::Ordering;
     state
         .lock()
-        .map(|s| s.logs.lock().map(|l| l.clone()).unwrap_or_default())
-        .unwrap_or_default()
+        .map(|s| s.total_logs.load(Ordering::Relaxed))
+        .unwrap_or(0)
 }
 
 #[tauri::command]
@@ -263,6 +289,9 @@ fn clear_backend_logs(state: tauri::State<Mutex<AppState>>) {
         if let Ok(mut logs) = s.logs.lock() {
             logs.clear();
         }
+        // Clear means "start over": reset the counter too, otherwise the UI
+        // would think it already missed thousands of lines.
+        s.total_logs.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -383,25 +412,34 @@ fn start_python_backend(app_handle: AppHandle) {
     // get_backend_logs reads - swapping it would leave the state pointing at an
     // orphaned buffer and the in-app terminal would go blank after the first
     // lines.
-    let logs: Arc<Mutex<Vec<String>>> = match app_handle.try_state::<Mutex<AppState>>() {
-        Some(state) => match state.lock() {
-            Ok(s) => s.logs.clone(),
-            Err(_) => Arc::new(Mutex::new(Vec::<String>::new())),
-        },
-        None => Arc::new(Mutex::new(Vec::<String>::new())),
-    };
+    let (logs, total_logs): (Arc<Mutex<Vec<String>>>, Arc<std::sync::atomic::AtomicU64>) =
+        match app_handle.try_state::<Mutex<AppState>>() {
+            Some(state) => match state.lock() {
+                Ok(s) => (s.logs.clone(), s.total_logs.clone()),
+                Err(_) => (
+                    Arc::new(Mutex::new(Vec::<String>::new())),
+                    Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                ),
+            },
+            None => (
+                Arc::new(Mutex::new(Vec::<String>::new())),
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            ),
+        };
 
     // stdout thread
     if let Some(out) = stdout {
         let logs_clone = logs.clone();
+        let total_clone = total_logs.clone();
         let handle_clone = app_handle.clone();
-        spawn_log_pump(out, logs_clone, handle_clone, false);
+        spawn_log_pump(out, logs_clone, total_clone, handle_clone);
     }
     // stderr thread
     if let Some(err) = stderr {
         let logs_clone = logs.clone();
+        let total_clone = total_logs.clone();
         let handle_clone = app_handle.clone();
-        spawn_log_pump(err, logs_clone, handle_clone, true);
+        spawn_log_pump(err, logs_clone, total_clone, handle_clone);
     }
     info!(
         "Python backend started with PID: {} (show_console={})",
@@ -417,6 +455,7 @@ fn start_python_backend(app_handle: AppHandle) {
     app_handle.manage(Mutex::new(AppState {
         python_process: Some(child),
         logs,
+        total_logs,
     }));
 }
 
@@ -530,6 +569,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             get_backend_logs,
+            get_backend_log_total,
             clear_backend_logs
         ])
         .run(tauri::generate_context!())

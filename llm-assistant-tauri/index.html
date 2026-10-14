@@ -236,6 +236,18 @@
                     <div class="slider-hint" data-i18n="settings.wake.phraseHint">Любая фраза, которую вы произносите, например просто имя ассистента. Регистр и знаки препинания не важны.</div>
                 </div>
                 <div class="settings-section" id="wake-advanced">
+                    <label data-i18n="settings.wake.level">Уровень сигнала</label>
+                    <div class="level-meter"><div class="level-fill" id="wake-level-fill"></div></div>
+                    <div class="slider-hint" id="wake-level-hint" data-i18n="settings.wake.levelIdle">Полоса не двигается — микрофон ничего не слышит.</div>
+                </div>
+                <div class="settings-section" id="wake-advanced">
+                    <label for="wake-device-select" data-i18n="settings.wake.device">Микрофон</label>
+                    <select id="wake-device-select" class="settings-select">
+                        <option value="" data-i18n="settings.wake.deviceDefault">Системный по умолчанию</option>
+                    </select>
+                    <div class="slider-hint" data-i18n="settings.wake.deviceHint">Устройство, которое постоянно слушает фон. Обычный голосовой ввод и wake-word могут использовать разные микрофоны.</div>
+                </div>
+                <div class="settings-section" id="wake-advanced">
                     <label for="wake-model-select" data-i18n="settings.wake.model">Модель распознавания</label>
                     <select id="wake-model-select" class="settings-select">
                         <option value="tiny">tiny (~0.5 GB, быстрее)</option>
