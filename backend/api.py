@@ -112,6 +112,10 @@ class ChatResponseMessage(BaseModel):
     max_context_tokens: int = 8192
     # Tool calls actually executed during this turn (for the UI)
     actions: list[dict] = Field(default_factory=list)
+    # True when the assistant claimed an action was done but no tool ran, and the
+    # retry failed to fix it. The UI surfaces this instead of letting the
+    # assistant's false "done" stand.
+    claimed_without_action: bool = False
 
 
 class MemoryEntry(BaseModel):

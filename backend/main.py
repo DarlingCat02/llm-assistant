@@ -795,6 +795,42 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_DONE_MARKERS_RU = (
+    "открыт", "открыл", "открыла", "открыто", "создан", "создал", "создала",
+    "запущен", "запустил", "готово", "сделал", "сделано", "выполнено",
+)
+_DONE_MARKERS_EN = (
+    "opened", "created", "launched", "done", "ready", "executed",
+)
+
+
+def claims_an_action_was_done(text: str) -> bool:
+    """
+    Does the reply assert that something was performed?
+
+    Only used together with 'no tool ran', so this is a suspicion signal, not a
+    verdict: it exists to catch a small model answering 'Блокнот открыт.'
+    instead of calling app_open.
+    """
+    low = (text or "").lower()
+    return any(m in low for m in _DONE_MARKERS_RU + _DONE_MARKERS_EN)
+
+
+_RETRY_NUDGE_RU = (
+    "\n\n[Системное уточнение] В предыдущем ответе инструмент не был вызван, "
+    "но действие было заявлено выполненным. Это неверно: действие выполняется "
+    "ТОЛЬКО вызовом инструмента. Если нужно открыть приложение, создать файл "
+    "или сделать скриншот — вызови соответствующий инструмент сейчас. "
+    "Если инструмент не нужен — так и скажи прямо."
+)
+_RETRY_NUDGE_EN = (
+    "\n\n[System note] Your previous reply claimed an action was done without "
+    "calling any tool. That is not correct: an action only happens when a tool "
+    "is called. If you need to open an app, create a file or take a screenshot, "
+    "call the tool now. If no tool is needed, say so plainly."
+)
+
+
 @app.post("/api/chat", response_model=ChatResponseMessage)
 async def chat(request: ChatMessage):
     """
@@ -857,6 +893,7 @@ async def chat(request: ChatMessage):
             _assistant._llm._config.model = target
 
     # Get response from assistant
+    claimed_without_action = False
     try:
         llm_response = await _assistant.process_message(
             request.message,
@@ -871,6 +908,40 @@ async def chat(request: ChatMessage):
         actions = [
             _dataclasses.asdict(a) for a in getattr(llm_response, "actions", []) or []
         ]
+
+        # A small model can copy its own past answer out of the history: chat 62
+        # held a dozen "открой блокнот" -> "Блокнот открыт." pairs with no tool
+        # ever called, so it kept saying "opened" while nothing happened. One
+        # retry with an explicit correction breaks the pattern.
+        if not actions and claims_an_action_was_done(response_text):
+            logger.warning(
+                f"No tool used but the reply claims an action was done: "
+                f"{response_text[:80]!r} - retrying once"
+            )
+            try:
+                lang = get_config().general.language
+            except Exception:
+                lang = "ru"
+            nudge = _RETRY_NUDGE_EN if lang == "en" else _RETRY_NUDGE_RU
+            retry = await _assistant.process_message(
+                request.message + nudge,
+                thinking=False,
+                search="",
+                chat_history=chat_history,
+                images=request.images,
+            )
+            retry_actions = [
+                _dataclasses.asdict(a) for a in getattr(retry, "actions", []) or []
+            ]
+            if retry_actions:
+                logger.info("Retry used a tool; using the corrected answer")
+                llm_response = retry
+                response_text = retry.content
+                actions = retry_actions
+                used_tokens = retry.prompt_tokens
+            else:
+                logger.warning("Retry still used no tool - reporting that honestly")
+                claimed_without_action = True
     except Exception as e:
         logger.error(f"Error generating response: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -896,6 +967,7 @@ async def chat(request: ChatMessage):
         used_context_tokens=used_tokens,
         max_context_tokens=max_ctx,
         actions=actions,
+        claimed_without_action=claimed_without_action,
     )
 
 

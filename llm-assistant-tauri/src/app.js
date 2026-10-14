@@ -802,6 +802,11 @@ async function submitChat(fullMessage, options = {}) {
         
         // Render the response from the HTTP response
         appendMessage('assistant', data.response, null, data.actions || null);
+        // The backend already tried to force a tool call; if it still answered
+        // "done" without one, say so rather than letting the claim stand.
+        if (data.claimed_without_action) {
+            appendMessage('assistant', t('chat.noActionPerformed'));
+        }
         hideTypingIndicator();
         
         // Update the context indicator

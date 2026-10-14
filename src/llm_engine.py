@@ -134,7 +134,13 @@ class LLMEngine:
         "- browser_open(url) — открыть сайт в браузере (youtube.com, vk.com, github.com и т.д.)\n"
         "- file_open(path) — открыть файл ассоциированным приложением\n"
         "- capture_screen(monitor, save_path) — сделать скриншот экрана. Используй когда пользователь просит посмотреть на экран, показать что на экране, сделать скриншот\n"
-        "- Используй эти инструменты когда пользователь просит создать файл, открыть приложение, сайт, файл или посмотреть на экран"
+        "- Используй эти инструменты когда пользователь просит создать файл, открыть приложение, сайт, файл или посмотреть на экран\n\n"
+        "ОБЯЗАТЕЛЬНО ПРО ДЕЙСТВИЯ:\n"
+        "- Если пользователь просит что-то СДЕЛАТЬ (открыть, создать, показать) — ты ОБЯЗАН вызвать инструмент.\n"
+        "  НИКОГДА не пиши, что действие выполнено, если ты не вызвал инструмент и не получил его результат.\n"
+        "- Если инструмент не вызывался — честно скажи, что ничего не сделано.\n"
+        "- НЕ копируй свой прошлый ответ из истории: прошлый ответ «Готово» ничего не доказывает,\n"
+        "  действие выполняется только вызовом инструмента в этом сообщении."
     )
 
     _system_prompt_en = (
@@ -159,7 +165,13 @@ class LLMEngine:
         "- browser_open(url) — open site in browser (youtube.com, github.com etc.)\n"
         "- file_open(path) — open file with associated application\n"
         "- capture_screen(monitor, save_path) — take a screenshot. Use when the user asks to look at the screen, show what's on the screen, take a screenshot\n"
-        "- Use these tools when the user asks to create a file, open an app, site, file or look at the screen"
+        "- Use these tools when the user asks to create a file, open an app, site, file or look at the screen\n\n"
+        "MANDATORY RULES FOR ACTIONS:\n"
+        "- If the user asks you to DO something (open, create, show), you MUST call a tool.\n"
+        "  NEVER say an action was done unless you called a tool and got its result.\n"
+        "- If no tool was called, say honestly that nothing was done.\n"
+        "- Do NOT copy your previous answer from the history: a past 'Done' proves nothing,\n"
+        "  an action only happens when a tool is called in this turn."
     )
 
     def __init__(self, config: LLMConfig | None = None):
