@@ -402,6 +402,11 @@ fn start_python_backend(app_handle: AppHandle) {
         "8000",
     ])
     .current_dir(project_dir)
+    // Without this Python encodes stdout/stderr with the system ANSI code page
+    // (cp1251 here), which the log pump then decodes as UTF-8 and turns every
+    // Russian log line into unreadable garbage.
+    .env("PYTHONUTF8", "1")
+    .env("PYTHONIOENCODING", "utf-8")
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
     #[cfg(windows)]
