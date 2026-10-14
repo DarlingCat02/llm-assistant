@@ -332,10 +332,25 @@ async def global_websocket_endpoint(websocket: WebSocket):
         while True:
             try:
                 data = await websocket.receive_json()
-                await manager.send_personal(websocket, {"type": "echo", "data": data})
+            except WebSocketDisconnect:
+                # MUST break here. WebSocketDisconnect subclasses Exception, so
+                # the generic handler below used to swallow it and `continue`,
+                # spinning this task at 100% CPU forever and starving the whole
+                # event loop - the backend stopped answering even plain HTTP.
+                manager.disconnect(websocket)
+                logger.info("WebSocket disconnected (global)")
+                break
             except Exception:
                 continue
-                
+            try:
+                await manager.send_personal(websocket, {"type": "echo", "data": data})
+            except WebSocketDisconnect:
+                manager.disconnect(websocket)
+                logger.info("WebSocket disconnected (global)")
+                break
+            except Exception:
+                continue
+
     except WebSocketDisconnect:
         manager.disconnect(websocket)
         logger.info("WebSocket disconnected (global)")
@@ -495,7 +510,10 @@ def _wake_stop() -> None:
     global _wake_detector
     if _wake_detector is not None:
         try:
-            _wake_detector.stop()
+            # unload(), not stop(): stop only ends the thread, leaving 1.6 GB
+            # of weights resident on the GPU. This must happen before a new
+            # model is loaded, or both end up in memory at once.
+            _wake_detector.unload()
         except Exception as e:
             logger.warning(f"Wake word stop failed: {e}")
         _wake_detector = None
@@ -516,8 +534,10 @@ async def get_wake_word():
         "enabled": bool(cfg.enabled) if cfg else False,
         "phrase": cfg.phrase if cfg else "",
         "model": cfg.model if cfg else "large-v3-turbo",
+        "action": cfg.action if cfg else "chat",
         "active_model": (detector.model_path if detector else None),
         "model_device": (detector.model_device if detector else None),
+        "model_loaded": bool(detector and detector.is_model_loaded),
         "input_device": cfg.input_device if cfg else "",
         "cooldown": cfg.cooldown if cfg else 5.0,
         "match_threshold": cfg.match_threshold if cfg else 0.70,
@@ -551,15 +571,20 @@ async def update_wake_word(request: dict):
     phrase = request.get("phrase")
     model = request.get("model")
     device = request.get("input_device")
+    action = request.get("action")
     cooldown = request.get("cooldown")
     threshold = request.get("match_threshold")
 
     for name, value, kind in (
         ("phrase", phrase, str), ("model", model, str),
-        ("input_device", device, str),
+        ("input_device", device, str), ("action", action, str),
     ):
         if value is not None and not isinstance(value, kind):
             raise HTTPException(status_code=400, detail=f"{name} должен быть строкой")
+    if action is not None and action not in ("chat", "execute"):
+        raise HTTPException(
+            status_code=400, detail="Действие: chat или execute"
+        )
     if device is not None and len(device) > 200:
         raise HTTPException(status_code=400, detail="Слишком длинное имя устройства")
     if phrase is not None and len(phrase) > 64:
@@ -581,7 +606,8 @@ async def update_wake_word(request: dict):
 
     save_config(
         wake_enabled=enabled, wake_phrase=phrase, wake_model=model,
-        wake_input_device=device, wake_cooldown=cooldown, wake_threshold=threshold,
+        wake_input_device=device, wake_action=action,
+        wake_cooldown=cooldown, wake_threshold=threshold,
     )
     # The file is not enough: get_config() is cached, and OS env vars take
     # priority over the file - save_config mirrors both, so just re-read.

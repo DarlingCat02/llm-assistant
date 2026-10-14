@@ -432,12 +432,53 @@ class WakeWordDetector:
         self.peak_level = 0.0
         self.opened = False
         self.blocks_read = 0
+        # Whether weights are currently resident. Exposed so the UI and the
+        # tests can tell "not loaded" from "loaded but silent".
+        self.model_loaded = False
+
+    @property
+    def is_model_loaded(self) -> bool:
+        """True while the Whisper weights are held in memory."""
+        return self._model is not None
 
     # ---------- lifecycle ----------
 
     @property
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def unload(self) -> None:
+        """
+        Release the model and give the memory back.
+
+        Dropping the last reference is not enough: torch keeps freed blocks in
+        its caching allocator, so a Whisper stays resident on the GPU after the
+        detector is discarded. Switching models therefore has to empty the
+        cache explicitly, otherwise the old weights are still there while the
+        new ones load.
+
+        Safe to call when nothing is loaded.
+        """
+        self.stop()
+        self._model = None
+        self._processor = None
+        self._vad = None
+        self._torch = None
+        self.model_device = None
+        self.model_loaded = False
+        self._last_trigger = 0.0
+        try:
+            import gc
+
+            import torch
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except Exception as e:
+            logger.debug(f"Wake word: cache release skipped: {e}")
+        logger.info("Wake word model unloaded")
 
     def start(self) -> bool:
         """Start listening. Returns False and sets .error if it cannot run."""
@@ -508,6 +549,7 @@ class WakeWordDetector:
                 self._model = model
                 self._torch = torch
                 self.model_device = str(device)
+                self.model_loaded = True
                 logger.info(
                     f"Wake word model: {self.model_path} on {device} ({dtype})"
                 )
