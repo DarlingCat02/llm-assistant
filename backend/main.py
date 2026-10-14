@@ -1169,6 +1169,23 @@ async def toggle_tts(request: Request):
     }
 
 
+def _tts_engine_ready() -> bool:
+    """
+    Is the OmniVoice engine actually usable right now?
+
+    is_omnivoice_loaded is not a sufficient answer: disable_omnivoice() leaves
+    _initialized True, and enable_omnivoice() never clears it while loading. So
+    for the whole load the engine claims to be loaded while initialize() is
+    still running - and the voice config, which needs _whisper_model, is exactly
+    what is not ready yet. Probing for the attribute the code actually needs is
+    the honest check.
+    """
+    if not _assistant or not _assistant._tts:
+        return False
+    engine = getattr(_assistant._tts, "_engine", None)
+    return bool(_assistant._tts.is_omnivoice_loaded and hasattr(engine, "_whisper_model"))
+
+
 @app.get("/api/tts/status")
 async def get_tts_status():
     """Get the TTS status."""
@@ -1204,26 +1221,38 @@ async def tts_config(request: dict):
     position_temp = request.get("position_temperature", 0.0)
     class_temp = request.get("class_temperature", 0.0)
     
-    # Save config in TTSEngine (facade)
-    _assistant._tts.set_voice_config(
-        mode=mode,
-        instruct=instruct,
-        ref_audio=ref_audio,
-        position_temperature=position_temp,
-        class_temperature=class_temp,
-    )
-    
-    # If OmniVoice already loaded - apply config immediately
-    if _assistant._tts.is_omnivoice_loaded and hasattr(_assistant._tts._engine, 'set_voice_config'):
-        _assistant._tts._engine.set_voice_config(
-            mode=mode,
-            instruct=instruct,
-            ref_audio=ref_audio,
-            position_temperature=position_temp,
-            class_temperature=class_temp,
+    # The facade forwards unconditionally to whatever engine object exists.
+    # While OmniVoice is still loading that object is the un-initialised one,
+    # and its set_voice_config touches self._whisper_model, which does not
+    # exist yet -> AttributeError and HTTP 500 on a perfectly ordinary click.
+    # Storing the values on the facade is enough: enable_omnivoice() applies
+    # the saved config as soon as the model is ready.
+    applied = False
+    if _tts_engine_ready():
+        try:
+            _assistant._tts.set_voice_config(
+                mode=mode,
+                instruct=instruct,
+                ref_audio=ref_audio,
+                position_temperature=position_temp,
+                class_temperature=class_temp,
+            )
+            applied = True
+            logger.info(f"Config applied to loaded OmniVoice: mode={mode}, ref={ref_audio}")
+        except Exception as e:
+            logger.warning(f"TTS config not applied to the live engine: {e}")
+            _assistant._tts._voice_mode = mode
+            _assistant._tts._voice_instruct = instruct
+            _assistant._tts._voice_ref_audio = ref_audio
+    else:
+        _assistant._tts._voice_mode = mode
+        _assistant._tts._voice_instruct = instruct
+        _assistant._tts._voice_ref_audio = ref_audio
+        logger.info(
+            f"TTS config saved for a model that is not loaded yet "
+            f"(mode={mode}, ref={ref_audio}); it will be applied on load"
         )
-        logger.info(f"Config applied to already loaded OmniVoice: mode={mode}, ref={ref_audio}")
-    
+
     return {
         "status": "ok",
         "mode": mode,
@@ -1231,6 +1260,7 @@ async def tts_config(request: dict):
         "ref_audio": ref_audio,
         "position_temperature": position_temp,
         "class_temperature": class_temp,
+        "applied_now": applied,
     }
 
 
