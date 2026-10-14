@@ -302,23 +302,19 @@ class HotkeyConfig(BaseConfig):
 
 
 class WakeWordConfig(BaseConfig):
-    """Wake-word (always-listening trigger).
+    """Wake-word settings for the background input mode.
 
-    Off by default: enabling it makes the app hold the microphone open
-    continuously, which the user must opt into explicitly.
+    There is no `enabled` and no model of its own any more:
+
+    * Whether the wake word runs is the input mode chosen on the slider, and
+      that is session state - not persisted, so a launch never holds the
+      microphone open or a model in VRAM behind the user's back.
+    * The model comes from STTConfig. Both modes run the same weights, so the
+      detector can borrow the instance speech recognition already loaded
+      instead of holding a second copy of the same 1.5 GB.
     """
 
-    enabled: bool = Field(default=False, description="Включить постоянное прослушивание")
     phrase: str = Field(default="", description="Пробуждающая фраза, например «ассистент»")
-    model: str = Field(
-        # Measured on a real recording of this user's voice: 'ассистент' scored
-        # 0.53 with tiny, 0.82 with base and 1.00 with large-v3-turbo. The big
-        # model runs in ~110 ms on CUDA (vs 41 ms for tiny), so on a GPU
-        # machine it is the obvious choice; it needs CUDA because it takes 4.2 s
-        # per run on CPU.
-        default="large-v3-turbo",
-        description="Whisper для детекции: tiny / base / large-v3-turbo",
-    )
     input_device: str = Field(
         default="",
         description="Микрофон для прослушивания: пусто = системный по умолчанию",
@@ -347,16 +343,6 @@ class WakeWordConfig(BaseConfig):
         v = (v or "").strip()
         if len(v) > 64:
             raise ValueError("Пробуждающая фраза длиннее 64 символов")
-        return v
-
-    @field_validator("model")
-    @classmethod
-    def _check_model(cls, v: str) -> str:
-        v = (v or "large-v3-turbo").strip().lower()
-        if v not in ("tiny", "base", "large-v3-turbo"):
-            raise ValueError(
-                "Для wake-word поддерживаются tiny, base и large-v3-turbo"
-            )
         return v
 
     @field_validator("cooldown")
@@ -536,9 +522,7 @@ def save_config(
     hotkey_voice: str | None = None,
     hotkey_voice_num: str | None = None,
     hotkey_live: str | None = None,
-    wake_enabled: bool | None = None,
     wake_phrase: str | None = None,
-    wake_model: str | None = None,
     wake_input_device: str | None = None,
     wake_action: str | None = None,
     wake_cooldown: float | None = None,
@@ -633,14 +617,8 @@ def save_config(
         if val is not None and val != "":
             env_vars[key] = val.strip().replace("\r\n", "\n").replace("\n", "\\n")
 
-    if wake_enabled is not None:
-        env_vars["WAKE_ENABLED"] = "true" if wake_enabled else "false"
     if wake_phrase is not None:
-        # Enable implicitly when a phrase is typed in, otherwise the field
-        # would look set while nothing is listening.
         env_vars["WAKE_PHRASE"] = wake_phrase.strip()
-    if wake_model is not None and wake_model != "":
-        env_vars["WAKE_MODEL"] = wake_model.strip()
     if wake_input_device is not None:
         # Empty is meaningful: it means "follow the system default".
         env_vars["WAKE_INPUT_DEVICE"] = wake_input_device.strip()

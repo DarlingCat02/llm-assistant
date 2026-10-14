@@ -1376,8 +1376,7 @@ async function openSettings() {
     initPersonalityInputs();
     updateLangFieldBadges();
     loadWakeSettings();
-    const wakeToggle = document.getElementById('wake-enabled-toggle');
-    if (wakeToggle) wakeToggle.addEventListener('change', updateWakeFieldsVisibility);
+    initInputMode();
     loadPersonas().then(() => {
         renderPersonaSelector();
         renderPersonaSettings();
@@ -1417,7 +1416,140 @@ function updateLangFieldBadges() {
 
 // === Wake word ===
 
-let wakeState = { enabled: false, phrase: '', model: 'large-v3-turbo', input_device: '', action: 'chat', listening: false, error: null };
+// === Input mode (hotkey <-> background wake word) ===
+// The two are exclusive on purpose: only one Whisper instance is resident at
+// a time. Session state only - a launch always starts on the hotkey, so
+// nothing is pulled into VRAM or the microphone behind the user's back.
+
+const INPUT_MODE_HOTKEY = 'hotkey';
+const INPUT_MODE_BACKGROUND = 'background';
+
+let inputMode = INPUT_MODE_HOTKEY;
+let inputModeBusy = false;
+
+/** Push the current mode into the UI: which controls make sense right now. */
+function renderInputMode() {
+    const slider = document.getElementById('input-mode-slider');
+    if (slider && !inputModeBusy) {
+        slider.value = inputMode === INPUT_MODE_BACKGROUND ? '1' : '0';
+    }
+
+    const background = inputMode === INPUT_MODE_BACKGROUND;
+    const note = document.getElementById('input-mode-note');
+
+    // In background mode the mic button and the hotkey are off: the wake word
+    // owns the microphone, and two owners would fight over it.
+    document.querySelectorAll('[data-requires-hotkey]').forEach(el => {
+        el.classList.toggle('input-disabled', background);
+        if ('disabled' in el) el.disabled = background;
+        el.title = background ? t('chat.mode.hotkeyDisabled') : '';
+    });
+
+    if (!inputModeBusy && note) {
+        note.textContent = background ? t('chat.mode.backgroundOn') : '';
+        note.classList.toggle('input-mode-warn', false);
+    }
+}
+
+/** A first switch to background has to load the model; say so instead of freezing. */
+function startInputModeLoading() {
+    inputModeBusy = true;
+    const note = document.getElementById('input-mode-note');
+    if (note) {
+        note.classList.add('input-mode-warn');
+        note.textContent = t('chat.mode.loading', { s: 0 });
+    }
+    const started = Date.now();
+    window.__laiModeTimer = setInterval(() => {
+        const s = Math.round((Date.now() - started) / 1000);
+        if (note) note.textContent = t('chat.mode.loading', { s });
+    }, 1000);
+}
+
+function stopInputModeLoading() {
+    clearInterval(window.__laiModeTimer);
+    inputModeBusy = false;
+}
+
+async function setInputMode(mode) {
+    if (inputModeBusy) return;
+    const wanted = mode === INPUT_MODE_BACKGROUND ? INPUT_MODE_BACKGROUND : INPUT_MODE_HOTKEY;
+
+    // Warn before spending GPU memory the user may not have: a large model
+    // plus whatever the LLM already holds is how VRAM runs out.
+    if (wanted === INPUT_MODE_BACKGROUND) {
+        const note = document.getElementById('input-mode-note');
+        const state = await fetchInputModeState();
+        if (state && state.model_size_mb && state.gpu_free_mb
+            && state.model_size_mb > state.gpu_free_mb) {
+            inputModeBusy = true;
+            if (note) {
+                note.classList.add('input-mode-warn');
+                note.textContent = t('chat.mode.vramWarn', {
+                    model: Math.round(state.model_size_mb / 1024),
+                    free: Math.round(state.gpu_free_mb / 1024),
+                });
+            }
+            const go = confirm(t('chat.mode.vramConfirm'));
+            inputModeBusy = false;
+            if (!go) {
+                renderInputMode();
+                return;
+            }
+        }
+    }
+
+    startInputModeLoading();
+    try {
+        const resp = await fetchWithTimeout(`${API_BASE}/api/input-mode`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: wanted }),
+        }, 300000);
+        const data = await resp.json();
+
+        if (data.status === 'error') {
+            inputMode = data.mode || INPUT_MODE_HOTKEY;
+            showInputModeError(data.error);
+            return;
+        }
+        inputMode = data.mode;
+        await refreshWakeStatus();
+    } catch (e) {
+        showInputModeError(e && e.message ? e.message : String(e));
+    } finally {
+        stopInputModeLoading();
+        renderInputMode();
+    }
+}
+
+async function fetchInputModeState() {
+    try {
+        const resp = await fetchWithTimeout(`${API_BASE}/api/input-mode`, {}, 10000);
+        return await resp.json();
+    } catch (e) {
+        return null;
+    }
+}
+
+function showInputModeError(message) {
+    const note = document.getElementById('input-mode-note');
+    if (!note) return;
+    note.classList.add('input-mode-warn');
+    note.textContent = t('chat.mode.error', { msg: message });
+    inputMode = INPUT_MODE_HOTKEY;   // the backend stays on hotkey on failure
+}
+
+function initInputMode() {
+    const slider = document.getElementById('input-mode-slider');
+    if (!slider) return;
+    slider.addEventListener('change', () => {
+        setInputMode(slider.value === '1' ? INPUT_MODE_BACKGROUND : INPUT_MODE_HOTKEY);
+    });
+    renderInputMode();
+}
+
+let wakeState = { mode: 'hotkey', phrase: '', action: 'chat', input_device: '', listening: false, error: null };
 let wakeDevices = [];
 
 // dBFS-ish scale for the input meter: -60 dB is effectively silence, 0 dB is
@@ -1532,10 +1664,12 @@ function clearWakeDeviceError(sel) {
 }
 
 function updateWakeFieldsVisibility() {
-    const on = document.getElementById('wake-enabled-toggle').checked;
+    // These settings apply when background mode runs, and you configure them
+    // before switching - so they stay visible in both modes. What used to
+    // gate them was the removed "always listening" checkbox.
     ['wake-fields', 'wake-advanced'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.style.display = on ? '' : 'none';
+        if (el) el.style.display = '';
     });
 }
 
@@ -1545,17 +1679,15 @@ async function loadWakeSettings() {
         if (!resp.ok) return;
         const data = await resp.json();
         wakeState = data;
-        const toggle = document.getElementById('wake-enabled-toggle');
+        if (data.mode) inputMode = data.mode;
         const phrase = document.getElementById('wake-phrase-input');
-        const model = document.getElementById('wake-model-select');
-        if (toggle) toggle.checked = !!data.enabled;
         if (phrase) phrase.value = data.phrase || '';
-        if (model) model.value = data.model || 'large-v3-turbo';
         const action = document.getElementById('wake-action-select');
         if (action) action.value = data.action || 'chat';
         updateWakeFieldsVisibility();
         renderWakeStatus();
         renderWakeLevel();
+        renderInputMode();
         await loadWakeDevices(data.input_device || '');
     } catch (e) {
         console.warn('Не удалось загрузить настройки wake-word:', e);
@@ -1566,7 +1698,8 @@ function renderWakeStatus() {
     const box = document.getElementById('wake-status-section');
     const text = document.getElementById('wake-status-text');
     if (!box || !text) return;
-    if (!wakeState.enabled) { box.style.display = 'none'; return; }
+    // Only meaningful while the background mode is actually running.
+    if (inputMode !== INPUT_MODE_BACKGROUND) { box.style.display = 'none'; return; }
     box.style.display = '';
     if (wakeState.error) {
         text.textContent = t('settings.wake.error', { msg: wakeState.error });
@@ -1578,7 +1711,11 @@ function renderWakeStatus() {
         // fine on a GPU and unusable on CPU, and the difference is invisible
         // until the wake word starts missing.
         if (wakeState.model_device) parts.push(wakeState.model_device);
-        if (wakeState.active_model) parts.push(String(wakeState.active_model).split(/[\\/]/).pop());
+        if (wakeState.model_shared) {
+            parts.push(t('settings.wake.modelShared'));
+        } else if (wakeState.active_model) {
+            parts.push(String(wakeState.active_model).split(/[\\/]/).pop());
+        }
         text.textContent = parts.join(' · ');
         text.style.color = '';
     } else {
@@ -1610,19 +1747,16 @@ function renderWakeHeard() {
 }
 
 async function saveWakeSettings() {
-    const toggle = document.getElementById('wake-enabled-toggle');
     const phrase = document.getElementById('wake-phrase-input');
-    const model = document.getElementById('wake-model-select');
     const device = document.getElementById('wake-device-select');
     const action = document.getElementById('wake-action-select');
     const payload = {
-        enabled: !!(toggle && toggle.checked),
         phrase: phrase ? phrase.value.trim() : '',
-        model: model ? model.value : 'large-v3-turbo',
         input_device: device ? device.value : '',
         action: action ? action.value : 'chat',
     };
-    if (payload.enabled && !payload.phrase) {
+    // Background mode needs a phrase; in hotkey mode it is simply not needed yet.
+    if (inputMode === INPUT_MODE_BACKGROUND && !payload.phrase) {
         showToast(t('settings.wake.needPhrase'), 'error', 4000);
         return false;
     }
@@ -2043,6 +2177,12 @@ const SILENCE_DURATION = 2000; // 2 seconds of silence to stop
 
 async function toggleVoiceRecording() {
     if (isProcessingVoice) return; // Block while processing
+    if (inputMode === INPUT_MODE_BACKGROUND) {
+        // The wake word owns the microphone in this mode; grabbing it here too
+        // would mean two owners racing for one device.
+        showToast(t('chat.mode.hotkeyDisabled'), 'info', 2500);
+        return;
+    }
     if (isRecording) {
         stopVoiceRecording();
     } else {
@@ -2052,6 +2192,9 @@ async function toggleVoiceRecording() {
 
 async function startVoiceRecording() {
     if (isProcessingVoice) return; // Block while processing
+    // Also reached from the wake-word flow, which is exactly why this guard is
+    // on the toggle above and not here.
+    if (inputMode === INPUT_MODE_BACKGROUND && isRecording) return;
     
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });

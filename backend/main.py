@@ -240,13 +240,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     except Exception as e:
         logger.warning(f"Failed to start keep-alive: {e}")
 
-    # Start wake-word (off by default; never fatal)
-    try:
-        _ok, _err = _wake_start()
-        if _ok:
-            logger.info("Wake word: listening")
-    except Exception as e:
-        logger.warning(f"Wake word did not start: {e}")
+    # The wake word is deliberately NOT started here. The input mode is session
+    # state and always begins on the hotkey, so a launch never opens the
+    # microphone or pulls a model into VRAM behind the user's back.
 
     logger.info("Backend ready")
 
@@ -359,28 +355,74 @@ async def global_websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
-# === Wake word ===
+# === Input mode + wake word ===
 
+# Which way voice input happens right now. Session state on purpose: a launch
+# must never hold the microphone open or a model in VRAM without being asked.
+INPUT_MODE_HOTKEY = "hotkey"
+INPUT_MODE_BACKGROUND = "background"
+
+_input_mode = INPUT_MODE_HOTKEY
 _wake_detector = None
 _wake_error: str | None = None
 
 
+def _current_model_path() -> str:
+    """Where the Whisper used by BOTH modes lives.
+
+    Both modes run the same weights, so the wake detector can reuse whatever
+    speech recognition has already loaded instead of holding a second copy.
+    """
+    from src.stt_engine import resolve_whisper_model
+
+    try:
+        return resolve_whisper_model(get_config().stt.model)
+    except Exception as e:
+        logger.warning(f"Cannot resolve the speech model: {e}")
+        return ""
+
+
+def _borrowable_stt_model(model_path: str) -> tuple | None:
+    """
+    The already-loaded speech recognition model, if it can serve the detector.
+
+    Deliberately does not force a load: the whole point is to reuse an instance
+    that exists, not to create one so there is something to reuse.
+    """
+    try:
+        from src.stt_engine import get_stt_engine
+
+        engine = get_stt_engine()
+    except Exception as e:
+        logger.warning(f"Speech engine unavailable: {e}")
+        return None
+
+    if engine is None or not getattr(engine, "_initialized", False):
+        return None
+    model = getattr(engine, "_model", None)
+    processor = getattr(engine, "_processor", None)
+    device = getattr(engine, "_device", None)
+    if model is None or processor is None:
+        return None
+
+    path = getattr(engine, "_model_path", None)
+    if str(path) != str(model_path):
+        logger.info(
+            f"Speech model differs ({Path(str(path)).name} vs "
+            f"{Path(str(model_path)).name}); not sharing"
+        )
+        return None
+    return (path, processor, model, device)
+
+
 def _wake_model_path(model: str = "large-v3-turbo") -> str:
     """
-    Where the Whisper used for wake detection lives.
+    Deprecated shim kept for callers that ask for a specific model.
 
-    Falls back to a smaller model when the configured one was never downloaded,
-    so enabling the wake word on a fresh clone cannot fail just because the
-    1.5 GB model is absent.
+    The detector now follows the speech recognition model, so this simply
+    resolves whatever is configured.
     """
-    from src.stt_engine import resolve_model_dir
-
-    candidates = [model] if model != "large-v3-turbo" else ["large-v3-turbo", "base", "tiny"]
-    for name in candidates:
-        path = resolve_model_dir(f"whisper-{name}", f"whisper-{name}")
-        if Path(path).is_dir():
-            return path
-    return resolve_model_dir(f"whisper-{model}", f"whisper-{model}")
+    return _current_model_path()
 
 
 @app.get("/api/audio-inputs")
@@ -450,20 +492,16 @@ def _wake_start() -> tuple[bool, str | None]:
         logger.warning(f"Wake word: cannot read config: {e}")
         return False, str(e)
 
-    if not cfg.enabled:
-        _wake_error = None
-        return False, None
     if not cfg.phrase.strip():
-        _wake_error = "Пробуждающая фраза не задана"
-        logger.warning("Wake word is enabled but no phrase is set - staying off")
+        _wake_error = "Не задана пробуждающая фраза"
+        logger.warning("Background mode needs a wake phrase - staying off")
         return False, _wake_error
 
-    path = _wake_model_path(cfg.model)
-    if not Path(path).is_dir():
+    path = _current_model_path()
+    if not path or not Path(path).is_dir():
         _wake_error = f"Модель не найдена: {path}"
         logger.warning(
-            f"Wake word model not found at {path} - staying off. "
-            f"Run: python tests/fetch_whisper_model.py {cfg.model}"
+            f"Speech model not found at {path} - background mode unavailable."
         )
         return False, _wake_error
 
@@ -493,6 +531,9 @@ def _wake_start() -> tuple[bool, str | None]:
         cooldown=cfg.cooldown,
         threshold=cfg.match_threshold,
         input_device=cfg.input_device,
+        # Reuse the speech recognition instance when it happens to be loaded,
+        # so switching modes does not cost a second 1.5 GB.
+        preloaded=_borrowable_stt_model(path),
     )
     if not detector.start():
         err = detector.error or "неизвестная ошибка"
@@ -531,13 +572,15 @@ async def get_wake_word():
 
     detector = _wake_detector
     return {
-        "enabled": bool(cfg.enabled) if cfg else False,
+        "mode": _input_mode,
         "phrase": cfg.phrase if cfg else "",
-        "model": cfg.model if cfg else "large-v3-turbo",
         "action": cfg.action if cfg else "chat",
         "active_model": (detector.model_path if detector else None),
         "model_device": (detector.model_device if detector else None),
         "model_loaded": bool(detector and detector.is_model_loaded),
+        # False means the detector borrowed the speech recognition model, so
+        # only one copy of the weights exists.
+        "model_shared": bool(detector and not detector.owns_model and detector.is_model_loaded),
         "input_device": cfg.input_device if cfg else "",
         "cooldown": cfg.cooldown if cfg else 5.0,
         "match_threshold": cfg.match_threshold if cfg else 0.70,
@@ -561,22 +604,20 @@ async def get_wake_word():
 
 @app.put("/api/wake-word")
 async def update_wake_word(request: dict):
-    """Save wake-word settings and (re)start detection when enabled."""
+    """Save wake-word settings and restart detection if it is running."""
     # reload_config must be imported here: it is what clears the lru_cache on
     # get_config(), and without it every save of the wake-word settings died
     # with a NameError (HTTP 500) - the settings silently never applied.
     from config import save_config, reload_config
 
-    enabled = request.get("enabled")
     phrase = request.get("phrase")
-    model = request.get("model")
     device = request.get("input_device")
     action = request.get("action")
     cooldown = request.get("cooldown")
     threshold = request.get("match_threshold")
 
     for name, value, kind in (
-        ("phrase", phrase, str), ("model", model, str),
+        ("phrase", phrase, str),
         ("input_device", device, str), ("action", action, str),
     ):
         if value is not None and not isinstance(value, kind):
@@ -589,32 +630,102 @@ async def update_wake_word(request: dict):
         raise HTTPException(status_code=400, detail="Слишком длинное имя устройства")
     if phrase is not None and len(phrase) > 64:
         raise HTTPException(status_code=400, detail="Фраза длиннее 64 символов")
-    if model is not None and model not in ("tiny", "base", "large-v3-turbo"):
-        raise HTTPException(
-                status_code=400,
-                detail="Модель: tiny, base или large-v3-turbo",
-            )
     if cooldown is not None and not (0 <= float(cooldown) <= 300):
         raise HTTPException(status_code=400, detail="Кулдаун: от 0 до 300 секунд")
     if threshold is not None and not (0.1 <= float(threshold) <= 1.0):
         raise HTTPException(status_code=400, detail="Порог: от 0.1 до 1.0")
-    if enabled is True and not (phrase or "").strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Укажите пробуждающую фразу, чтобы включить её",
-        )
 
     save_config(
-        wake_enabled=enabled, wake_phrase=phrase, wake_model=model,
-        wake_input_device=device, wake_action=action,
+        wake_phrase=phrase, wake_input_device=device, wake_action=action,
         wake_cooldown=cooldown, wake_threshold=threshold,
     )
     # The file is not enough: get_config() is cached, and OS env vars take
     # priority over the file - save_config mirrors both, so just re-read.
     reload_config()
 
+    # Only a running detector needs restarting; in hotkey mode there is none,
+    # and starting one here would quietly load a model into VRAM.
+    ok, err = (True, None)
+    if _wake_detector is not None or _input_mode == INPUT_MODE_BACKGROUND:
+        ok, err = _wake_start()
+    return {"status": "ok", "mode": _input_mode, "listening": ok, "error": err}
+
+
+_APPROX_MODEL_MB = {
+    "tiny": 150, "base": 300, "small": 1000, "medium": 3000,
+    "large": 6000, "large-v3": 3000, "large-v2": 3000, "large-v3-turbo": 1550,
+}
+
+
+def _model_size_mb() -> int | None:
+    """Rough VRAM cost of the configured speech model, for the UI warning."""
+    try:
+        name = str(get_config().stt.model).strip().lower()
+    except Exception:
+        return None
+    return _APPROX_MODEL_MB.get(name)
+
+
+def _gpu_free_mb() -> int | None:
+    """Free VRAM right now, so the warning is about this machine, not a guess."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        free, _total = torch.cuda.mem_get_info()
+        return int(free // (1024 * 1024))
+    except Exception:
+        return None
+
+
+@app.get("/api/input-mode")
+async def get_input_mode():
+    """Which way voice input is handled right now."""
+    detector = _wake_detector
+    return {
+        "mode": _input_mode,
+        "listening": bool(detector and detector.is_running),
+        "model_loaded": bool(detector and detector.is_model_loaded),
+        "model_shared": bool(
+            detector and not detector.owns_model and detector.is_model_loaded
+        ),
+        "model_path": detector.model_path if detector else None,
+        "error": (detector.error if detector else None) or _wake_error,
+        "model_size_mb": _model_size_mb(),
+        "gpu_free_mb": _gpu_free_mb(),
+    }
+
+
+@app.post("/api/input-mode")
+async def set_input_mode(request: dict):
+    """
+    Switch between hotkey and background input.
+
+    The two are exclusive on purpose: only one Whisper instance is resident at
+    a time, which is what keeps VRAM from doubling.
+    """
+    global _input_mode, _wake_error
+
+    mode = (request.get("mode") or "").strip().lower()
+    if mode not in (INPUT_MODE_HOTKEY, INPUT_MODE_BACKGROUND):
+        raise HTTPException(
+            status_code=400, detail="Режим: hotkey или background"
+        )
+
+    if mode == INPUT_MODE_HOTKEY:
+        _wake_stop()
+        _input_mode = INPUT_MODE_HOTKEY
+        return {"status": "ok", "mode": _input_mode, "listening": False}
+
     ok, err = _wake_start()
-    return {"status": "ok", "listening": ok, "error": err}
+    if not ok:
+        # Stay on hotkey: silently pretending the background is running would
+        # mean the microphone is not open while the UI says it is.
+        return {"status": "error", "mode": _input_mode, "listening": False,
+                "error": err}
+    _input_mode = INPUT_MODE_BACKGROUND
+    return {"status": "ok", "mode": _input_mode, "listening": True}
 
 
 # === API endpoints ===

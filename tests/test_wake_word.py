@@ -352,11 +352,113 @@ def test_resolve_torch_device_survives_broken_cuda(monkeypatch):
     assert resolve_torch_device() == "cpu"
 
 
-def test_wake_model_default_is_the_one_that_hears_russian():
-    """Measured on a real recording: tiny 0.53, base 0.82, large-v3-turbo 1.00."""
-    from config import WakeWordConfig
+def test_same_device_ignores_the_index():
+    """
+    Regression: a module moved with .to("cuda") reports 'cuda:0' while the
+    resolved device is 'cuda'. Comparing the strings said 'different', so the
+    detector loaded a second 1.5 GB copy of the same weights.
+    """
+    from src.wake_word import _same_device
 
-    assert WakeWordConfig().model == "large-v3-turbo"
+    assert _same_device("cuda:0", "cuda") is True
+    assert _same_device("cuda", "cuda:0") is True
+    assert _same_device("cpu", "cuda") is False
+    assert _same_device("cuda:0", "cuda:1") is True
+
+
+def test_detector_reuses_a_matching_preloaded_model():
+    """
+    The whole point of borrowing: one set of weights, not two.
+
+    A 'Loading model' line for the detector when speech recognition already
+    holds the same model is 1.5 GB of VRAM wasted.
+    """
+    import torch
+
+    from src.wake_word import WakeWordDetector
+
+    fake = type("M", (), {
+        "dtype": torch.float16,
+        "device": "cuda",
+        "eval": lambda self: self,
+        "to": lambda self, d: self,
+    })()
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="models/whisper-large-v3-turbo",
+        on_detect=lambda t: None,
+        preloaded=("models/whisper-large-v3-turbo", "proc", fake, "cuda"),
+    )
+    # Patch the loader so a borrow can never fall through to a real load.
+    d._vad = object()
+    d._load_models()
+
+    assert d._model is fake, "must adopt the existing model"
+    assert d.owns_model is False, "borrowed, not owned"
+    assert d.is_model_loaded
+
+
+def test_detector_owns_a_model_it_loaded_itself():
+    """A mismatch has to load its own copy and remember that it owns it."""
+    from src.wake_word import WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="models/whisper-large-v3-turbo",
+        on_detect=lambda t: None,
+        preloaded=("some/other-model", "proc", object(), "cuda"),
+    )
+    d._vad = object()
+
+    # Force the mismatch path without touching the disk.
+    def boom(*a, **k):
+        raise RuntimeError("would have loaded a second copy")
+    import transformers
+
+    orig = transformers.WhisperForConditionalGeneration.from_pretrained
+    transformers.WhisperForConditionalGeneration.from_pretrained = staticmethod(boom)
+    try:
+        ok = d._load_models()
+    finally:
+        transformers.WhisperForConditionalGeneration.from_pretrained = orig
+
+    assert not ok, "a path mismatch must not silently adopt the wrong model"
+    assert d.owns_model is False
+
+
+def test_unload_does_not_free_a_borrowed_model():
+    """
+    Speech recognition still needs the model the detector borrowed, so
+    unloading must not pull it out from under it.
+    """
+    from src.wake_word import WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="unused", on_detect=lambda t: None,
+    )
+    d._model = object()
+    d._processor = object()
+    d.model_loaded = True
+    d.owns_model = False   # borrowed
+
+    d.unload()
+
+    assert not d.is_model_loaded
+    assert d.owns_model is False
+
+
+def test_unload_frees_a_model_the_detector_owns():
+    from src.wake_word import WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="unused", on_detect=lambda t: None,
+    )
+    d._model = object()
+    d.model_loaded = True
+    d.owns_model = True
+
+    d.unload()
+
+    assert not d.is_model_loaded
 
 
 def test_unload_clears_everything_and_is_repeatable():
@@ -558,37 +660,42 @@ def test_score_is_bounded():
 def test_config_validation(tmp_path, monkeypatch):
     from config import get_config, reload_config
 
-    monkeypatch.setenv("WAKE_ENABLED", "true")
     monkeypatch.setenv("WAKE_PHRASE", "ассистент")
-    monkeypatch.setenv("WAKE_MODEL", "tiny")
     monkeypatch.setenv("WAKE_COOLDOWN", "7")
     get_config.cache_clear()
     cfg = reload_config().wake
-    assert cfg.enabled is True
     assert cfg.phrase == "ассистент"
-    assert cfg.model == "tiny"
     assert cfg.cooldown == 7.0
 
 
-def test_wake_is_off_by_default():
-    """A fresh clone must never open the microphone unasked.
-
-    Checks the field default, not the loaded value: the developer's own .env
-    may well have it enabled for testing.
+def test_wake_has_no_enable_or_model_of_its_own():
+    """
+    Whether the wake word runs is the input-mode slider (session state), and
+    the weights come from the speech model. Keeping either here is how a
+    second 1.5 GB copy crept in and how a launch ended up with the microphone
+    open behind the user's back.
     """
     from config import WakeWordConfig
 
     fields = WakeWordConfig.model_fields
-    assert fields["enabled"].default is False
+    assert "enabled" not in fields
+    assert "model" not in fields
     assert fields["phrase"].default == ""
-    # Measured on a real recording: tiny 0.53, base 0.82, large-v3-turbo 1.00
-    assert fields["model"].default == "large-v3-turbo"
+    # What is left has to stay persisted, unlike the mode.
+    assert {"phrase", "input_device", "action", "cooldown",
+            "match_threshold"} <= set(fields)
+
+
+def test_speech_model_governs_both_modes():
+    from config import Config
+
+    assert Config().stt.model  # one setting, used by hotkey and background
 
 
 def test_bad_wake_values_are_rejected():
     from config import WakeWordConfig
 
     with pytest.raises(Exception):
-        WakeWordConfig(model="large")          # only tiny/base supported
-    with pytest.raises(Exception):
         WakeWordConfig(phrase="x" * 100)       # max 64 chars
+    with pytest.raises(Exception):
+        WakeWordConfig(action="something-else")

@@ -1321,6 +1321,57 @@ body {
     opacity: 0.9;
 }
 
+/* Voice input mode: two exclusive positions, so a slider says "pick one"
+   where two checkboxes would wrongly suggest "both". */
+.input-mode-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px 2px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    position: relative;
+}
+
+.input-mode-label {
+    flex: 0 0 auto;
+}
+
+/* The two ends sit under the track, which is what makes a slider read as a
+   choice between them rather than an anonymous 0..1 value. */
+.input-mode-end {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.input-mode-slider {
+    flex: 1 1 auto;
+    min-width: 80px;
+    accent-color: var(--accent, #4a9eff);
+    cursor: pointer;
+}
+
+.input-mode-note {
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 0 10px 4px;
+    min-height: 14px;
+    opacity: 0.75;
+}
+
+.input-mode-note.input-mode-warn {
+    color: var(--danger, #e06c75);
+    opacity: 0.95;
+}
+
+/* Controls that do not apply in the current mode: dimmed, not hidden, so the
+   layout does not jump when switching. */
+.input-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+    cursor: not-allowed;
+}
+
 /* TTS state next to the switch: a live "loading, 12s" counter, so a slow model
    load reads as progress rather than as a frozen control. */
 .tts-status {

@@ -71,6 +71,15 @@
                         <span data-i18n="chat.search">🌐 Поиск</span>
                     </label>
                 </div>
+                <div class="input-mode-bar">
+                    <span class="input-mode-label" data-i18n="chat.inputMode">Ввод голосом</span>
+                    <input type="range" id="input-mode-slider" class="input-mode-slider"
+                           min="0" max="1" step="1" value="0"
+                           aria-label="Voice input mode">
+                    <span class="input-mode-end" data-i18n="chat.mode.hotkey">Горячая клавиша</span>
+                    <span class="input-mode-end" data-i18n="chat.mode.background">Фоновое</span>
+                </div>
+                <div id="input-mode-note" class="input-mode-note"></div>
                 <div class="toolbar-row">
                     <label class="tts-toggle">
                         <input type="checkbox" id="tts-toggle">
@@ -224,12 +233,8 @@
                     <input type="text" id="hotkey-live-input" class="settings-input" value="Ctrl+Shift+L">
                 </div>
                 <div class="settings-section">
-                    <label class="settings-checkbox" style="display:flex;align-items:center;gap:8px;">
-                        <input type="checkbox" id="wake-enabled-toggle">
-                        <span data-i18n="settings.wake.enable">Пробуждающая фраза (wake-word)</span>
-                    </label>
                     <div class="slider-hint" data-i18n="settings.wake.privacy">
-                        Пока включено, приложение постоянно держит микрофон открытым и слушает фон. Запись нигде не сохраняется — звук распознаётся на лету и отбрасывается.
+                        Фоновое распознавание включается переключателем над чатом. Пока оно включено, приложение постоянно держит микрофон открытым и слушает фон. Запись нигде не сохраняется — звук распознаётся на лету и отбрасывается.
                     </div>
                 </div>
                 <div class="settings-section" id="wake-fields">
@@ -262,13 +267,7 @@
                     <div class="slider-hint" data-i18n="settings.wake.actionHint">«Показать фразу» надёжнее: детектор иногда оговаривает слово, и по видимому тексту это понятно.</div>
                 </div>
                 <div class="settings-section" id="wake-advanced">
-                    <label for="wake-model-select" data-i18n="settings.wake.model">Модель распознавания</label>
-                    <select id="wake-model-select" class="settings-select">
-                        <option value="large-v3-turbo">large-v3-turbo — точнее всего, нужна видеокарта</option>
-                        <option value="base">base — компромисс</option>
-                        <option value="tiny">tiny — самая лёгкая, хуже слышит</option>
-                    </select>
-                    <div class="slider-hint" data-i18n="settings.wake.modelHint">Модель только слушает фон. На видеокарте большая модель работает быстрее, чем кажется, и слышит русский заметно лучше.</div>
+                    <div class="slider-hint" data-i18n="settings.wake.modelHint">Модель распознавания выбирается во вкладке «Голос» и используется обоими режимами — отдельной модели для фонового слушания больше нет.</div>
                 </div>
                 <div class="settings-section" id="wake-status-section" style="display:none;">
                     <div class="slider-hint" id="wake-status-text"></div>

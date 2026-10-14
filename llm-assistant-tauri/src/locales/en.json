@@ -198,5 +198,15 @@
   "chat.noActionPerformed": "⚠️ The assistant said the action was done but no tool was called - most likely nothing happened.",
   "tts.loading": "Loading model... {s}s",
   "tts.ready": "TTS ready",
-  "tts.off": "TTS off"
+  "tts.off": "TTS off",
+  "chat.inputMode": "Voice input",
+  "chat.mode.hotkey": "Hotkey",
+  "chat.mode.background": "Background",
+  "chat.mode.backgroundOn": "Listening in the background. The mic button and hotkeys are off.",
+  "chat.mode.hotkeyDisabled": "Background recognition is on - it has the microphone.",
+  "chat.mode.loading": "Switching... releasing and loading the model ({s}s)",
+  "chat.mode.vramWarn": "The recognition model is ~{model} GB and ~{free} GB is free - it may not fit.",
+  "chat.mode.vramConfirm": "Turn on background recognition anyway?",
+  "chat.mode.error": "Could not switch: {msg}",
+  "settings.wake.modelShared": "shared with recognition"
 }

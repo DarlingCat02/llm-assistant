@@ -133,6 +133,20 @@ def resolve_torch_device(preferred: str | None = None) -> str:
     return "cpu"
 
 
+def _same_device(a, b) -> bool:
+    """Do two device spellings name the same accelerator?
+
+    'cuda' and 'cuda:0' are the same GPU; a plain string comparison says they
+    are not, which silently forced a second 1.5 GB load.
+    """
+    try:
+        import torch
+
+        return torch.device(a).type == torch.device(b).type
+    except Exception:
+        return str(a) == str(b)
+
+
 def update_level_meter(detector: "WakeWordDetector", block: np.ndarray) -> float:
     """
     Feed one captured block into the detector's input-level meter.
@@ -394,6 +408,7 @@ class WakeWordDetector:
         stt_interval: float = STT_INTERVAL,
         input_device: str = "",
         torch_device: str | None = None,
+        preloaded: tuple | None = None,
     ) -> None:
         self.phrase = phrase
         self.language = detect_phrase_language(phrase)
@@ -413,6 +428,13 @@ class WakeWordDetector:
         # Resolved in _load_models(); exposed so the API can report where the
         # detector actually runs.
         self.model_device: str | None = None
+        # (path, processor, model, device) borrowed from speech recognition.
+        # Set by the backend so the detector can reuse an already loaded model
+        # instead of holding a second copy of the same weights.
+        self.preloaded = preloaded
+        # True only when this detector loaded the model itself. Unloading a
+        # borrowed model would yank it out from under speech recognition.
+        self.owns_model = False
         self.device_name: str | None = None
         self.device_problem: str | None = None
 
@@ -460,13 +482,20 @@ class WakeWordDetector:
         Safe to call when nothing is loaded.
         """
         self.stop()
+        borrowed = not self.owns_model and self._model is not None
         self._model = None
         self._processor = None
         self._vad = None
         self._torch = None
         self.model_device = None
         self.model_loaded = False
+        self.owns_model = False
         self._last_trigger = 0.0
+        if borrowed:
+            # Speech recognition still needs this model, so it stays resident.
+            # Dropping our reference is enough - the other holder keeps it alive.
+            logger.info("Wake word released its borrowed model (still in use)")
+            return
         try:
             import gc
 
@@ -529,16 +558,44 @@ class WakeWordDetector:
                 self._vad = load_silero_vad()
 
             if self._model is None:
+                device = self.torch_device or resolve_torch_device()
+                dtype = torch.float16 if str(device).startswith("cuda") else torch.float32
+
+                # Prefer the instance speech recognition already loaded. Both
+                # modes run the same weights, so a second copy would be another
+                # 1.5 GB of VRAM for nothing.
+                if self.preloaded is not None:
+                    pre_path, pre_processor, pre_model, pre_device = self.preloaded
+                    same_path = str(pre_path) == str(self.model_path)
+                    same_dtype = getattr(pre_model, "dtype", None) == dtype
+                    # Compare the device TYPE, not its spelling: a module moved
+                    # with .to("cuda") reports "cuda:0" while the resolved
+                    # device is "cuda", and the two are the same GPU.
+                    same_device = _same_device(getattr(pre_model, "device", None), device)
+                    if same_path and same_dtype and same_device:
+                        self._processor = pre_processor
+                        self._model = pre_model
+                        self._torch = torch
+                        self.model_device = str(pre_device)
+                        self.model_loaded = True
+                        self.owns_model = False
+                        logger.info(
+                            f"Wake word reuses the speech recognition model "
+                            f"({self.model_path} on {pre_device}) - no second copy"
+                        )
+                        return True
+                    logger.info(
+                        "Preloaded model does not match "
+                        f"(path={same_path} dtype={same_dtype} device={same_device}); "
+                        "loading a separate one"
+                    )
+
                 self._processor = WhisperProcessor.from_pretrained(
                     self.model_path, local_files_only=True
                 )
                 # Pick the device up front: a large-v3-turbo wake detector runs
                 # in ~110 ms on CUDA but ~4.2 s on CPU, and the second one
                 # blocks the capture thread long enough to lose audio.
-                device = self.torch_device or resolve_torch_device()
-                # fp16 on GPU halves memory and speeds up the matmuls; on CPU
-                # it is slower, so float32 stays there.
-                dtype = torch.float16 if str(device).startswith("cuda") else torch.float32
                 model = WhisperForConditionalGeneration.from_pretrained(
                     self.model_path,
                     local_files_only=True,
@@ -550,6 +607,7 @@ class WakeWordDetector:
                 self._torch = torch
                 self.model_device = str(device)
                 self.model_loaded = True
+                self.owns_model = True
                 logger.info(
                     f"Wake word model: {self.model_path} on {device} ({dtype})"
                 )
