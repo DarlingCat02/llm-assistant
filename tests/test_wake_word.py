@@ -291,6 +291,34 @@ def test_window_drops_tail_not_head():
     assert s.speech[0] is first, "the first block must survive trimming"
 
 
+def test_default_threshold_accepts_a_real_microphone_mishearing():
+    """
+    Regression: the live failure was 'ассистент' -> 'Систент' at 0.80 against a
+    0.82 threshold, so a genuine detection was thrown away. Measured negatives
+    (25 ordinary utterances) top out at 0.38, so 0.70 keeps a 2x margin.
+    """
+    from config import WakeWordConfig
+
+    threshold = WakeWordConfig().match_threshold
+    assert threshold <= 0.80, "must accept the observed 0.80 mishearing"
+
+    from src.wake_word import phrase_detected, phrase_score
+
+    assert phrase_score("Систент откуда?", "ассистент") >= threshold
+    assert phrase_detected("Систент откуда?", "ассистент")
+
+
+def test_default_threshold_still_rejects_ordinary_speech():
+    """The margin to the worst measured negative must survive."""
+    from config import WakeWordConfig
+    from src.wake_word import phrase_detected
+
+    threshold = WakeWordConfig().match_threshold
+    # Highest score any of the 25 measured ordinary utterances produced.
+    for text in ("помощь слышишь меня", "переходи", "покажи список"):
+        assert not phrase_detected(text, "ассистент", threshold), text
+
+
 def test_level_meter_starts_silent():
     from src.wake_word import WakeWordDetector
 

@@ -187,7 +187,7 @@ def phrase_score(transcript: str, phrase: str) -> float:
     return best
 
 
-def phrase_detected(transcript: str, phrase: str, threshold: float = 0.82) -> bool:
+def phrase_detected(transcript: str, phrase: str, threshold: float = 0.70) -> bool:
     """True when the transcript contains the wake phrase."""
     return phrase_score(transcript, phrase) >= threshold
 
@@ -358,7 +358,7 @@ class WakeWordDetector:
         model_path: str,
         on_detect: Callable[[str], None],
         cooldown: float = 5.0,
-        threshold: float = 0.82,
+        threshold: float = 0.70,
         stt_interval: float = STT_INTERVAL,
         input_device: str = "",
         torch_device: str | None = None,

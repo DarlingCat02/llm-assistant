@@ -507,7 +507,7 @@ async def get_wake_word():
         "model": cfg.model if cfg else "tiny",
         "input_device": cfg.input_device if cfg else "",
         "cooldown": cfg.cooldown if cfg else 5.0,
-        "match_threshold": cfg.match_threshold if cfg else 0.82,
+        "match_threshold": cfg.match_threshold if cfg else 0.70,
         "listening": bool(detector and detector.is_running),
         "error": (detector.error if detector else None) or _wake_error,
         "active_device": (detector.device_name if detector else None),

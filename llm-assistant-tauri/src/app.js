@@ -1468,7 +1468,7 @@ function renderWakeHeard() {
         return;
     }
     const score = Number(wakeState.phrase_score || 0);
-    const threshold = Number(wakeState.match_threshold || 0.82);
+    const threshold = Number(wakeState.match_threshold || 0.70);
     const matched = score >= threshold;
     box.textContent = t('settings.wake.heard', {
         text: heard,

@@ -317,7 +317,13 @@ class WakeWordConfig(BaseConfig):
     )
     cooldown: float = Field(default=5.0, description="Пауза после срабатывания, сек")
     match_threshold: float = Field(
-        default=0.82, description="Порог совпадения фразы (0-1)"
+        # 0.70, not the 0.82 this used to default to. Measured on this machine
+        # (tests/check_wake_threshold.py): 25 ordinary utterances scored at most
+        # 0.38 against 'ассистент', while a real microphone rendering of the same
+        # word as 'Систент' scored 0.80. The old threshold rejected genuine
+        # detections with more than a 2x margin to spare.
+        default=0.70,
+        description="Порог совпадения фразы (0-1)",
     )
 
     @field_validator("phrase")
