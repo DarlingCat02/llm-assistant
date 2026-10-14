@@ -175,7 +175,12 @@ function initEventListeners() {
     // Buttons
     document.getElementById('new-chat-btn').addEventListener('click', createNewChat);
     document.getElementById('send-btn').addEventListener('click', sendMessage);
-    
+
+    // Voice input mode (hotkey <-> background). Lives here, not in the settings
+    // panel: the slider sits above the chat, so waiting for the settings to be
+    // opened left it dead on the screen it is shown on.
+    initInputMode();
+
     // Files
     document.getElementById('file-input').addEventListener('change', handleFileSelect);
     document.getElementById('file-remove').addEventListener('click', clearFile);
@@ -1376,7 +1381,6 @@ async function openSettings() {
     initPersonalityInputs();
     updateLangFieldBadges();
     loadWakeSettings();
-    initInputMode();
     loadPersonas().then(() => {
         renderPersonaSelector();
         renderPersonaSettings();
@@ -1414,8 +1418,6 @@ function updateLangFieldBadges() {
     });
 }
 
-// === Wake word ===
-
 // === Input mode (hotkey <-> background wake word) ===
 // The two are exclusive on purpose: only one Whisper instance is resident at
 // a time. Session state only - a launch always starts on the hotkey, so
@@ -1426,6 +1428,30 @@ const INPUT_MODE_BACKGROUND = 'background';
 
 let inputMode = INPUT_MODE_HOTKEY;
 let inputModeBusy = false;
+// The note lives in state, not in the DOM. Writing it straight to the element
+// meant the next render() overwrote it, so an error explaining why the switch
+// failed disappeared in the same frame it appeared.
+let inputModeNote = { text: '', warn: false };
+
+function setInputModeNote(text, warn = false) {
+    inputModeNote = { text: text || '', warn: !!warn };
+    paintInputModeNote();
+}
+
+function clearInputModeNote() {
+    setInputModeNote('', false);
+}
+
+function paintInputModeNote() {
+    const note = document.getElementById('input-mode-note');
+    if (!note) return;
+    // While busy the note is the loading counter; the state entry is only
+    // rewritten once the switch settles.
+    if (inputModeBusy) return;
+    note.textContent = inputModeNote.text
+        || (inputMode === INPUT_MODE_BACKGROUND ? t('chat.mode.backgroundOn') : '');
+    note.classList.toggle('input-mode-warn', inputModeNote.warn);
+}
 
 /** Push the current mode into the UI: which controls make sense right now. */
 function renderInputMode() {
@@ -1435,20 +1461,33 @@ function renderInputMode() {
     }
 
     const background = inputMode === INPUT_MODE_BACKGROUND;
-    const note = document.getElementById('input-mode-note');
+
+    // The two ends are clickable and the active one is lit, so the slider does
+    // not need text labels to be readable.
+    if (slider && slider.parentElement) {
+        const ends = slider.parentElement.querySelectorAll('.im-end');
+        if (ends.length === 2) {
+            ends[0].classList.toggle('active', !background);
+            ends[1].classList.toggle('active', background);
+            ends[0].title = t('chat.mode.hotkey');
+            ends[1].title = t('chat.mode.background');
+        }
+    }
 
     // In background mode the mic button and the hotkey are off: the wake word
     // owns the microphone, and two owners would fight over it.
     document.querySelectorAll('[data-requires-hotkey]').forEach(el => {
         el.classList.toggle('input-disabled', background);
         if ('disabled' in el) el.disabled = background;
-        el.title = background ? t('chat.mode.hotkeyDisabled') : '';
+        // Remember the control's own tooltip: blanking it would throw away the
+        // hotkey hint, which is exactly what the user wants to know is gone.
+        if (el.title && !el.dataset.baseTitle) el.dataset.baseTitle = el.title;
+        el.title = background
+            ? t('chat.mode.hotkeyDisabled')
+            : (el.dataset.baseTitle || '');
     });
 
-    if (!inputModeBusy && note) {
-        note.textContent = background ? t('chat.mode.backgroundOn') : '';
-        note.classList.toggle('input-mode-warn', false);
-    }
+    paintInputModeNote();
 }
 
 /** A first switch to background has to load the model; say so instead of freezing. */
@@ -1474,25 +1513,21 @@ function stopInputModeLoading() {
 async function setInputMode(mode) {
     if (inputModeBusy) return;
     const wanted = mode === INPUT_MODE_BACKGROUND ? INPUT_MODE_BACKGROUND : INPUT_MODE_HOTKEY;
+    clearInputModeNote();
 
     // Warn before spending GPU memory the user may not have: a large model
     // plus whatever the LLM already holds is how VRAM runs out.
     if (wanted === INPUT_MODE_BACKGROUND) {
-        const note = document.getElementById('input-mode-note');
         const state = await fetchInputModeState();
         if (state && state.model_size_mb && state.gpu_free_mb
             && state.model_size_mb > state.gpu_free_mb) {
-            inputModeBusy = true;
-            if (note) {
-                note.classList.add('input-mode-warn');
-                note.textContent = t('chat.mode.vramWarn', {
-                    model: Math.round(state.model_size_mb / 1024),
-                    free: Math.round(state.gpu_free_mb / 1024),
-                });
-            }
+            setInputModeNote(t('chat.mode.vramWarn', {
+                model: Math.round(state.model_size_mb / 1024),
+                free: Math.round(state.gpu_free_mb / 1024),
+            }), true);
             const go = confirm(t('chat.mode.vramConfirm'));
-            inputModeBusy = false;
             if (!go) {
+                clearInputModeNote();
                 renderInputMode();
                 return;
             }
@@ -1514,7 +1549,7 @@ async function setInputMode(mode) {
             return;
         }
         inputMode = data.mode;
-        await refreshWakeStatus();
+        await loadWakeSettings();
     } catch (e) {
         showInputModeError(e && e.message ? e.message : String(e));
     } finally {
@@ -1533,11 +1568,8 @@ async function fetchInputModeState() {
 }
 
 function showInputModeError(message) {
-    const note = document.getElementById('input-mode-note');
-    if (!note) return;
-    note.classList.add('input-mode-warn');
-    note.textContent = t('chat.mode.error', { msg: message });
     inputMode = INPUT_MODE_HOTKEY;   // the backend stays on hotkey on failure
+    setInputModeNote(t('chat.mode.error', { msg: message }), true);
 }
 
 function initInputMode() {
@@ -1546,6 +1578,14 @@ function initInputMode() {
     slider.addEventListener('change', () => {
         setInputMode(slider.value === '1' ? INPUT_MODE_BACKGROUND : INPUT_MODE_HOTKEY);
     });
+    // Clicking an end is the obvious thing to try on a two-position slider.
+    const ends = slider.parentElement
+        ? slider.parentElement.querySelectorAll('.im-end')
+        : [];
+    if (ends.length === 2) {
+        ends[0].addEventListener('click', () => setInputMode(INPUT_MODE_HOTKEY));
+        ends[1].addEventListener('click', () => setInputMode(INPUT_MODE_BACKGROUND));
+    }
     renderInputMode();
 }
 

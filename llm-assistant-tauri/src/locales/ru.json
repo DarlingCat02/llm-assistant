@@ -204,9 +204,11 @@
   "chat.mode.background": "Фоновое",
   "chat.mode.backgroundOn": "Слушаю фон. Кнопка микрофона и горячие клавиши отключены.",
   "chat.mode.hotkeyDisabled": "Сейчас работает фоновое распознавание — микрофон занят им.",
-  "chat.mode.loading": "Переключаю… освобождаю и загружаю модель ({s} с)",
+  "chat.mode.loading": "Переключаю режим ввода… ({s} с)",
   "chat.mode.vramWarn": "Модель распознавания ~{model} ГБ, свободно ~{free} ГБ — может не поместиться.",
   "chat.mode.vramConfirm": "Всё равно включить фоновое распознавание?",
   "chat.mode.error": "Не удалось переключить: {msg}",
-  "settings.wake.modelShared": "общая с распознаванием"
+  "settings.wake.modelShared": "общая с распознаванием",
+  "chat.mode.hotkeyShort": "Хоткей",
+  "chat.mode.backgroundShort": "Фон"
 }

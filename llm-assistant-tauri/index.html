@@ -71,21 +71,20 @@
                         <span data-i18n="chat.search">🌐 Поиск</span>
                     </label>
                 </div>
-                <div class="input-mode-bar">
-                    <span class="input-mode-label" data-i18n="chat.inputMode">Ввод голосом</span>
-                    <input type="range" id="input-mode-slider" class="input-mode-slider"
-                           min="0" max="1" step="1" value="0"
-                           aria-label="Voice input mode">
-                    <span class="input-mode-end" data-i18n="chat.mode.hotkey">Горячая клавиша</span>
-                    <span class="input-mode-end" data-i18n="chat.mode.background">Фоновое</span>
-                </div>
-                <div id="input-mode-note" class="input-mode-note"></div>
                 <div class="toolbar-row">
+                    <div class="input-mode-inline">
+                        <span class="im-end" data-i18n="chat.mode.hotkeyShort">Хоткей</span>
+                        <input type="range" id="input-mode-slider" class="input-mode-slider"
+                               min="0" max="1" step="1" value="0"
+                               aria-label="Voice input mode">
+                        <span class="im-end" data-i18n="chat.mode.backgroundShort">Фон</span>
+                    </div>
                     <label class="tts-toggle">
                         <input type="checkbox" id="tts-toggle">
                         <span data-i18n="chat.tts">🔊 TTS</span>
                     </label>
                     <span id="tts-status" class="tts-status"></span>
+                    <span id="input-mode-note" class="input-mode-note"></span>
                     <div id="tts-options" class="tts-mode-group" style="display: none;">
                         <label class="tts-mode">
                             <input type="radio" name="tts-mode" value="instruct" checked>
@@ -108,7 +107,7 @@
                     </div>
                 </div>
                 <div class="input-row">
-                    <button id="voice-btn" class="btn-icon voice-btn" title="Голосовой ввод (Ctrl+Num0)" data-i18n="chat.voice.hint" data-i18n-attr="title">🎤</button>
+                    <button id="voice-btn" class="btn-icon voice-btn" title="Голосовой ввод (Ctrl+Num0)" data-i18n="chat.voice.hint" data-i18n-attr="title" data-requires-hotkey>🎤</button>
                     <label id="attach-btn" class="btn-icon attach-btn" title="Прикрепить файл или изображение" data-i18n="chat.attach.hint" data-i18n-attr="title">
                         📎
                         <input type="file" id="file-input" accept=".txt,.pdf,.docx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tiff" multiple style="display:none">

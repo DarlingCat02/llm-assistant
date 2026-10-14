@@ -204,9 +204,11 @@
   "chat.mode.background": "Background",
   "chat.mode.backgroundOn": "Listening in the background. The mic button and hotkeys are off.",
   "chat.mode.hotkeyDisabled": "Background recognition is on - it has the microphone.",
-  "chat.mode.loading": "Switching... releasing and loading the model ({s}s)",
+  "chat.mode.loading": "Switching input mode… ({s}s)",
   "chat.mode.vramWarn": "The recognition model is ~{model} GB and ~{free} GB is free - it may not fit.",
   "chat.mode.vramConfirm": "Turn on background recognition anyway?",
   "chat.mode.error": "Could not switch: {msg}",
-  "settings.wake.modelShared": "shared with recognition"
+  "settings.wake.modelShared": "shared with recognition",
+  "chat.mode.hotkeyShort": "Hotkey",
+  "chat.mode.backgroundShort": "Background"
 }
