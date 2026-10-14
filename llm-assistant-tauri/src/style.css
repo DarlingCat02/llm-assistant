@@ -1321,6 +1321,28 @@ body {
     opacity: 0.9;
 }
 
+/* TTS state next to the switch: a live "loading, 12s" counter, so a slow model
+   load reads as progress rather than as a frozen control. */
+.tts-status {
+    font-size: 11px;
+    opacity: 0.65;
+    margin-left: 8px;
+}
+
+.tts-status-error {
+    color: var(--danger, #e06c75);
+    opacity: 0.9;
+}
+
+/* Busy, but deliberately NOT disabled - the switch stays usable. */
+.tts-toggle.tts-loading {
+    opacity: 0.6;
+}
+
+.tts-toggle.tts-loading input {
+    cursor: progress;
+}
+
 /* Shows whether the log feed is still alive; greys out when it goes quiet. */
 .terminal-status {
     font-size: 10px;

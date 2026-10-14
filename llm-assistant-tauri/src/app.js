@@ -40,6 +40,48 @@ async function fetchWithTimeout(url, options = {}, ms = 30000) {
         clearTimeout(timer);
     }
 }
+
+/**
+ * Show what the TTS switch is doing.
+ *
+ * Loading OmniVoice takes tens of seconds. A silent switch during that time
+ * reads as a freeze, so the state is spelled out with a live timer.
+ *
+ * @param {string} message
+ * @param {boolean} [isError=false]
+ */
+function showTtsStatus(message, isError = false) {
+    const el = document.getElementById('tts-status');
+    if (!el) return;
+    el.textContent = message;
+    el.classList.toggle('tts-status-error', !!isError);
+}
+
+let ttsLoadingTimer = null;
+
+/** Show a running "loading, Ns" counter without disabling anything. */
+function startTtsLoading(toggle) {
+    const el = document.getElementById('tts-status');
+    if (!el) return;
+    toggle && toggle.classList.add('tts-loading');
+    const started = Date.now();
+    stopTtsLoading();
+    const tick = () => {
+        const s = Math.round((Date.now() - started) / 1000);
+        showTtsStatus(t('tts.loading', { s }));
+        ttsLoadingTimer = setTimeout(tick, 1000);
+    };
+    tick();
+}
+
+function stopTtsLoading() {
+    clearTimeout(ttsLoadingTimer);
+    ttsLoadingTimer = null;
+    const el = document.getElementById('tts-status');
+    if (el) el.classList.remove('tts-loading');
+    const toggle = document.getElementById('tts-toggle');
+    if (toggle) toggle.classList.remove('tts-loading');
+}
 let currentChatId = null;
 let ws = null;
 let initialSettings = null;
@@ -187,14 +229,17 @@ function initEventListeners() {
             ttsOptions.style.display = enabled ? 'flex' : 'none';
         }
 
-        // Block double-clicks: model (un)loading takes tens of seconds
-        e.target.disabled = true;
+        // Do NOT disable the switch. Loading takes tens of seconds, and a greyed-out
+        // switch that cannot be undone is indistinguishable from a hang - and
+        // from a bug. Instead show progress and let the user turn it off; the
+        // backend waits for the in-flight load before disabling.
+        startTtsLoading(e.target);
         try {
             const response = await fetchWithTimeout(`${API_BASE}/api/tts/toggle`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(enabled),
-            }, 180000);
+            }, 300000);
             const data = await response.json();
             console.log('TTS статус:', data);
 
@@ -202,9 +247,11 @@ function initEventListeners() {
             if (enabled && !data.omnivoice_loaded) {
                 e.target.checked = false;
                 if (ttsOptions) ttsOptions.style.display = 'none';
-                alert(t('alert.ttsLoadFailed') + (data.error ? ': ' + data.error : ''));
+                showTtsStatus(data.error || t('alert.ttsLoadFailed'), true);
                 return;
             }
+
+            showTtsStatus(enabled ? t('tts.ready') : t('tts.off'));
 
             // Load voices for cloning, but never let it hold the switch hostage:
             // it is cosmetic and a failure here must not strand a disabled control.
@@ -215,12 +262,9 @@ function initEventListeners() {
         } catch (err) {
             console.error('Ошибка переключения TTS:', err);
             e.target.checked = !enabled;
-            alert(t('alert.ttsLoadFailed') + (err && err.message ? ': ' + err.message : ''));
+            showTtsStatus((err && err.message ? err.message : t('alert.ttsLoadFailed')), true);
         } finally {
-            // Belt and braces: a watchdog releases the switch even if something
-            // above never settles, so the control can never be left unusable.
-            clearTimeout(e.target._ttsUnlock);
-            e.target.disabled = false;
+            stopTtsLoading();
         }
     });
     
@@ -565,7 +609,10 @@ async function loadChatMessages(chatId) {
         container.innerHTML = '';
         
         messages.forEach(msg => {
-            appendMessage(msg.role, msg.content, msg.created_at);
+            // Pass the stored tool calls through, otherwise switching away from
+            // a chat and back leaves only the text and the executed actions
+            // quietly disappear.
+            appendMessage(msg.role, msg.content, msg.created_at, msg.actions || null);
         });
         
         scrollToBottom();

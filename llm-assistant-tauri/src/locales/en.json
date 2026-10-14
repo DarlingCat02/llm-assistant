@@ -195,5 +195,8 @@
   "settings.wake.actionChat": "Show the phrase, then run it",
   "settings.wake.actionExecute": "Run it silently",
   "settings.wake.actionHint": "\"Show the phrase\" is safer: the detector does mishear words now and then, and a visible transcript makes that obvious.",
-  "chat.noActionPerformed": "⚠️ The assistant said the action was done but no tool was called - most likely nothing happened."
+  "chat.noActionPerformed": "⚠️ The assistant said the action was done but no tool was called - most likely nothing happened.",
+  "tts.loading": "Loading model... {s}s",
+  "tts.ready": "TTS ready",
+  "tts.off": "TTS off"
 }

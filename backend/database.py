@@ -13,6 +13,7 @@ Architecture decisions:
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -51,15 +52,26 @@ class Message:
     role: str  # 'user' or 'assistant'
     content: str
     created_at: datetime
-    
+    # Tool calls executed for this turn; empty for user messages and for
+    # assistant messages from before this column existed.
+    actions: list = None
+
     @classmethod
     def from_row(cls, row: tuple) -> "Message":
+        actions = None
+        if len(row) > 5 and row[5]:
+            try:
+                actions = json.loads(row[5])
+            except (ValueError, TypeError):
+                logger.warning(f"Message {row[0]}: unreadable actions column, ignored")
+                actions = None
         return cls(
             id=row[0],
             chat_id=row[1],
             role=row[2],
             content=row[3],
             created_at=datetime.fromisoformat(row[4]),
+            actions=actions,
         )
 
 
@@ -134,6 +146,17 @@ class ChatDatabase:
                 FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
             )
         """)
+
+        # Tool calls shown under an assistant message. Kept as JSON text so the
+        # collapsible "what did it actually run" block survives switching chats -
+        # without it, reloading a chat rendered bare text and every executed
+        # tool call was lost from the UI.
+        columns = {
+            row[1]
+            for row in await (await self._db.execute("PRAGMA table_info(messages)")).fetchall()
+        }
+        if "actions" not in columns:
+            await self._db.execute("ALTER TABLE messages ADD COLUMN actions TEXT")
         
         # Indexes to speed up lookups
         await self._db.execute("""
@@ -274,6 +297,7 @@ class ChatDatabase:
         chat_id: int,
         role: str,
         content: str,
+        actions: list | None = None,
     ) -> int:
         """
         Add a message to the chat.
@@ -282,18 +306,21 @@ class ChatDatabase:
             chat_id: Chat ID.
             role: Role ('user' or 'assistant').
             content: Message text.
+            actions: Tool calls executed while producing it, for assistant turns.
 
         Returns:
             int: Message ID.
         """
         if not self._db:
             raise RuntimeError("База данных не инициализирована")
-        
+
         now = datetime.now().isoformat()
-        
+        payload = json.dumps(actions, ensure_ascii=False) if actions else None
+
         cursor = await self._db.execute(
-            "INSERT INTO messages (chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-            (chat_id, role, content, now),
+            "INSERT INTO messages (chat_id, role, content, created_at, actions) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (chat_id, role, content, now, payload),
         )
         await self._db.commit()
         

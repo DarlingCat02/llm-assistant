@@ -685,6 +685,9 @@ async def get_chat_messages(chat_id: int):
             "role": m.role,
             "content": m.content,
             "created_at": m.created_at,
+            # Replaying a chat has to bring back the tool-call blocks too, or
+            # switching away and back erases what the assistant actually ran.
+            "actions": m.actions or [],
         }
         for m in messages
     ]
@@ -946,8 +949,8 @@ async def chat(request: ChatMessage):
         logger.error(f"Error generating response: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Save assistant response
-    await _db.add_message(chat_id, "assistant", response_text)
+    # Save assistant response, keeping the tool calls so reloading the chat shows them
+    await _db.add_message(chat_id, "assistant", response_text, actions=actions)
 
     # Send event via WebSocket
     logger.info(f"Sending WebSocket event: chat_id={chat_id}, content={response_text[:50]}...")
@@ -1178,6 +1181,14 @@ async def update_config(request: dict):
     return {"status": "ok", "message": t("api.config_saved", lang=lang)}
 
 
+_tts_load_task: "asyncio.Task | None" = None
+
+
+def tts_is_loading() -> bool:
+    """Is OmniVoice being loaded right now?"""
+    return _tts_load_task is not None and not _tts_load_task.done()
+
+
 @app.post("/api/tts/toggle")
 async def toggle_tts(request: Request):
     """
@@ -1214,12 +1225,25 @@ async def toggle_tts(request: Request):
     def _run_off_loop(coro_factory):
         return asyncio.run(coro_factory())
 
+    global _tts_load_task
     try:
         if enabled:
-            success = await asyncio.to_thread(
-                _run_off_loop, _assistant._tts.enable_omnivoice
+            task = asyncio.create_task(
+                asyncio.to_thread(_run_off_loop, _assistant._tts.enable_omnivoice)
             )
+            _tts_load_task = task
+            success = await asyncio.shield(task)
         else:
+            # Turning TTS off has to be possible while the model is still
+            # loading. Racing it would leave OmniVoice installed after the user
+            # asked for it off, so wait for the load to finish, then unload.
+            pending = _tts_load_task
+            if pending is not None and not pending.done():
+                logger.info("TTS: waiting for the in-flight load before disabling")
+                try:
+                    await asyncio.shield(pending)
+                except Exception:
+                    pass  # the load failed; disabling still has to run
             success = await asyncio.to_thread(
                 _run_off_loop, _assistant._tts.disable_omnivoice
             )
@@ -1229,6 +1253,7 @@ async def toggle_tts(request: Request):
             "status": "error",
             "enabled": enabled,
             "omnivoice_loaded": False,
+            "loading": tts_is_loading(),
             "error": f"{type(e).__name__}: {e}",
         }
 
@@ -1262,11 +1287,15 @@ def _tts_engine_ready() -> bool:
 async def get_tts_status():
     """Get the TTS status."""
     if not _assistant or not _assistant._tts:
-        return {"enabled": False, "omnivoice_loaded": False}
-    
+        return {"enabled": False, "omnivoice_loaded": False, "loading": False}
+
     return {
         "enabled": True,
         "omnivoice_loaded": _assistant._tts.is_omnivoice_loaded,
+        # Explicit, so the UI can say "loading, 12s" instead of greying the
+        # switch and letting the user guess whether it is stuck.
+        "loading": tts_is_loading(),
+        "error": _assistant._tts.last_error or None,
     }
 
 
