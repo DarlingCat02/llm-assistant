@@ -319,6 +319,46 @@ def test_default_threshold_still_rejects_ordinary_speech():
         assert not phrase_detected(text, "ассистент", threshold), text
 
 
+def test_resolve_torch_device_prefers_cuda_and_falls_back():
+    """
+    A large-v3-turbo wake detector takes ~110 ms on CUDA and ~4.2 s on CPU, so
+    picking the wrong one is the difference between usable and useless.
+    """
+    from src.wake_word import resolve_torch_device
+
+    # An explicit request is honoured verbatim.
+    assert resolve_torch_device("cpu") == "cpu"
+
+    chosen = resolve_torch_device()
+    assert chosen in ("cpu", "cuda") or chosen.startswith("cuda:")
+
+    try:
+        import torch
+    except Exception:
+        return
+    if not torch.cuda.is_available():
+        assert chosen == "cpu", "must not claim cuda when torch cannot use it"
+
+
+def test_resolve_torch_device_survives_broken_cuda(monkeypatch):
+    """A machine can report a GPU and still fail to allocate on it."""
+    import torch
+    from src.wake_word import resolve_torch_device
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch, "zeros", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no alloc"))
+    )
+    assert resolve_torch_device() == "cpu"
+
+
+def test_wake_model_default_is_the_one_that_hears_russian():
+    """Measured on a real recording: tiny 0.53, base 0.82, large-v3-turbo 1.00."""
+    from config import WakeWordConfig
+
+    assert WakeWordConfig().model == "large-v3-turbo"
+
+
 def test_level_meter_starts_silent():
     from src.wake_word import WakeWordDetector
 
@@ -479,7 +519,8 @@ def test_wake_is_off_by_default():
     fields = WakeWordConfig.model_fields
     assert fields["enabled"].default is False
     assert fields["phrase"].default == ""
-    assert fields["model"].default == "tiny"
+    # Measured on a real recording: tiny 0.53, base 0.82, large-v3-turbo 1.00
+    assert fields["model"].default == "large-v3-turbo"
 
 
 def test_bad_wake_values_are_rejected():

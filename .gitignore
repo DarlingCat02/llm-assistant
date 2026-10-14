@@ -37,6 +37,10 @@ screenshots/
 debug_tts/
 ffmpeg/
 
+# Voice samples recorded for wake-word calibration (myVoice/) - these are the
+# user's own recordings, not project assets.
+myVoice/
+
 # Per-user configuration (real files are ignored, templates are committed)
 apps.json
 personas.json

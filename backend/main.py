@@ -350,11 +350,22 @@ _wake_detector = None
 _wake_error: str | None = None
 
 
-def _wake_model_path() -> str:
-    """Where the small Whisper used for wake detection lives."""
+def _wake_model_path(model: str = "large-v3-turbo") -> str:
+    """
+    Where the Whisper used for wake detection lives.
+
+    Falls back to a smaller model when the configured one was never downloaded,
+    so enabling the wake word on a fresh clone cannot fail just because the
+    1.5 GB model is absent.
+    """
     from src.stt_engine import resolve_model_dir
 
-    return resolve_model_dir("whisper-tiny", "whisper-tiny")
+    candidates = [model] if model != "large-v3-turbo" else ["large-v3-turbo", "base", "tiny"]
+    for name in candidates:
+        path = resolve_model_dir(f"whisper-{name}", f"whisper-{name}")
+        if Path(path).is_dir():
+            return path
+    return resolve_model_dir(f"whisper-{model}", f"whisper-{model}")
 
 
 @app.get("/api/audio-inputs")
@@ -432,7 +443,7 @@ def _wake_start() -> tuple[bool, str | None]:
         logger.warning("Wake word is enabled but no phrase is set - staying off")
         return False, _wake_error
 
-    path = _wake_model_path()
+    path = _wake_model_path(cfg.model)
     if not Path(path).is_dir():
         _wake_error = f"Модель не найдена: {path}"
         logger.warning(
@@ -504,7 +515,9 @@ async def get_wake_word():
     return {
         "enabled": bool(cfg.enabled) if cfg else False,
         "phrase": cfg.phrase if cfg else "",
-        "model": cfg.model if cfg else "tiny",
+        "model": cfg.model if cfg else "large-v3-turbo",
+        "active_model": (detector.model_path if detector else None),
+        "model_device": (detector.model_device if detector else None),
         "input_device": cfg.input_device if cfg else "",
         "cooldown": cfg.cooldown if cfg else 5.0,
         "match_threshold": cfg.match_threshold if cfg else 0.70,
@@ -551,8 +564,11 @@ async def update_wake_word(request: dict):
         raise HTTPException(status_code=400, detail="Слишком длинное имя устройства")
     if phrase is not None and len(phrase) > 64:
         raise HTTPException(status_code=400, detail="Фраза длиннее 64 символов")
-    if model is not None and model not in ("tiny", "base"):
-        raise HTTPException(status_code=400, detail="Модель: только tiny или base")
+    if model is not None and model not in ("tiny", "base", "large-v3-turbo"):
+        raise HTTPException(
+                status_code=400,
+                detail="Модель: tiny, base или large-v3-turbo",
+            )
     if cooldown is not None and not (0 <= float(cooldown) <= 300):
         raise HTTPException(status_code=400, detail="Кулдаун: от 0 до 300 секунд")
     if threshold is not None and not (0.1 <= float(threshold) <= 1.0):

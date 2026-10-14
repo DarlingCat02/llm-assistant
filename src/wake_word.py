@@ -101,6 +101,38 @@ def resolve_input_device(spec: str | None) -> tuple[int | str | None, str | None
     return spec, None, f"Устройство «{spec}» не найдено — используется системное по умолчанию"
 
 
+def resolve_torch_device(preferred: str | None = None) -> str:
+    """
+    Where the detector should run.
+
+    CUDA when it is actually usable, CPU otherwise. The check has to include
+    is_available(), not just torch.cuda.is_available(): a machine can report a
+    device and still fail to allocate on it, and a wake listener that dies on
+    startup is worse than a slow one.
+
+    Args:
+        preferred: force a device; "auto" (or anything truthy that torch
+            understands) still falls back to CPU if CUDA is unusable.
+
+    Returns:
+        str: "cuda", "cuda:N" or "cpu".
+    """
+    if preferred and not str(preferred).startswith("auto"):
+        return preferred
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            try:
+                torch.zeros(1, device="cuda")
+                return "cuda"
+            except Exception as e:  # driver present but unusable
+                logger.warning(f"Wake word: CUDA unavailable ({e}), using CPU")
+    except Exception:
+        pass
+    return "cpu"
+
+
 def update_level_meter(detector: "WakeWordDetector", block: np.ndarray) -> float:
     """
     Feed one captured block into the detector's input-level meter.
@@ -378,6 +410,9 @@ class WakeWordDetector:
         # to CPU.
         self.input_device: int | str | None = None
         self.torch_device = torch_device
+        # Resolved in _load_models(); exposed so the API can report where the
+        # detector actually runs.
+        self.model_device: str | None = None
         self.device_name: str | None = None
         self.device_problem: str | None = None
 
@@ -456,16 +491,26 @@ class WakeWordDetector:
                 self._processor = WhisperProcessor.from_pretrained(
                     self.model_path, local_files_only=True
                 )
+                # Pick the device up front: a large-v3-turbo wake detector runs
+                # in ~110 ms on CUDA but ~4.2 s on CPU, and the second one
+                # blocks the capture thread long enough to lose audio.
+                device = self.torch_device or resolve_torch_device()
+                # fp16 on GPU halves memory and speeds up the matmuls; on CPU
+                # it is slower, so float32 stays there.
+                dtype = torch.float16 if str(device).startswith("cuda") else torch.float32
                 model = WhisperForConditionalGeneration.from_pretrained(
                     self.model_path,
                     local_files_only=True,
-                    torch_dtype=torch.float32,
+                    torch_dtype=dtype,
                 )
-                if self.torch_device:
-                    model.to(self.torch_device)
+                model.to(device)
                 model.eval()
                 self._model = model
                 self._torch = torch
+                self.model_device = str(device)
+                logger.info(
+                    f"Wake word model: {self.model_path} on {device} ({dtype})"
+                )
             return True
         except Exception as e:
             self.error = f"{type(e).__name__}: {e}"
@@ -541,10 +586,14 @@ class WakeWordDetector:
             inputs = self._processor(
                 audio, sampling_rate=SAMPLE_RATE, return_tensors="pt"
             )
+            # The model may live on the GPU, and in fp16 there; feeding it the
+            # CPU float32 tensor from the processor raises instead of matching.
+            device = getattr(self._model, "device", None) or "cpu"
+            feats = inputs.input_features.to(device=device, dtype=self._model.dtype)
             with torch.no_grad():
                 ids = self._model.generate(
-                    inputs.input_features,
-                    max_new_tokens=16,
+                    feats,
+                    max_new_tokens=24,
                     num_beams=1,
                     do_sample=False,
                     language=self.language,

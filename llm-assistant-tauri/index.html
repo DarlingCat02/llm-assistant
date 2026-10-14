@@ -255,10 +255,11 @@
                 <div class="settings-section" id="wake-advanced">
                     <label for="wake-model-select" data-i18n="settings.wake.model">Модель распознавания</label>
                     <select id="wake-model-select" class="settings-select">
-                        <option value="tiny">tiny (~0.5 GB, быстрее)</option>
-                        <option value="base">base (~0.8 GB, точнее)</option>
+                        <option value="large-v3-turbo">large-v3-turbo — точнее всего, нужна видеокарта</option>
+                        <option value="base">base — компромисс</option>
+                        <option value="tiny">tiny — самая лёгкая, хуже слышит</option>
                     </select>
-                    <div class="slider-hint" data-i18n="settings.wake.modelHint">Используется отдельная маленькая модель, обычный Whisper для распознавания команд не затрагивается.</div>
+                    <div class="slider-hint" data-i18n="settings.wake.modelHint">Модель только слушает фон. На видеокарте большая модель работает быстрее, чем кажется, и слышит русский заметно лучше.</div>
                 </div>
                 <div class="settings-section" id="wake-status-section" style="display:none;">
                     <div class="slider-hint" id="wake-status-text"></div>

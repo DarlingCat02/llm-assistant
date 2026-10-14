@@ -1444,10 +1444,14 @@ function renderWakeStatus() {
         text.textContent = t('settings.wake.error', { msg: wakeState.error });
         text.style.color = 'var(--danger, #e06c75)';
     } else if (wakeState.listening) {
-        const mic = wakeState.active_device
-            ? t('settings.wake.listeningOn', { phrase: wakeState.phrase, device: wakeState.active_device })
-            : t('settings.wake.listening', { phrase: wakeState.phrase });
-        text.textContent = mic;
+        const parts = [t('settings.wake.listening', { phrase: wakeState.phrase })];
+        if (wakeState.active_device) parts.push(wakeState.active_device);
+        // Showing where the detector actually runs matters: large-v3-turbo is
+        // fine on a GPU and unusable on CPU, and the difference is invisible
+        // until the wake word starts missing.
+        if (wakeState.model_device) parts.push(wakeState.model_device);
+        if (wakeState.active_model) parts.push(String(wakeState.active_model).split(/[\\/]/).pop());
+        text.textContent = parts.join(' · ');
         text.style.color = '';
     } else {
         text.textContent = t('settings.wake.starting');
