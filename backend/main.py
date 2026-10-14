@@ -1110,7 +1110,7 @@ async def update_config(request: dict):
 async def toggle_tts(request: Request):
     """
     Toggle TTS (OmniVoice) on/off.
-    
+
     Accepts raw JSON bool (true/false) or object {"enabled": true}.
     When enabled=True - loads OmniVoice into memory.
     When enabled=False - unloads OmniVoice from memory.
@@ -1121,7 +1121,7 @@ async def toggle_tts(request: Request):
         except Exception:
             lang = "en"
         raise HTTPException(status_code=503, detail=assistant_not_init_detail(lang))
-    
+
     try:
         body = await request.json()
     except:
@@ -1132,12 +1132,34 @@ async def toggle_tts(request: Request):
         enabled = bool(body.get("enabled", body.get("value", False)))
     else:
         enabled = bool(body)
-    
-    if enabled:
-        success = await _assistant._tts.enable_omnivoice()
-    else:
-        success = await _assistant._tts.disable_omnivoice()
-    
+
+    # The engine's coroutines are declared async but do only blocking work
+    # (from_pretrained on several GB, ensure_ffmpeg, CUDA init). Nothing ever
+    # yields to the event loop, so awaiting them inline freezes the whole
+    # backend for the duration: measured 2 s with a warm disk cache, tens of
+    # seconds cold. During that window the UI cannot poll status and the
+    # wake-word stop looks like it turned itself off.
+    def _run_off_loop(coro_factory):
+        return asyncio.run(coro_factory())
+
+    try:
+        if enabled:
+            success = await asyncio.to_thread(
+                _run_off_loop, _assistant._tts.enable_omnivoice
+            )
+        else:
+            success = await asyncio.to_thread(
+                _run_off_loop, _assistant._tts.disable_omnivoice
+            )
+    except Exception as e:
+        logger.error(f"TTS toggle failed: {type(e).__name__}: {e}")
+        return {
+            "status": "error",
+            "enabled": enabled,
+            "omnivoice_loaded": False,
+            "error": f"{type(e).__name__}: {e}",
+        }
+
     loaded = _assistant._tts.is_omnivoice_loaded if enabled else False
     return {
         "status": "ok",

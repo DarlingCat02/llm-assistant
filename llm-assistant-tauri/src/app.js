@@ -13,6 +13,33 @@ import { initPersonas, renderPersonaSettings, loadPersonas, renderPersonaSelecto
          isPersonaEditorOpen, savePersonaEditor, closePersonaEditor } from './personas.js';
 
 const API_BASE = 'http://127.0.0.1:8000';
+
+/**
+ * fetch() with a deadline.
+ *
+ * A plain fetch can hang forever when the backend stops answering, and the
+ * UI code that awaits it then never runs its cleanup - which is how a single
+ * stuck request once left a switch permanently disabled.
+ *
+ * @param {string} url
+ * @param {object} [options] Standard fetch options.
+ * @param {number} [ms=30000] Deadline.
+ * @returns {Promise<Response>}
+ */
+async function fetchWithTimeout(url, options = {}, ms = 30000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            throw new Error(`timeout after ${Math.round(ms / 1000)}s`);
+        }
+        throw e;
+    } finally {
+        clearTimeout(timer);
+    }
+}
 let currentChatId = null;
 let ws = null;
 let initialSettings = null;
@@ -163,11 +190,11 @@ function initEventListeners() {
         // Block double-clicks: model (un)loading takes tens of seconds
         e.target.disabled = true;
         try {
-            const response = await fetch(`${API_BASE}/api/tts/toggle`, {
+            const response = await fetchWithTimeout(`${API_BASE}/api/tts/toggle`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(enabled),
-            });
+            }, 180000);
             const data = await response.json();
             console.log('TTS статус:', data);
 
@@ -179,13 +206,20 @@ function initEventListeners() {
                 return;
             }
 
-            // Load voices for cloning
-            if (enabled) await loadTTSVoices();
+            // Load voices for cloning, but never let it hold the switch hostage:
+            // it is cosmetic and a failure here must not strand a disabled control.
+            if (enabled) {
+                try { await loadTTSVoices(); } catch (e) { console.warn('TTS voices:', e); }
+            }
 
         } catch (err) {
             console.error('Ошибка переключения TTS:', err);
             e.target.checked = !enabled;
+            alert(t('alert.ttsLoadFailed') + (err && err.message ? ': ' + err.message : ''));
         } finally {
+            // Belt and braces: a watchdog releases the switch even if something
+            // above never settles, so the control can never be left unusable.
+            clearTimeout(e.target._ttsUnlock);
             e.target.disabled = false;
         }
     });
