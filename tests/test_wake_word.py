@@ -73,6 +73,281 @@ def test_callback_failure_does_not_kill_the_loop():
     d._maybe_trigger("ассистент", 101.0)   # still keeps working
 
 
+def test_empty_device_spec_means_system_default():
+    from src.wake_word import resolve_input_device
+
+    for spec in ("", "   ", None, "default", "DEFAULT"):
+        device, name, problem = resolve_input_device(spec)
+        assert device is None, spec
+        assert name is None
+        assert problem is None
+
+
+def test_device_resolved_by_name_not_index():
+    """Indices move when devices are replugged, so we match on the name."""
+    from src.wake_word import resolve_input_device
+
+    device, name, problem = resolve_input_device("SteelSeries Sonar - Microphone")
+    assert problem is None
+    assert name and name.strip() == "SteelSeries Sonar - Microphone"
+    assert isinstance(device, int)
+
+
+def test_device_partial_name_matches():
+    from src.wake_word import resolve_input_device
+
+    device, name, problem = resolve_input_device("SteelSeries")
+    assert problem is None
+    assert name and "SteelSeries" in name
+    assert isinstance(device, int)
+
+
+def test_unknown_device_reports_and_falls_back():
+    from src.wake_word import resolve_input_device
+
+    device, name, problem = resolve_input_device("Нет Такого Устройства")
+    assert problem is not None
+    assert "не найдено" in problem.lower()
+    # Falls back to the system default rather than opening a bogus device
+    assert device == "Нет Такого Устройства" or device is None
+
+
+def test_detector_stores_device_spec():
+    from src.wake_word import WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="unused", on_detect=lambda t: None,
+        input_device="SteelSeries Sonar - Microphone",
+    )
+    assert d.device_spec == "SteelSeries Sonar - Microphone"
+    assert d.input_device is None   # resolved only when the listener starts
+
+
+def test_audio_device_does_not_collide_with_torch_device():
+    """
+    Regression: both used to be called `device`, so resolving the microphone
+    silently pinned the Whisper model to CPU.
+    """
+    from src.wake_word import WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="unused", on_detect=lambda t: None,
+        input_device="SteelSeries", torch_device="cuda",
+    )
+    assert d.torch_device == "cuda"
+    d.input_device = 7
+    assert d.torch_device == "cuda", "audio device overwrote torch device"
+
+
+def test_vad_window_starts_prefilled_with_silence():
+    """
+    Regression, and the reason the wake word never fired.
+
+    `_is_speaking()` returns False while the VAD window is not full, so an
+    empty history meant the first VAD_WINDOW_SECONDS of every utterance were
+    dropped before anything was buffered. Since the wake phrase is spoken
+    first, that is exactly the audio we needed.
+    """
+    import numpy as np
+    from src.wake_word import BLOCK_SIZE, VAD_WINDOW_SECONDS, SAMPLE_RATE, WakeWordStream
+
+    class FakeDetector:
+        stt_interval = 0.6
+
+        def _transcribe(self, audio):
+            return ""
+
+        def _stt_audio(self, blocks):
+            return np.concatenate(blocks) if blocks else np.zeros(0, dtype=np.float32)
+
+        def _maybe_trigger(self, text, now):
+            pass
+
+    s = WakeWordStream(FakeDetector(), vad=None)
+    expected = int(VAD_WINDOW_SECONDS * SAMPLE_RATE / BLOCK_SIZE)
+    assert len(s.vad_history) == expected, "VAD window must start full of silence"
+    assert all(b.size == BLOCK_SIZE for b in s.vad_history)
+    assert not s.vad_history[0].any(), "the prefill must be silence"
+
+
+def test_stream_buffers_from_the_first_block():
+    """With a prefilled window, speech must be buffered from t=0, not t=1.5s."""
+    import numpy as np
+    from src.wake_word import (
+        BLOCK_SIZE,
+        MIN_SPEECH_BEFORE_STT,
+        SAMPLE_RATE,
+        WakeWordStream,
+    )
+
+    class FakeDetector:
+        stt_interval = 0.6
+        last_transcript = ""
+        _last_trigger = 0.0
+
+        def _transcribe(self, audio):
+            return "тишина"
+
+        def _stt_audio(self, blocks):
+            return np.concatenate(blocks)
+
+        def _maybe_trigger(self, text, now):
+            pass
+
+    s = WakeWordStream(FakeDetector(), vad=None)
+    # Pretend every block is speech - the only thing under test is that the
+    # buffer starts filling immediately.
+    s._is_speaking = lambda g: True
+
+    loud = np.full(BLOCK_SIZE, 0.3, dtype=np.float32)
+    s.push(loud)
+    # The very first block must already be buffered, not the 46th.
+    assert len(s.speech) == 1, "speech buffer must start growing at once"
+    assert s.runs == 0, "Whisper must not run on a single block"
+
+    blocks_needed = int(MIN_SPEECH_BEFORE_STT * SAMPLE_RATE / BLOCK_SIZE)
+    for _ in range(blocks_needed):
+        s.push(loud)
+
+    assert len(s.speech) * BLOCK_SIZE >= MIN_SPEECH_BEFORE_STT * SAMPLE_RATE
+    assert s.runs == 1, "Whisper should run once enough audio accumulated"
+
+
+def test_stt_audio_has_leading_silence():
+    import numpy as np
+    from src.wake_word import LEAD_SILENCE_SECONDS, SAMPLE_RATE, WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="unused", on_detect=lambda t: None,
+    )
+    block = np.ones(512, dtype=np.float32) * 0.2
+    out = d._stt_audio([block, block])
+
+    pad = int(LEAD_SILENCE_SECONDS * SAMPLE_RATE)
+    assert out.size == pad + 1024
+    assert not out[:pad].any(), "leading context must be silence"
+    assert out[pad:].any(), "the real audio must follow the silence"
+
+
+def test_finish_is_idempotent_and_clears_state():
+    import numpy as np
+    from src.wake_word import BLOCK_SIZE, WakeWordStream
+
+    calls = []
+
+    class FakeDetector:
+        stt_interval = 0.6
+
+        def _transcribe(self, audio):
+            calls.append(len(audio))
+            return "раз два"
+
+        def _stt_audio(self, blocks):
+            return np.concatenate(blocks)
+
+        def _maybe_trigger(self, text, now):
+            pass
+
+    s = WakeWordStream(FakeDetector(), vad=None)
+    s._is_speaking = lambda g: True
+    for _ in range(200):
+        s.push(np.full(BLOCK_SIZE, 0.3, dtype=np.float32))
+    assert s.speech
+
+    assert s.finish(s.elapsed) == "раз два"
+    assert s.speech == []
+    # A second finish must not run Whisper on an empty buffer.
+    before = len(calls)
+    assert s.finish(s.elapsed) == ""
+    assert len(calls) == before
+
+
+def test_window_drops_tail_not_head():
+    """The wake phrase is spoken first, so the head must be preserved."""
+    import numpy as np
+    from src.wake_word import BLOCK_SIZE, SAMPLE_RATE, STT_WINDOW_SECONDS, WakeWordStream
+
+    class FakeDetector:
+        stt_interval = 999.0   # never auto-run STT
+
+        def _transcribe(self, audio):
+            return ""
+
+        def _stt_audio(self, blocks):
+            return np.concatenate(blocks)
+
+        def _maybe_trigger(self, text, now):
+            pass
+
+    s = WakeWordStream(FakeDetector(), vad=None)
+    s._is_speaking = lambda g: True
+
+    first = np.full(BLOCK_SIZE, 0.9, dtype=np.float32)
+    s.push(first)
+    for _ in range(int(STT_WINDOW_SECONDS * SAMPLE_RATE / BLOCK_SIZE) + 50):
+        s.push(np.full(BLOCK_SIZE, 0.1, dtype=np.float32))
+
+    assert len(s.speech) == s.stt_limit, "window must stay capped"
+    assert s.speech[0] is first, "the first block must survive trimming"
+
+
+def test_level_meter_starts_silent():
+    from src.wake_word import WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="unused", on_detect=lambda t: None,
+    )
+    assert d.input_level == 0.0
+    assert d.peak_level == 0.0
+    assert d.opened is False
+    assert d.blocks_read == 0
+
+
+def test_level_meter_tracks_loudness():
+    """The meter must react to audio, otherwise it proves nothing."""
+    import numpy as np
+    from src.wake_word import update_level_meter, WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="unused", on_detect=lambda t: None,
+    )
+
+    quiet = np.full(512, 0.001, dtype=np.float32)
+    for _ in range(20):
+        update_level_meter(d, quiet)
+    assert d.input_level < 0.01
+    assert d.blocks_read == 20
+
+    loud = np.full(512, 0.3, dtype=np.float32)
+    update_level_meter(d, loud)
+    # Instant attack so the bar reacts on the very first loud block.
+    assert d.input_level > 0.2
+    assert d.peak_level > 0.2
+
+
+def test_level_meter_decays_in_silence():
+    import numpy as np
+    from src.wake_word import update_level_meter, WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="unused", on_detect=lambda t: None,
+    )
+    loud = np.full(512, 0.5, dtype=np.float32)
+    update_level_meter(d, loud)
+    silence = np.zeros(512, dtype=np.float32)
+    for _ in range(50):
+        update_level_meter(d, silence)
+    assert d.input_level < 0.01, "bar must fall back down, not stick at the peak"
+
+
+def test_wake_input_device_config():
+    from config import WakeWordConfig
+
+    assert WakeWordConfig.model_fields["input_device"].default == ""
+    cfg = WakeWordConfig(input_device="Some Mic")
+    assert cfg.input_device == "Some Mic"
+
+
 def test_normalize_strips_case_and_punctuation():
     assert normalize_phrase("Ассистент, помоги!") == "ассистент помоги"
     assert normalize_phrase("  Эй,   АССИСТЕНТ  ") == "эй ассистент"

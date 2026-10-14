@@ -357,6 +357,56 @@ def _wake_model_path() -> str:
     return resolve_model_dir("whisper-tiny", "whisper-tiny")
 
 
+@app.get("/api/audio-inputs")
+async def list_audio_inputs():
+    """
+    Microphones the wake-word listener can open.
+
+    Returns the system default first, then everything else that can record.
+    """
+    try:
+        import sounddevice as sd
+    except Exception as e:
+        return {"devices": [], "error": f"{type(e).__name__}: {e}"}
+
+    try:
+        default_index = sd.default.device[0]
+    except Exception:
+        default_index = None
+
+    devices = []
+    try:
+        for idx, dev in enumerate(sd.query_devices()):
+            if dev.get("max_input_channels", 0) < 1:
+                continue
+            devices.append({
+                "index": idx,
+                "name": dev.get("name", f"device {idx}"),
+                "channels": int(dev.get("max_input_channels", 0)),
+                "samplerate": float(dev.get("default_samplerate", 16000.0)),
+                "default": idx == default_index,
+            })
+    except Exception as e:
+        return {"devices": [], "error": f"{type(e).__name__}: {e}"}
+
+    # Windows exposes one physical microphone several times (per sample rate,
+    # per API). Listing all of them made the dropdown unusable, so keep the
+    # first entry per name and note how many were folded away.
+    unique: dict[str, dict] = {}
+    for dev in devices:
+        key = dev["name"].strip().lower()
+        if key not in unique:
+            dev["aliases"] = 0
+            unique[key] = dev
+        else:
+            unique[key]["aliases"] += 1
+
+    result = list(unique.values())
+    # Default first so the common case needs no scrolling
+    result.sort(key=lambda d: (not d["default"], d["name"].lower()))
+    return {"devices": result, "error": None}
+
+
 def _wake_start() -> tuple[bool, str | None]:
     """
     Start (or restart) always-listening wake-word detection.
@@ -416,6 +466,7 @@ def _wake_start() -> tuple[bool, str | None]:
         on_detect=on_detect,
         cooldown=cfg.cooldown,
         threshold=cfg.match_threshold,
+        input_device=cfg.input_device,
     )
     if not detector.start():
         err = detector.error or "неизвестная ошибка"
@@ -454,10 +505,19 @@ async def get_wake_word():
         "enabled": bool(cfg.enabled) if cfg else False,
         "phrase": cfg.phrase if cfg else "",
         "model": cfg.model if cfg else "tiny",
+        "input_device": cfg.input_device if cfg else "",
         "cooldown": cfg.cooldown if cfg else 5.0,
         "match_threshold": cfg.match_threshold if cfg else 0.82,
         "listening": bool(detector and detector.is_running),
         "error": (detector.error if detector else None) or _wake_error,
+        "active_device": (detector.device_name if detector else None),
+        "device_problem": (detector.device_problem if detector else None),
+        # Level meter: proves whether the microphone hears anything at all,
+        # which is otherwise impossible to tell from the outside.
+        "input_level": round(detector.input_level, 5) if detector else 0.0,
+        "peak_level": round(detector.peak_level, 5) if detector else 0.0,
+        "mic_open": bool(detector and detector.opened),
+        "blocks_read": detector.blocks_read if detector else 0,
         "last_transcript": detector.last_transcript if detector else "",
         "phrase_score": (
             phrase_score(detector.last_transcript, cfg.phrase)
@@ -474,14 +534,18 @@ async def update_wake_word(request: dict):
     enabled = request.get("enabled")
     phrase = request.get("phrase")
     model = request.get("model")
+    device = request.get("input_device")
     cooldown = request.get("cooldown")
     threshold = request.get("match_threshold")
 
     for name, value, kind in (
         ("phrase", phrase, str), ("model", model, str),
+        ("input_device", device, str),
     ):
         if value is not None and not isinstance(value, kind):
             raise HTTPException(status_code=400, detail=f"{name} должен быть строкой")
+    if device is not None and len(device) > 200:
+        raise HTTPException(status_code=400, detail="Слишком длинное имя устройства")
     if phrase is not None and len(phrase) > 64:
         raise HTTPException(status_code=400, detail="Фраза длиннее 64 символов")
     if model is not None and model not in ("tiny", "base"):
@@ -498,7 +562,7 @@ async def update_wake_word(request: dict):
 
     save_config(
         wake_enabled=enabled, wake_phrase=phrase, wake_model=model,
-        wake_cooldown=cooldown, wake_threshold=threshold,
+        wake_input_device=device, wake_cooldown=cooldown, wake_threshold=threshold,
     )
     # The file is not enough: get_config() is cached, and OS env vars take
     # priority over the file - save_config mirrors both, so just re-read.

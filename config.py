@@ -311,6 +311,10 @@ class WakeWordConfig(BaseConfig):
     enabled: bool = Field(default=False, description="Включить постоянное прослушивание")
     phrase: str = Field(default="", description="Пробуждающая фраза, например «ассистент»")
     model: str = Field(default="tiny", description="Whisper для детекции: tiny / base")
+    input_device: str = Field(
+        default="",
+        description="Микрофон для прослушивания: пусто = системный по умолчанию",
+    )
     cooldown: float = Field(default=5.0, description="Пауза после срабатывания, сек")
     match_threshold: float = Field(
         default=0.82, description="Порог совпадения фразы (0-1)"
@@ -504,6 +508,7 @@ def save_config(
     wake_enabled: bool | None = None,
     wake_phrase: str | None = None,
     wake_model: str | None = None,
+    wake_input_device: str | None = None,
     wake_cooldown: float | None = None,
     wake_threshold: float | None = None,
 ) -> None:
@@ -604,6 +609,9 @@ def save_config(
         env_vars["WAKE_PHRASE"] = wake_phrase.strip()
     if wake_model is not None and wake_model != "":
         env_vars["WAKE_MODEL"] = wake_model.strip()
+    if wake_input_device is not None:
+        # Empty is meaningful: it means "follow the system default".
+        env_vars["WAKE_INPUT_DEVICE"] = wake_input_device.strip()
     if wake_cooldown is not None:
         env_vars["WAKE_COOLDOWN"] = str(wake_cooldown)
     if wake_threshold is not None:
