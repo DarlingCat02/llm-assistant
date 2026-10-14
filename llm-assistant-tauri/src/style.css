@@ -1307,6 +1307,19 @@ body {
     margin-bottom: 6px;
 }
 
+/* Shows whether the log feed is still alive; greys out when it goes quiet. */
+.terminal-status {
+    font-size: 10px;
+    opacity: 0.55;
+    margin-left: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.terminal-status.stale {
+    color: var(--danger, #e06c75);
+    opacity: 0.9;
+}
+
 /* Live input-level meter for the wake-word microphone. */
 .level-meter {
     height: 8px;

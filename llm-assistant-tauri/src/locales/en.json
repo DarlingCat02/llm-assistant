@@ -185,5 +185,6 @@
   "settings.wake.levelOk": "The microphone hears sound. If the phrase still fails, try the base model.",
   "settings.wake.levelOff": "Listening is off.",
   "settings.wake.levelOpening": "Opening the microphone...",
-  "settings.wake.deviceMissing": "{name} - device not found"
+  "settings.wake.deviceMissing": "{name} - device not found",
+  "terminal.status": "lines: {count} · updated {time}"
 }

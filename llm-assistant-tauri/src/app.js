@@ -321,13 +321,38 @@ function handleWebSocketMessage(data) {
     }
 }
 
-// The backend heard the wake phrase: start the normal push-to-talk pipeline.
+// The backend heard the wake phrase and sent the whole utterance with it.
 function onWakeWordDetected(transcript) {
     console.log('Wake word:', transcript);
     if (isRecording || isProcessingVoice) return;   // already busy
     const input = document.getElementById('message-input');
     if (input && input.value.trim()) return;        // user is typing, don't interrupt
+
+    const text = (transcript || '').trim();
+    // Whisper already transcribed everything said after the phrase, so the
+    // command usually arrived in the same breath. Only fall back to recording
+    // when the utterance really was just the wake word on its own.
+    if (hasCommandAfterPhrase(text) && input) {
+        input.value = text;
+        sendMessage();
+        return;
+    }
     startVoiceRecording();
+}
+
+function hasCommandAfterPhrase(transcript) {
+    const text = (transcript || '').toLowerCase()
+        .replace(/[^\w\sЀ-ӿ]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!text) return false;
+
+    const phrase = (wakeState.phrase || '').toLowerCase().trim();
+    const withoutPhrase = phrase ? text.split(phrase).join(' ') : text;
+    const words = withoutPhrase.split(' ').filter(Boolean);
+    // Two words or more is a command; one word is usually an ASR artifact
+    // from the wake phrase itself ("асистент" -> "а").
+    return words.length >= 2;
 }
 
 function updateConnectionStatus(connected) {
@@ -1014,6 +1039,7 @@ function appendTerminal(line) {
     if (!line.trim()) return;
 
     terminalLineCount += 1;
+    terminalLastUpdate = Date.now();
     pre.appendChild(document.createTextNode(line + '\n'));
 
     // Keep memory bounded: drop the oldest text nodes, never rebuild the buffer
@@ -1028,14 +1054,22 @@ let terminalLineCount = 0;
 let terminalCursor = 0;      // how many lines the backend has produced that we showed
 let terminalTotalSeen = 0;   // last known cumulative count from the backend
 let terminalPollPending = false;
+let terminalPollStartedAt = 0;
+const TERMINAL_POLL_TIMEOUT = 5000;
 
 // The Rust buffer is the single source of truth. The live event is only a
 // "something changed" ping that makes us fetch immediately - it never appends
 // text itself. That keeps events and polling from delivering the same line
 // twice, and means a lost event costs latency, not content.
 async function terminalPollOnce() {
-    if (terminalPollPending) return;
+    // A poll that never resolves used to wedge the flag forever, after which
+    // every later poll returned immediately and the terminal froze for good.
+    // Past the timeout, let a fresh poll through regardless.
+    if (terminalPollPending && Date.now() - terminalPollStartedAt < TERMINAL_POLL_TIMEOUT) {
+        return;
+    }
     terminalPollPending = true;
+    terminalPollStartedAt = Date.now();
     try {
         const { invoke } = await import('@tauri-apps/api/core');
         const data = await invoke('get_backend_logs');
@@ -1061,12 +1095,28 @@ async function terminalPollOnce() {
         }
         terminalTotalSeen = total;
         terminalCursor = total;
+        renderTerminalStatus();
     } catch (e) {
         console.warn('Ошибка опроса логов бэкенда:', e);
     } finally {
         terminalPollPending = false;
     }
 }
+
+// Makes "is the terminal actually alive?" answerable at a glance instead of
+// guessing from an empty panel.
+function renderTerminalStatus() {
+    const el = document.getElementById('terminal-status');
+    if (!el) return;
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    const stale = Date.now() - terminalLastUpdate > 15000;
+    el.textContent = t('terminal.status', { count: terminalTotalSeen, time: `${hh}:${mm}:${ss}` });
+    el.classList.toggle('stale', stale);
+}
+let terminalLastUpdate = Date.now();
 
 function startTerminalLogBridge() {
     if (!isTauri) return;

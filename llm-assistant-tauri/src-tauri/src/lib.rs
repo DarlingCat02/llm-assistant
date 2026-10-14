@@ -219,7 +219,20 @@ fn spawn_log_pump<R>(
         loop {
             buf.clear();
             match reader.read_until(b'\n', &mut buf) {
-                Ok(0) => break, // EOF
+                Ok(0) => {
+                    // EOF: the backend process is gone (crash, or another
+                    // instance already holds the port). Say so, otherwise the
+                    // terminal just stops mid-output with no explanation.
+                    let note = format!(
+                        "\n*** backend process exited - output above is final ***"
+                    );
+                    if let Ok(mut l) = logs.lock() {
+                        l.push(note.clone());
+                    }
+                    total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let _ = handle.emit("backend-log", note);
+                    break;
+                }
                 Ok(_) => read_errors = 0,
                 Err(_) => {
                     // Transient read error: back off instead of dying, otherwise
