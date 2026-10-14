@@ -1307,6 +1307,12 @@ body {
     margin-bottom: 6px;
 }
 
+/* Explains why the microphone list is empty or disabled. */
+.wake-device-error {
+    color: var(--danger, #e06c75);
+    opacity: 0.9;
+}
+
 /* Shows whether the log feed is still alive; greys out when it goes quiet. */
 .terminal-status {
     font-size: 10px;

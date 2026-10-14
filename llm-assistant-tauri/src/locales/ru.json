@@ -186,5 +186,7 @@
   "settings.wake.levelOff": "Прослушивание выключено.",
   "settings.wake.levelOpening": "Открывается микрофон...",
   "settings.wake.deviceMissing": "{name} — устройство не найдено",
-  "terminal.status": "строк: {count} · обновлено {time}"
+  "terminal.status": "строк: {count} · обновлено {time}",
+  "settings.wake.devicesFailed": "Не удалось получить список микрофонов: {msg}",
+  "settings.wake.devicesNone": "Микрофоны не найдены."
 }

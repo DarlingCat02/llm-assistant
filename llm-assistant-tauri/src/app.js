@@ -1330,9 +1330,23 @@ async function loadWakeDevices(selected) {
     if (!sel) return;
     try {
         const resp = await fetch(`${API_BASE}/api/audio-inputs`);
-        if (!resp.ok) return;
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         wakeDevices = Array.isArray(data.devices) ? data.devices : [];
+
+        // A backend without sounddevice answers 200 with an empty list. Showing
+        // just "system default" then looks like "no microphones exist" rather
+        // than "the audio backend is missing", so say which one it is.
+        if (data.error) {
+            showWakeDeviceError(sel, data.error);
+            return;
+        }
+        clearWakeDeviceError(sel);
+        if (!wakeDevices.length) {
+            showWakeDeviceError(sel, t('settings.wake.devicesNone'));
+            return;
+        }
+
         const want = selected !== undefined ? selected : sel.value;
         sel.innerHTML = '';
         const def = document.createElement('option');
@@ -1362,7 +1376,33 @@ async function loadWakeDevices(selected) {
         }
     } catch (e) {
         console.warn('Не удалось получить список микрофонов:', e);
+        showWakeDeviceError(sel, t('settings.wake.devicesFailed', { msg: String(e.message || e) }));
     }
+}
+
+function showWakeDeviceError(sel, message) {
+    if (!sel) return;
+    sel.disabled = true;
+    sel.innerHTML = '';
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = t('settings.wake.deviceDefault');
+    sel.appendChild(opt);
+    let hint = document.getElementById('wake-device-hint');
+    if (!hint) {
+        hint = document.createElement('div');
+        hint.id = 'wake-device-hint';
+        hint.className = 'slider-hint wake-device-error';
+        sel.parentElement.appendChild(hint);
+    }
+    hint.textContent = message;
+}
+
+function clearWakeDeviceError(sel) {
+    if (!sel) return;
+    sel.disabled = false;
+    const hint = document.getElementById('wake-device-hint');
+    if (hint) hint.remove();
 }
 
 function updateWakeFieldsVisibility() {

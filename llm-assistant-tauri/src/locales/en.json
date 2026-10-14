@@ -186,5 +186,7 @@
   "settings.wake.levelOff": "Listening is off.",
   "settings.wake.levelOpening": "Opening the microphone...",
   "settings.wake.deviceMissing": "{name} - device not found",
-  "terminal.status": "lines: {count} · updated {time}"
+  "terminal.status": "lines: {count} · updated {time}",
+  "settings.wake.devicesFailed": "Could not list microphones: {msg}",
+  "settings.wake.devicesNone": "No microphones found."
 }
