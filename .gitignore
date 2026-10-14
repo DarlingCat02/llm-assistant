@@ -2,6 +2,9 @@
 # Never commit: real settings may hold API keys.
 .env
 .env.local
+# Backup copies made while editing .env
+.env.*
+!.env.example
 
 # === Runtime folders ===
 # Pattern below keeps the FOLDER in the repo (so a fresh clone has the same
