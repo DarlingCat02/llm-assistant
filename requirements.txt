@@ -16,6 +16,13 @@ torch>=2.0.0; platform_system == "Darwin"
 # === NumPy ===
 numpy>=1.24.0
 
+# === Audio input (wake word) ===
+# sounddevice - microphone capture for the always-on wake-word listener
+sounddevice>=0.4.6
+# silero-vad - decides whether someone is talking, so Whisper only runs
+# while there is speech (this is what makes always-on listening affordable)
+silero-vad>=5.1.0
+
 # === Configuration ===
 pydantic-settings>=2.2.0
 pydantic>=2.5.0

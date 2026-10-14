@@ -390,6 +390,45 @@ SCREENSHOT_TRIGGERS=screen,screenshot,look at screen,show screen,whats on screen
 - PNG → JPEG conversion (3-4x token saving)
 - Result: ~1700 tokens instead of 5300+ (for 2K screen)
 
+## Wake word
+
+Say a phrase to wake the assistant without touching the keyboard. The phrase is
+whatever you type in **Settings → General → Wake word** — for example just the
+assistant's name. Case and punctuation do not matter.
+
+**How it works**
+
+```
+microphone (open while enabled)
+  -> Silero VAD          decides whether anyone is talking
+  -> Whisper tiny        transcribes, only while speech is detected
+  -> phrase match        fuzzy compare with your phrase
+  -> the app starts the normal voice input
+```
+
+Cost measured on a mid-range CPU: **~4% of one core while idle**, **~19% while
+someone is talking** (and nothing at all in silence, because the VAD gates the
+transcription). The VAD is what makes an always-on listener affordable.
+
+**Which model is used.** Its own small one (`whisper-tiny` or `base` in
+`./models/`), not the `large-v3-turbo` used for real commands — recognition of
+commands is completely unaffected. The decoding language follows the script of
+your phrase, so a Russian phrase is not decoded in English mode.
+
+**Privacy.** While enabled the microphone stays open, which Windows shows as a
+recording indicator. Audio is recognised on the fly and discarded — nothing is
+written to disk. It is **off by default** and has to be switched on explicitly.
+
+**If it does not start** the reason is shown under the settings (usually the
+model is missing). Fetch it once with:
+
+```bash
+python tests/fetch_whisper_model.py tiny
+```
+
+A missing model, a missing audio backend or a busy microphone leave the app
+starting normally — wake word just stays off.
+
 ## Voice input (STT)
 
 Whisper transcribes only in Russian.
@@ -1036,6 +1075,45 @@ SCREENSHOT_TRIGGERS=экран,скриншот,смотри на экран,п�
 - JPEG quality=90 (баланс качества/токенов)
 - PNG → JPEG конвертация (экономия токенов в 3-4x)
 - Результат: ~1700 токенов вместо 5300+ (для 2K экрана)
+
+## Пробуждающая фраза (wake-word)
+
+Произнесите фразу — и ассистент проснётся, без нажатия клавиш. Фраза любая,
+какую вы напишете в **Настройки → Общие → Пробуждающая фраза**, например просто
+имя ассистента. Регистр и знаки препинания не важны.
+
+**Как работает**
+
+```
+микрофон (открыт, пока включено)
+  -> Silero VAD          определяет, говорит ли кто-нибудь
+  -> Whisper tiny        распознаёт, только пока идёт речь
+  -> сверка с фразой     нечёткое сравнение с вашей фразой
+  -> приложение запускает обычный голосовой ввод
+```
+
+Замеренная нагрузка на среднем CPU: **~4% одного ядра в простое**, **~19% пока
+кто-то говорит** (и полный ноль в тишине — VAD не даёт запускать распознавание).
+Именно VAD делает постоянное прослушивание affordable.
+
+**Какая модель используется.** Собственная маленькая (`whisper-tiny` или `base`
+в `./models/`), а не `large-v3-turbo` для команд — распознавание команд
+полностью не затронуто. Язык декодирования определяется по письму вашей фразы,
+поэтому русская фраза не распознаётся в английском режиме.
+
+**Приватность.** Пока включено, микрофон остаётся открытым — Windows покажет
+индикатор записи. Звук распознаётся на лету и отбрасывается, на диск ничего не
+пишется. По умолчанию **выключено** и включается только вручную.
+
+**Если не запустилось** — причина показана прямо в настройках (обычно нет
+модели). Один раз скачать:
+
+```bash
+python tests/fetch_whisper_model.py tiny
+```
+
+Отсутствие модели, аудио-бэкенда или занятый микрофон не ломают запуск
+приложения — пробуждающая фраза просто остаётся выключенной.
 
 ## Голосовой ввод (STT)
 
