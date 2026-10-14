@@ -529,7 +529,10 @@ async def get_wake_word():
 @app.put("/api/wake-word")
 async def update_wake_word(request: dict):
     """Save wake-word settings and (re)start detection when enabled."""
-    from config import save_config
+    # reload_config must be imported here: it is what clears the lru_cache on
+    # get_config(), and without it every save of the wake-word settings died
+    # with a NameError (HTTP 500) - the settings silently never applied.
+    from config import save_config, reload_config
 
     enabled = request.get("enabled")
     phrase = request.get("phrase")
