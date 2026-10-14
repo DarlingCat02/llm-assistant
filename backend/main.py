@@ -18,6 +18,7 @@ import logging
 import re
 import sys
 import os
+import asyncio
 import tempfile
 import base64
 import io
@@ -238,14 +239,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await start_ollama_keep_alive(interval=60)
     except Exception as e:
         logger.warning(f"Failed to start keep-alive: {e}")
-    
+
+    # Start wake-word (off by default; never fatal)
+    try:
+        _ok, _err = _wake_start()
+        if _ok:
+            logger.info("Wake word: listening")
+    except Exception as e:
+        logger.warning(f"Wake word did not start: {e}")
+
     logger.info("Backend ready")
-    
+
     yield  # App running
-    
+
     # Shutdown
     logger.info("Stopping Backend...")
-    
+
+    # Stop wake-word (releases the microphone)
+    try:
+        _wake_stop()
+    except Exception:
+        pass
+
     # Stop keep-alive
     try:
         from backend.background_tasks import stop_ollama_keep_alive
@@ -329,8 +344,171 @@ async def global_websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
-# === API endpoints ===
+# === Wake word ===
 
+_wake_detector = None
+_wake_error: str | None = None
+
+
+def _wake_model_path() -> str:
+    """Where the small Whisper used for wake detection lives."""
+    from src.stt_engine import resolve_model_dir
+
+    return resolve_model_dir("whisper-tiny", "whisper-tiny")
+
+
+def _wake_start() -> tuple[bool, str | None]:
+    """
+    Start (or restart) always-listening wake-word detection.
+
+    Degrades instead of raising: a missing model, a missing audio backend or a
+    busy microphone must never stop the app from starting.
+    """
+    global _wake_detector, _wake_error
+
+    _wake_stop()
+
+    try:
+        cfg = get_config().wake
+    except Exception as e:
+        logger.warning(f"Wake word: cannot read config: {e}")
+        return False, str(e)
+
+    if not cfg.enabled:
+        _wake_error = None
+        return False, None
+    if not cfg.phrase.strip():
+        _wake_error = "Пробуждающая фраза не задана"
+        logger.warning("Wake word is enabled but no phrase is set - staying off")
+        return False, _wake_error
+
+    path = _wake_model_path()
+    if not Path(path).is_dir():
+        _wake_error = f"Модель не найдена: {path}"
+        logger.warning(
+            f"Wake word model not found at {path} - staying off. "
+            f"Run: python tests/fetch_whisper_model.py {cfg.model}"
+        )
+        return False, _wake_error
+
+    from src.wake_word import WakeWordDetector
+
+    async def notify(text: str) -> None:
+        # Called from the detector's own thread - schedule on the loop
+        from backend.api import manager as ws_manager
+
+        try:
+            await ws_manager.broadcast({
+                "type": "wake-word-detected",
+                "transcript": text,
+            })
+        except Exception as e:
+            logger.warning(f"Wake word notify failed: {e}")
+
+    loop = asyncio.get_running_loop()
+
+    def on_detect(text: str) -> None:
+        asyncio.run_coroutine_threadsafe(notify(text), loop)
+
+    detector = WakeWordDetector(
+        phrase=cfg.phrase,
+        model_path=path,
+        on_detect=on_detect,
+        cooldown=cfg.cooldown,
+        threshold=cfg.match_threshold,
+    )
+    if not detector.start():
+        err = detector.error or "неизвестная ошибка"
+        logger.warning(f"Wake word did not start: {err}")
+        _wake_detector = None
+        _wake_error = err
+        return False, err
+
+    _wake_detector = detector
+    _wake_error = None
+    return True, None
+
+
+def _wake_stop() -> None:
+    global _wake_detector
+    if _wake_detector is not None:
+        try:
+            _wake_detector.stop()
+        except Exception as e:
+            logger.warning(f"Wake word stop failed: {e}")
+        _wake_detector = None
+
+
+@app.get("/api/wake-word")
+async def get_wake_word():
+    """Current wake-word settings and live state."""
+    from src.wake_word import phrase_score
+
+    try:
+        cfg = get_config().wake
+    except Exception:
+        cfg = None
+
+    detector = _wake_detector
+    return {
+        "enabled": bool(cfg.enabled) if cfg else False,
+        "phrase": cfg.phrase if cfg else "",
+        "model": cfg.model if cfg else "tiny",
+        "cooldown": cfg.cooldown if cfg else 5.0,
+        "match_threshold": cfg.match_threshold if cfg else 0.82,
+        "listening": bool(detector and detector.is_running),
+        "error": (detector.error if detector else None) or _wake_error,
+        "last_transcript": detector.last_transcript if detector else "",
+        "phrase_score": (
+            phrase_score(detector.last_transcript, cfg.phrase)
+            if detector and cfg and detector.last_transcript else 0.0
+        ),
+    }
+
+
+@app.put("/api/wake-word")
+async def update_wake_word(request: dict):
+    """Save wake-word settings and (re)start detection when enabled."""
+    from config import save_config
+
+    enabled = request.get("enabled")
+    phrase = request.get("phrase")
+    model = request.get("model")
+    cooldown = request.get("cooldown")
+    threshold = request.get("match_threshold")
+
+    for name, value, kind in (
+        ("phrase", phrase, str), ("model", model, str),
+    ):
+        if value is not None and not isinstance(value, kind):
+            raise HTTPException(status_code=400, detail=f"{name} должен быть строкой")
+    if phrase is not None and len(phrase) > 64:
+        raise HTTPException(status_code=400, detail="Фраза длиннее 64 символов")
+    if model is not None and model not in ("tiny", "base"):
+        raise HTTPException(status_code=400, detail="Модель: только tiny или base")
+    if cooldown is not None and not (0 <= float(cooldown) <= 300):
+        raise HTTPException(status_code=400, detail="Кулдаун: от 0 до 300 секунд")
+    if threshold is not None and not (0.1 <= float(threshold) <= 1.0):
+        raise HTTPException(status_code=400, detail="Порог: от 0.1 до 1.0")
+    if enabled is True and not (phrase or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Укажите пробуждающую фразу, чтобы включить её",
+        )
+
+    save_config(
+        wake_enabled=enabled, wake_phrase=phrase, wake_model=model,
+        wake_cooldown=cooldown, wake_threshold=threshold,
+    )
+    # The file is not enough: get_config() is cached, and OS env vars take
+    # priority over the file - save_config mirrors both, so just re-read.
+    reload_config()
+
+    ok, err = _wake_start()
+    return {"status": "ok", "listening": ok, "error": err}
+
+
+# === API endpoints ===
 
 @app.get("/api/chats")
 async def get_all_chats():

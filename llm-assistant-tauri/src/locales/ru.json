@@ -163,5 +163,16 @@
   "prompt.langHint": "Используется только блок на языке интерфейса (Общие → Язык). Заполнять оба не нужно — второй сейчас не применяется.",
   "prompt.langActive": "используется",
   "settings.personality.placeholder.ru": "Например: Отвечай кратко, используй списки, без сленга",
-  "settings.personality.placeholder.en": "e.g. Be concise, use bullet points, no slang"
+  "settings.personality.placeholder.en": "e.g. Be concise, use bullet points, no slang",
+  "settings.wake.enable": "Пробуждающая фраза (wake-word)",
+  "settings.wake.privacy": "Пока включено, приложение постоянно держит микрофон открытым и слушает фон. Запись нигде не сохраняется — звук распознаётся на лету и отбрасывается.",
+  "settings.wake.phrase": "Фраза",
+  "settings.wake.phraseHint": "Любая фраза, которую вы произносите, например просто имя ассистента. Регистр и знаки препинания не важны.",
+  "settings.wake.model": "Модель распознавания",
+  "settings.wake.modelHint": "Используется отдельная маленькая модель, обычный Whisper для распознавания команд не затрагивается.",
+  "settings.wake.listening": "Микрофон слушает фразу «{phrase}»",
+  "settings.wake.starting": "Запуск…",
+  "settings.wake.error": "Не удалось включить: {msg}",
+  "settings.wake.needPhrase": "Укажите пробуждающую фразу",
+  "settings.wake.saveError": "Ошибка сохранения: {msg}"
 }

@@ -313,10 +313,21 @@ function connectWebSocket() {
 }
 
 function handleWebSocketMessage(data) {
-    console.log('WebSocket сообщение:', data);
-    
     // Responses are rendered via the HTTP response in sendMessage().
-    // WebSocket is reserved here for future real-time notifications.
+    // WebSocket carries out-of-band events.
+    if (data && data.type === 'wake-word-detected') {
+        onWakeWordDetected(data.transcript || '');
+        return;
+    }
+}
+
+// The backend heard the wake phrase: start the normal push-to-talk pipeline.
+function onWakeWordDetected(transcript) {
+    console.log('Wake word:', transcript);
+    if (isRecording || isProcessingVoice) return;   // already busy
+    const input = document.getElementById('message-input');
+    if (input && input.value.trim()) return;        // user is typing, don't interrupt
+    startVoiceRecording();
 }
 
 function updateConnectionStatus(connected) {
@@ -1164,6 +1175,9 @@ async function openSettings() {
     initSliders();
     initPersonalityInputs();
     updateLangFieldBadges();
+    loadWakeSettings();
+    const wakeToggle = document.getElementById('wake-enabled-toggle');
+    if (wakeToggle) wakeToggle.addEventListener('change', updateWakeFieldsVisibility);
     loadPersonas().then(() => {
         renderPersonaSelector();
         renderPersonaSettings();
@@ -1199,6 +1213,87 @@ function updateLangFieldBadges() {
             badge.remove();
         }
     });
+}
+
+// === Wake word ===
+
+let wakeState = { enabled: false, phrase: '', model: 'tiny', listening: false, error: null };
+
+function updateWakeFieldsVisibility() {
+    const on = document.getElementById('wake-enabled-toggle').checked;
+    ['wake-fields', 'wake-advanced'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = on ? '' : 'none';
+    });
+}
+
+async function loadWakeSettings() {
+    try {
+        const resp = await fetch(`${API_BASE}/api/wake-word`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        wakeState = data;
+        const toggle = document.getElementById('wake-enabled-toggle');
+        const phrase = document.getElementById('wake-phrase-input');
+        const model = document.getElementById('wake-model-select');
+        if (toggle) toggle.checked = !!data.enabled;
+        if (phrase) phrase.value = data.phrase || '';
+        if (model) model.value = data.model || 'tiny';
+        updateWakeFieldsVisibility();
+        renderWakeStatus();
+    } catch (e) {
+        console.warn('Не удалось загрузить настройки wake-word:', e);
+    }
+}
+
+function renderWakeStatus() {
+    const box = document.getElementById('wake-status-section');
+    const text = document.getElementById('wake-status-text');
+    if (!box || !text) return;
+    if (!wakeState.enabled) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    if (wakeState.error) {
+        text.textContent = t('settings.wake.error', { msg: wakeState.error });
+        text.style.color = 'var(--danger, #e06c75)';
+    } else if (wakeState.listening) {
+        text.textContent = t('settings.wake.listening', { phrase: wakeState.phrase });
+        text.style.color = '';
+    } else {
+        text.textContent = t('settings.wake.starting');
+        text.style.color = '';
+    }
+}
+
+async function saveWakeSettings() {
+    const toggle = document.getElementById('wake-enabled-toggle');
+    const phrase = document.getElementById('wake-phrase-input');
+    const model = document.getElementById('wake-model-select');
+    const payload = {
+        enabled: !!(toggle && toggle.checked),
+        phrase: phrase ? phrase.value.trim() : '',
+        model: model ? model.value : 'tiny',
+    };
+    if (payload.enabled && !payload.phrase) {
+        showToast(t('settings.wake.needPhrase'), 'error', 4000);
+        return false;
+    }
+    try {
+        const resp = await fetch(`${API_BASE}/api/wake-word`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json().catch(() => null);
+        if (!resp.ok) {
+            showToast(t('settings.wake.saveError', { msg: (data && data.detail) || resp.status }), 'error', 5000);
+            return false;
+        }
+        await loadWakeSettings();
+        return true;
+    } catch (e) {
+        showToast(t('settings.wake.saveError', { msg: String(e.message || e) }), 'error', 5000);
+        return false;
+    }
 }
 
 function isSettingsTabActive(name) {
@@ -1386,6 +1481,12 @@ async function saveSettings() {
         await savePersonaEditor();
         return;
     }
+
+    // Wake word has its own endpoint (it restarts the listener)
+    if (!await saveWakeSettings()) {
+        return;
+    }
+
     const provider = document.getElementById('provider-select').value;
     const modelSelect = document.getElementById('model-select');
     const model = modelSelect.disabled ? null : modelSelect.value;

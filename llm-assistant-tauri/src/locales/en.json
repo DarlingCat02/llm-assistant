@@ -163,5 +163,16 @@
   "prompt.langHint": "Only the block matching the interface language (Settings → General) is applied. You do not need to fill in both — the other one is inactive.",
   "prompt.langActive": "in use",
   "settings.personality.placeholder.ru": "Например: Отвечай кратко, используй списки, без сленга",
-  "settings.personality.placeholder.en": "e.g. Be concise, use bullet points, no slang"
+  "settings.personality.placeholder.en": "e.g. Be concise, use bullet points, no slang",
+  "settings.wake.enable": "Wake word",
+  "settings.wake.privacy": "While enabled the app keeps the microphone open and listens continuously. Nothing is recorded to disk - audio is recognised on the fly and discarded.",
+  "settings.wake.phrase": "Phrase",
+  "settings.wake.phraseHint": "Any phrase you can say, for example just the assistant name. Case and punctuation do not matter.",
+  "settings.wake.model": "Recognition model",
+  "settings.wake.modelHint": "Uses its own small model; the regular Whisper used for commands is untouched.",
+  "settings.wake.listening": "Listening for the phrase \"{phrase}\"",
+  "settings.wake.starting": "Starting…",
+  "settings.wake.error": "Could not enable: {msg}",
+  "settings.wake.needPhrase": "Enter a wake phrase",
+  "settings.wake.saveError": "Save failed: {msg}"
 }

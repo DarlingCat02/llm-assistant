@@ -301,6 +301,50 @@ class HotkeyConfig(BaseConfig):
     model_config = SettingsConfigDict(env_prefix="HOTKEY_", extra="ignore")
 
 
+class WakeWordConfig(BaseConfig):
+    """Wake-word (always-listening trigger).
+
+    Off by default: enabling it makes the app hold the microphone open
+    continuously, which the user must opt into explicitly.
+    """
+
+    enabled: bool = Field(default=False, description="Включить постоянное прослушивание")
+    phrase: str = Field(default="", description="Пробуждающая фраза, например «ассистент»")
+    model: str = Field(default="tiny", description="Whisper для детекции: tiny / base")
+    cooldown: float = Field(default=5.0, description="Пауза после срабатывания, сек")
+    match_threshold: float = Field(
+        default=0.82, description="Порог совпадения фразы (0-1)"
+    )
+
+    @field_validator("phrase")
+    @classmethod
+    def _check_phrase(cls, v: str) -> str:
+        v = (v or "").strip()
+        if len(v) > 64:
+            raise ValueError("Пробуждающая фраза длиннее 64 символов")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def _check_model(cls, v: str) -> str:
+        v = (v or "tiny").strip().lower()
+        if v not in ("tiny", "base"):
+            raise ValueError("Для wake-word поддерживаются только tiny и base")
+        return v
+
+    @field_validator("cooldown")
+    @classmethod
+    def _check_cooldown(cls, v: float) -> float:
+        return max(0.0, min(300.0, float(v)))
+
+    @field_validator("match_threshold")
+    @classmethod
+    def _check_threshold(cls, v: float) -> float:
+        return max(0.1, min(1.0, float(v)))
+
+    model_config = SettingsConfigDict(env_prefix="WAKE_", extra="ignore")
+
+
 class GeneralConfig(BaseConfig):
     """General settings (interface language)."""
     
@@ -378,6 +422,10 @@ class Config(BaseSettings):
         default_factory=HotkeyConfig,
         description="Глобальные горячие клавиши",
     )
+    wake: WakeWordConfig = Field(
+        default_factory=WakeWordConfig,
+        description="Пробуждающая фраза (wake-word)",
+    )
     
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -453,6 +501,11 @@ def save_config(
     hotkey_voice: str | None = None,
     hotkey_voice_num: str | None = None,
     hotkey_live: str | None = None,
+    wake_enabled: bool | None = None,
+    wake_phrase: str | None = None,
+    wake_model: str | None = None,
+    wake_cooldown: float | None = None,
+    wake_threshold: float | None = None,
 ) -> None:
     """
     Save the configuration to the .env file.
@@ -542,6 +595,19 @@ def save_config(
                      ("HOTKEY_LIVE", hotkey_live)):
         if val is not None and val != "":
             env_vars[key] = val.strip().replace("\r\n", "\n").replace("\n", "\\n")
+
+    if wake_enabled is not None:
+        env_vars["WAKE_ENABLED"] = "true" if wake_enabled else "false"
+    if wake_phrase is not None:
+        # Enable implicitly when a phrase is typed in, otherwise the field
+        # would look set while nothing is listening.
+        env_vars["WAKE_PHRASE"] = wake_phrase.strip()
+    if wake_model is not None and wake_model != "":
+        env_vars["WAKE_MODEL"] = wake_model.strip()
+    if wake_cooldown is not None:
+        env_vars["WAKE_COOLDOWN"] = str(wake_cooldown)
+    if wake_threshold is not None:
+        env_vars["WAKE_MATCH_THRESHOLD"] = str(wake_threshold)
     
     # Write back
     with open(env_path, "w", encoding="utf-8") as f:

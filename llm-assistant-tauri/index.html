@@ -221,6 +221,31 @@
                     <label for="hotkey-live-input" data-i18n="settings.hotkey.live">Live mode</label>
                     <input type="text" id="hotkey-live-input" class="settings-input" value="Ctrl+Shift+L">
                 </div>
+                <div class="settings-section">
+                    <label class="settings-checkbox" style="display:flex;align-items:center;gap:8px;">
+                        <input type="checkbox" id="wake-enabled-toggle">
+                        <span data-i18n="settings.wake.enable">Пробуждающая фраза (wake-word)</span>
+                    </label>
+                    <div class="slider-hint" data-i18n="settings.wake.privacy">
+                        Пока включено, приложение постоянно держит микрофон открытым и слушает фон. Запись нигде не сохраняется — звук распознаётся на лету и отбрасывается.
+                    </div>
+                </div>
+                <div class="settings-section" id="wake-fields">
+                    <label for="wake-phrase-input" data-i18n="settings.wake.phrase">Фраза</label>
+                    <input type="text" id="wake-phrase-input" class="settings-input" maxlength="64" placeholder="ассистент">
+                    <div class="slider-hint" data-i18n="settings.wake.phraseHint">Любая фраза, которую вы произносите, например просто имя ассистента. Регистр и знаки препинания не важны.</div>
+                </div>
+                <div class="settings-section" id="wake-advanced">
+                    <label for="wake-model-select" data-i18n="settings.wake.model">Модель распознавания</label>
+                    <select id="wake-model-select" class="settings-select">
+                        <option value="tiny">tiny (~0.5 GB, быстрее)</option>
+                        <option value="base">base (~0.8 GB, точнее)</option>
+                    </select>
+                    <div class="slider-hint" data-i18n="settings.wake.modelHint">Используется отдельная маленькая модель, обычный Whisper для распознавания команд не затрагивается.</div>
+                </div>
+                <div class="settings-section" id="wake-status-section" style="display:none;">
+                    <div class="slider-hint" id="wake-status-text"></div>
+                </div>
             </div>
 
             <!-- LLM Tab -->
