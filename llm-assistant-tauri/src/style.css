@@ -1307,6 +1307,14 @@ body {
     margin-bottom: 6px;
 }
 
+/* Last thing the wake-word model heard, with its match score. */
+.wake-heard {
+    font-size: 12px;
+    font-style: italic;
+    margin-bottom: 8px;
+    word-break: break-word;
+}
+
 /* Explains why the microphone list is empty or disabled. */
 .wake-device-error {
     color: var(--danger, #e06c75);

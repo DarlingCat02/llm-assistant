@@ -1453,6 +1453,28 @@ function renderWakeStatus() {
         text.textContent = t('settings.wake.starting');
         text.style.color = '';
     }
+    renderWakeHeard();
+}
+
+// "Heard: <what the model actually made of it>" with its score. Without this,
+// "it did not react" looks identical whether the microphone is dead, the VAD
+// never fired, or the phrase was simply misheard.
+function renderWakeHeard() {
+    const box = document.getElementById('wake-heard');
+    if (!box) return;
+    const heard = (wakeState.last_transcript || '').trim();
+    if (!heard) {
+        box.textContent = '';
+        return;
+    }
+    const score = Number(wakeState.phrase_score || 0);
+    const threshold = Number(wakeState.match_threshold || 0.82);
+    const matched = score >= threshold;
+    box.textContent = t('settings.wake.heard', {
+        text: heard,
+        score: score.toFixed(2),
+    });
+    box.style.color = matched ? 'var(--success, #98c379)' : 'var(--text-secondary)';
 }
 
 async function saveWakeSettings() {

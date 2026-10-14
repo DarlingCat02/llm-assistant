@@ -188,5 +188,7 @@
   "settings.wake.deviceMissing": "{name} — устройство не найдено",
   "terminal.status": "строк: {count} · обновлено {time}",
   "settings.wake.devicesFailed": "Не удалось получить список микрофонов: {msg}",
-  "settings.wake.devicesNone": "Микрофоны не найдены."
+  "settings.wake.devicesNone": "Микрофоны не найдены.",
+  "settings.wake.heardLabel": "Что услышано",
+  "settings.wake.heard": "«{text}» — совпадение {score}"
 }
