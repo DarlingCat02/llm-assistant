@@ -190,5 +190,9 @@
   "settings.wake.devicesFailed": "Не удалось получить список микрофонов: {msg}",
   "settings.wake.devicesNone": "Микрофоны не найдены.",
   "settings.wake.heardLabel": "Что услышано",
-  "settings.wake.heard": "«{text}» — совпадение {score}"
+  "settings.wake.heard": "«{text}» — совпадение {score}",
+  "settings.wake.action": "Что делать при срабатывании",
+  "settings.wake.actionChat": "Показать фразу и выполнить",
+  "settings.wake.actionExecute": "Выполнить молча",
+  "settings.wake.actionHint": "«Показать фразу» надёжнее: детектор иногда оговаривает слово, и по видимому тексту это понятно."
 }

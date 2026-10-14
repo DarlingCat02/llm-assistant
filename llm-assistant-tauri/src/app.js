@@ -283,8 +283,12 @@ function initEventListeners() {
 // === WebSocket ===
 
 function connectWebSocket() {
-    // Use the same host as the page
-    const wsUrl = `ws://${window.location.host}/ws/events`;
+    // Build the socket URL from API_BASE, never from window.location. Inside
+    // Tauri the page is served from tauri://localhost (or the Vite dev server),
+    // so the location host is never the backend - the socket silently went to
+    // the wrong place and the wake-word event never arrived.
+    const wsBase = API_BASE.replace(/^http/, 'ws');
+    const wsUrl = `${wsBase}/ws/events`;
     console.log('Подключение к WebSocket:', wsUrl);
     
     ws = new WebSocket(wsUrl);
@@ -332,12 +336,25 @@ function onWakeWordDetected(transcript) {
     // Whisper already transcribed everything said after the phrase, so the
     // command usually arrived in the same breath. Only fall back to recording
     // when the utterance really was just the wake word on its own.
-    if (hasCommandAfterPhrase(text) && input) {
-        input.value = text;
-        sendMessage();
+    if (!hasCommandAfterPhrase(text)) {
+        startVoiceRecording();
         return;
     }
-    startVoiceRecording();
+
+    if (wakeState.action === 'execute') {
+        // Silent mode: run it, show only the answer. The wake word is meant to
+        // feel like talking to the assistant, not like typing.
+        submitChat(text, { showUserMessage: false });
+        return;
+    }
+
+    // Default: show what was heard, then run it. The wake detector is a small
+    // model that does mishear, so keeping the text visible is what makes a
+    // wrong trigger explainable instead of mysterious.
+    if (input) {
+        input.value = text;
+        sendMessage();
+    }
 }
 
 function hasCommandAfterPhrase(transcript) {
@@ -687,9 +704,32 @@ async function sendMessage() {
     clearFile();
     
     // Append the user message (using the saved counts)
-    appendMessage('user', message || (filesCount > 0 ? `📎 ${t('chat.file.count', {count: filesCount})}` : '')
+    const bubble = message || (filesCount > 0 ? `📎 ${t('chat.file.count', {count: filesCount})}` : '')
         ? `${message}\n\n${hasDocs ? `📄 ${t('chat.file.docs', {names: docsToSend.map(f => f.name).join(', ')})}` : ''}${hasImages ? (hasDocs ? ', ' : '') + `🖼️ ${t('chat.file.images', {count: imageBases.length})}` : ''}`
-        : (filesCount > 0 ? `📎 ${t('chat.file.count', {count: filesCount})}` : ''));
+        : (filesCount > 0 ? `📎 ${t('chat.file.count', {count: filesCount})}` : '');
+
+    await submitChat(fullMessage, { bubble, images: imagesToSend });
+}
+
+/**
+ * Send one turn to the backend and render the answer.
+ *
+ * Split out of sendMessage() so the wake word can run a command without a user
+ * bubble - it already knows the text and does not need to pretend the user
+ * typed it.
+ *
+ * @param {string} fullMessage  Text sent to the model.
+ * @param {object} [options]
+ * @param {string|null} [options.bubble]  What to render as the user message.
+ * @param {boolean} [options.showUserMessage=true]  Set false to stay silent.
+ * @param {string[]} [options.images]  Base64 image payloads.
+ */
+async function submitChat(fullMessage, options = {}) {
+    const { bubble = null, showUserMessage = true, images = [] } = options;
+
+    if (showUserMessage) {
+        appendMessage('user', bubble !== null ? bubble : fullMessage);
+    }
     showTypingIndicator();
     
     // Send to the server
@@ -708,7 +748,7 @@ async function sendMessage() {
                 chat_id: currentChatId,
                 thinking: thinkingEnabled,
                 search: searchProvider,
-                images: imagesToSend,
+                images,
             }),
         });
         
@@ -1291,7 +1331,7 @@ function updateLangFieldBadges() {
 
 // === Wake word ===
 
-let wakeState = { enabled: false, phrase: '', model: 'tiny', input_device: '', listening: false, error: null };
+let wakeState = { enabled: false, phrase: '', model: 'large-v3-turbo', input_device: '', action: 'chat', listening: false, error: null };
 let wakeDevices = [];
 
 // dBFS-ish scale for the input meter: -60 dB is effectively silence, 0 dB is
@@ -1424,7 +1464,9 @@ async function loadWakeSettings() {
         const model = document.getElementById('wake-model-select');
         if (toggle) toggle.checked = !!data.enabled;
         if (phrase) phrase.value = data.phrase || '';
-        if (model) model.value = data.model || 'tiny';
+        if (model) model.value = data.model || 'large-v3-turbo';
+        const action = document.getElementById('wake-action-select');
+        if (action) action.value = data.action || 'chat';
         updateWakeFieldsVisibility();
         renderWakeStatus();
         renderWakeLevel();
@@ -1486,11 +1528,13 @@ async function saveWakeSettings() {
     const phrase = document.getElementById('wake-phrase-input');
     const model = document.getElementById('wake-model-select');
     const device = document.getElementById('wake-device-select');
+    const action = document.getElementById('wake-action-select');
     const payload = {
         enabled: !!(toggle && toggle.checked),
         phrase: phrase ? phrase.value.trim() : '',
-        model: model ? model.value : 'tiny',
+        model: model ? model.value : 'large-v3-turbo',
         input_device: device ? device.value : '',
+        action: action ? action.value : 'chat',
     };
     if (payload.enabled && !payload.phrase) {
         showToast(t('settings.wake.needPhrase'), 'error', 4000);

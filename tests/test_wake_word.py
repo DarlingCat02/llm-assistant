@@ -359,6 +359,68 @@ def test_wake_model_default_is_the_one_that_hears_russian():
     assert WakeWordConfig().model == "large-v3-turbo"
 
 
+def test_unload_clears_everything_and_is_repeatable():
+    """
+    Turning "always listening" off has to release 1.6 GB of weights, not just
+    stop the thread: torch keeps freed blocks, so without empty_cache() the
+    old model is still resident while the next one loads.
+    """
+    from src.wake_word import WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="unused", on_detect=lambda t: None,
+    )
+    # Pretend something is loaded, including on a device.
+    d._model = object()
+    d._processor = object()
+    d._vad = object()
+    d._torch = object()
+    d.model_device = "cuda"
+    d.model_loaded = True
+
+    assert d.is_model_loaded
+
+    d.unload()
+
+    assert not d.is_model_loaded
+    assert d.model_loaded is False
+    assert d.model_device is None
+    assert d._model is None
+    assert d._processor is None
+    assert d._vad is None
+    assert d._torch is None
+
+    # Idempotent: stopping an already-stopped detector must not raise.
+    d.unload()
+    d.unload()
+
+
+def test_unload_stops_a_running_listener():
+    import threading
+
+    from src.wake_word import WakeWordDetector
+
+    d = WakeWordDetector(
+        phrase="ассистент", model_path="unused", on_detect=lambda t: None,
+    )
+    d._stop.clear()
+    d._thread = threading.Thread(target=lambda: None, daemon=True)
+    d._thread.start()
+    d._thread.join()
+
+    d.unload()
+    assert not d.is_running
+
+
+def test_action_defaults_to_showing_the_phrase():
+    from config import WakeWordConfig
+
+    assert WakeWordConfig().action == "chat"
+    assert WakeWordConfig(action="execute").action == "execute"
+    with pytest.raises(Exception):
+        WakeWordConfig(action="nonsense")
+
+
 def test_level_meter_starts_silent():
     from src.wake_word import WakeWordDetector
 

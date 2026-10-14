@@ -323,6 +323,13 @@ class WakeWordConfig(BaseConfig):
         default="",
         description="Микрофон для прослушивания: пусто = системный по умолчанию",
     )
+    action: str = Field(
+        # chat   - show the transcript, then run it (default: with a small
+        #         detector, a wrong trigger is only explainable if visible)
+        # execute - run it silently and show only the answer
+        default="chat",
+        description="Что делать при срабатывании: chat или execute",
+    )
     cooldown: float = Field(default=5.0, description="Пауза после срабатывания, сек")
     match_threshold: float = Field(
         # 0.70, not the 0.82 this used to default to. Measured on this machine
@@ -361,6 +368,14 @@ class WakeWordConfig(BaseConfig):
     @classmethod
     def _check_threshold(cls, v: float) -> float:
         return max(0.1, min(1.0, float(v)))
+
+    @field_validator("action")
+    @classmethod
+    def _check_action(cls, v: str) -> str:
+        v = (v or "chat").strip().lower()
+        if v not in ("chat", "execute"):
+            raise ValueError("Действие wake-word: chat или execute")
+        return v
 
     model_config = SettingsConfigDict(env_prefix="WAKE_", extra="ignore")
 
@@ -525,6 +540,7 @@ def save_config(
     wake_phrase: str | None = None,
     wake_model: str | None = None,
     wake_input_device: str | None = None,
+    wake_action: str | None = None,
     wake_cooldown: float | None = None,
     wake_threshold: float | None = None,
 ) -> None:
@@ -628,6 +644,8 @@ def save_config(
     if wake_input_device is not None:
         # Empty is meaningful: it means "follow the system default".
         env_vars["WAKE_INPUT_DEVICE"] = wake_input_device.strip()
+    if wake_action is not None:
+        env_vars["WAKE_ACTION"] = wake_action.strip().lower()
     if wake_cooldown is not None:
         env_vars["WAKE_COOLDOWN"] = str(wake_cooldown)
     if wake_threshold is not None:

@@ -253,6 +253,14 @@
                     <div class="slider-hint" data-i18n="settings.wake.deviceHint">Устройство, которое постоянно слушает фон. Обычный голосовой ввод и wake-word могут использовать разные микрофоны.</div>
                 </div>
                 <div class="settings-section" id="wake-advanced">
+                    <label for="wake-action-select" data-i18n="settings.wake.action">Что делать при срабатывании</label>
+                    <select id="wake-action-select" class="settings-select">
+                        <option value="chat" data-i18n="settings.wake.actionChat">Показать фразу и выполнить</option>
+                        <option value="execute" data-i18n="settings.wake.actionExecute">Выполнить молча</option>
+                    </select>
+                    <div class="slider-hint" data-i18n="settings.wake.actionHint">«Показать фразу» надёжнее: детектор иногда оговаривает слово, и по видимому тексту это понятно.</div>
+                </div>
+                <div class="settings-section" id="wake-advanced">
                     <label for="wake-model-select" data-i18n="settings.wake.model">Модель распознавания</label>
                     <select id="wake-model-select" class="settings-select">
                         <option value="large-v3-turbo">large-v3-turbo — точнее всего, нужна видеокарта</option>

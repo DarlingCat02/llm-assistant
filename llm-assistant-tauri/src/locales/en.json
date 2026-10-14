@@ -190,5 +190,9 @@
   "settings.wake.devicesFailed": "Could not list microphones: {msg}",
   "settings.wake.devicesNone": "No microphones found.",
   "settings.wake.heardLabel": "What was heard",
-  "settings.wake.heard": "\"{text}\" - match {score}"
+  "settings.wake.heard": "\"{text}\" - match {score}",
+  "settings.wake.action": "On detection",
+  "settings.wake.actionChat": "Show the phrase, then run it",
+  "settings.wake.actionExecute": "Run it silently",
+  "settings.wake.actionHint": "\"Show the phrase\" is safer: the detector does mishear words now and then, and a visible transcript makes that obvious."
 }
