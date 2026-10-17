@@ -211,5 +211,16 @@
   "settings.wake.modelShared": "общая с распознаванием",
   "chat.mode.hotkeyShort": "Хоткей",
   "chat.mode.backgroundShort": "Фон",
-  "chat.error.backendHint": "Причина записана в файл logs/backend.log в папке программы и во вкладке «Терминал». Чаще всего порт 8000 уже занят другим запущенным экземпляром — закройте его и запустите программу снова."
+  "chat.error.backendHint": "Причина записана в файл logs/backend.log в папке программы и во вкладке «Терминал». Чаще всего порт 8000 уже занят другим запущенным экземпляром — закройте его и запустите программу снова.",
+  "settings.memory.title": "Память видеокарты",
+  "settings.memory.used": "занимаем {v} ГБ",
+  "settings.memory.free": "свободно {v} ГБ",
+  "settings.memory.resident": "в памяти: {list}",
+  "settings.memory.empty": "модели не загружены",
+  "settings.memory.wake": "фоновое распознавание",
+  "settings.memory.release": "Выгрузить модели",
+  "settings.memory.releasing": "Выгружаю…",
+  "settings.memory.released": "Освободиено {v} МБ",
+  "settings.memory.blockedBackground": "Распознавание не выгружено: его держит фоновое распознавание.",
+  "settings.memory.failed": "Не удалось выгрузить: {msg}"
 }

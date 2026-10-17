@@ -19,6 +19,7 @@ import re
 import sys
 import os
 import asyncio
+import gc
 import warnings
 import tempfile
 import base64
@@ -693,6 +694,329 @@ def _gpu_free_mb() -> int | None:
         return None
 
 
+def _stt_loaded() -> bool:
+    """Whether the speech recognition model is resident right now."""
+    try:
+        from src.stt_engine import get_stt_engine as peek
+
+        engine = peek()
+        return bool(getattr(engine, "_initialized", False))
+    except Exception:
+        return False
+
+
+def _tts_extra_whisper_loaded() -> bool:
+    """
+    Whether OmniVoice still holds its own transcription Whisper.
+
+    Only one part of the picture: when the cache misses, the OmniVoice library
+    loads an ASR model of its own, which is invisible here and only shows up in
+    the memory totals. So this says "our copy is gone", not "nothing extra is
+    resident".
+    """
+    try:
+        engine = getattr(_assistant._tts, "_engine", None) if _assistant else None
+        return bool(getattr(engine, "_whisper_model", None) is not None)
+    except Exception:
+        return False
+
+
+def _release_cuda_cache() -> int:
+    """
+    Hand the allocator's reserve back to the driver.
+
+    Unloading a model frees its tensors but not the blocks PyTorch keeps cached
+    for the next one, so the GPU keeps reading as busy: measured 18 MB actually
+    in use against 3612 MB still reserved after turning speech synthesis off.
+    Measured cost of calling it: none - reloading afterwards took 3.7 s against
+    4.1 s before, because the slow part is reading the weights from disk, not
+    this.
+    """
+    try:
+        import gc
+
+        import torch
+
+        if not torch.cuda.is_available():
+            return 0
+        before = torch.cuda.memory_reserved()
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        return int((before - torch.cuda.memory_reserved()) // (1024 * 1024))
+    except Exception as e:
+        logger.debug(f"Cache release skipped: {e}")
+        return 0
+
+
+def _drop_tts_whisper_copy() -> int:
+    """
+    Drop the extra Whisper copy inside OmniVoice once it has done its job.
+
+    It is loaded unconditionally on every start, and used only to transcribe a
+    voice sample the first time that sample is seen - after which the
+    transcription comes from a cache. When there is no cache the engine falls
+    back to transcribing itself (ref_text=None, FFmpeg auto), so dropping it
+    costs quality nothing and frees about 1.5 GB while speech is switched on.
+    """
+    try:
+        engine = getattr(_assistant._tts, "_engine", None) if _assistant else None
+        if engine is None or getattr(engine, "_whisper_model", None) is None:
+            return 0
+        engine._whisper_model = None
+        engine._whisper_processor = None
+        return 1
+    except Exception as e:
+        logger.warning(f"Could not drop the extra TTS copy: {e}")
+        return 0
+
+
+def _evict_stranded_modules(min_mb: int = 64) -> int:
+    """
+    Move orphaned GPU modules to the CPU, which gives the VRAM back.
+
+    Turning speech synthesis off leaves about 770 MB resident, and it grows by
+    that much every cycle: measured 787 -> 1555 -> 2324 MB over three
+    enable/disable rounds, with no cleanup of ours involved. OmniVoice holds
+    its network alive through a closure inside that library, so dropping the
+    engine's reference is not enough and repeated collections do not help.
+
+    Nothing points at those modules any more, so moving them off the GPU is
+    safe - and it is the only lever left, since the library cannot be edited.
+    Models still in use are skipped by identity.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return 0
+
+        protected = set()
+
+        def _protect(root) -> None:
+            """Guard a whole model tree, not just its top object."""
+            if root is None:
+                return
+            modules = getattr(root, "modules", None)
+            if callable(modules):
+                for m in modules():
+                    protected.add(id(m))
+            else:
+                protected.add(id(root))
+
+        # Every child module carries CUDA weights of its own, so guarding only
+        # the root left the encoder and decoder free to be moved - which is how
+        # a live recognition model got dragged to the CPU.
+        try:
+            from src.stt_engine import get_stt_engine as peek
+
+            _protect(getattr(peek(), "_model", None))
+        except Exception:
+            pass
+        if _wake_detector is not None:
+            _protect(getattr(_wake_detector, "_model", None))
+        if _assistant is not None:
+            try:
+                engine = getattr(_assistant._tts, "_engine", None)
+                if getattr(engine, "is_omnivoice_loaded", False):
+                    _protect(getattr(engine, "_model", None))
+            except Exception:
+                pass
+
+        before = torch.cuda.memory_allocated()
+        threshold = min_mb * 1024 * 1024
+        moved = 0
+        for obj in gc.get_objects():
+            try:
+                if not isinstance(obj, torch.nn.Module) or id(obj) in protected:
+                    continue
+                # Recursive on purpose: these network objects keep their weights
+                # in child modules, so parameters(recurse=False) is empty and a
+                # non-recursive check silently finds nothing to move.
+                params = list(obj.parameters())
+                if not params or not any(p.is_cuda for p in params):
+                    continue
+                size = sum(p.numel() * p.element_size() for p in params)
+                if size < threshold:
+                    continue
+                obj.to("cpu")
+                moved += size
+            except Exception:
+                continue
+        if moved:
+            gc.collect()
+            torch.cuda.empty_cache()
+            freed = int((before - torch.cuda.memory_allocated()) // (1024 * 1024))
+            logger.info(
+                f"Moved {moved // (1024 * 1024)} MB of unused GPU modules to the "
+                f"CPU, returning {freed} MB to the GPU"
+            )
+            return freed
+        return 0
+    except Exception as e:
+        logger.debug(f"Stranded module sweep skipped: {e}")
+        return 0
+
+
+@app.get("/api/gpu-memory")
+async def gpu_memory_status():
+    """
+    What is resident on the GPU right now, and who is holding it.
+
+    Two different numbers on purpose: what the assistant itself holds (torch's
+    view) and how much is actually free (which also accounts for LM Studio, a
+    separate process we cannot see inside).
+    """
+    allocated = reserved = free = total = None
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            allocated = int(torch.cuda.memory_allocated() // (1024 * 1024))
+            reserved = int(torch.cuda.memory_reserved() // (1024 * 1024))
+            free, total = torch.cuda.mem_get_info()
+            free = int(free // (1024 * 1024))
+            total = int(total // (1024 * 1024))
+    except Exception as e:
+        logger.debug(f"Memory probe failed: {e}")
+
+    detector = _wake_detector
+    return {
+        "allocated_mb": allocated,
+        "reserved_mb": reserved,
+        "vram_free_mb": free,
+        "vram_total_mb": total,
+        "stt_loaded": _stt_loaded(),
+        "stt_shared_with_wake": bool(
+            detector and not detector.owns_model and detector.is_model_loaded
+        ),
+        "wake_running": bool(detector and detector.is_running),
+        "tts_loaded": _tts_engine_ready(),
+        "tts_extra_whisper_loaded": _tts_extra_whisper_loaded(),
+        "input_mode": _input_mode,
+    }
+
+
+@app.post("/api/gpu-memory/release")
+async def release_gpu_cache():
+    """
+    Hand the cached CUDA blocks back to the driver.
+
+    Unloading a model frees its tensors but not the allocator's reserve, which
+    is what keeps the VRAM reading as occupied. The catch is that the next load
+    then reads the weights from disk again - so this is the "give the memory
+    back" button, not something to run on every toggle.
+    """
+    freed = 0
+    try:
+        import gc
+
+        import torch
+
+        before = torch.cuda.memory_reserved()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        freed = int((before - torch.cuda.memory_reserved()) // (1024 * 1024))
+        logger.info(f"CUDA cache released: {freed} MB handed back")
+    except Exception as e:
+        logger.warning(f"Cache release failed: {e}")
+    state = await gpu_memory_status()
+    state["freed_mb"] = freed
+    return state
+
+
+def _run_sync(coro_factory):
+    """Run an engine coroutine that only does blocking work, off the loop."""
+    return asyncio.run(coro_factory())
+
+
+async def _release_stt_async() -> int:
+    """
+    Unload the recognition model by clearing every reference to it.
+
+    The engine is a module-level singleton with no unload of its own, so it is
+    released by dropping both holders and letting the garbage collector take
+    the tensors. Any reference left behind would keep ~1.5 GB resident, which is
+    why the freed amount is measured rather than assumed.
+    """
+    global _stt_engine
+    try:
+        import torch
+
+        from src import stt_engine as stt_module
+
+        if not torch.cuda.is_available():
+            return 0
+        before = torch.cuda.memory_allocated()
+        _stt_engine = None
+        stt_module._stt_engine = None
+        freed = await asyncio.to_thread(_release_cuda_cache)
+        await asyncio.to_thread(_evict_stranded_modules)
+        after = torch.cuda.memory_allocated()
+        total = int((before - after) // (1024 * 1024))
+        logger.info(
+            f"Recognition model released: {total} MB freed "
+            f"({freed} MB of it was cached blocks)"
+        )
+        return total
+    except Exception as e:
+        logger.warning(f"STT release failed: {e}")
+        return 0
+
+
+@app.post("/api/models/release")
+async def release_models(request: dict):
+    """
+    Free GPU memory on demand, for the settings button.
+
+    Refuses rather than damages: background mode holds the very same
+    recognition model, and speech synthesis needs its model while it is on. In
+    both cases the user is told what is in the way instead of the app quietly
+    unloading something that is still in use.
+    """
+    what = str(request.get("what", "all")).lower()
+    if what not in ("all", "stt", "tts"):
+        raise HTTPException(status_code=400, detail="what: all, stt или tts")
+
+    before = await gpu_memory_status()
+    result = {"tts_released": False, "stt_released": False,
+              "tts_blocked": None, "stt_blocked": None}
+
+    if what in ("all", "tts") and _tts_engine_ready():
+        pending = _tts_load_task
+        if pending is not None and not pending.done():
+            try:
+                await asyncio.shield(pending)
+            except Exception:
+                pass
+        ok = await asyncio.to_thread(
+            _run_sync, _assistant._tts.disable_omnivoice)
+        result["tts_released"] = bool(ok)
+        if ok:
+            await asyncio.to_thread(_release_cuda_cache)
+            await asyncio.to_thread(_evict_stranded_modules)
+
+    if what in ("all", "stt") and _stt_loaded():
+        if _input_mode == INPUT_MODE_BACKGROUND or _wake_detector is not None:
+            # The detector borrowed this exact model. Unloading it here would
+            # break the mode the user is in.
+            result["stt_blocked"] = "background"
+        else:
+            result["stt_released"] = (await _release_stt_async()) > 0 or not _stt_loaded()
+
+    state = await gpu_memory_status()
+    state.update(result)
+    state["freed_mb"] = int(
+        (before.get("allocated_mb") or 0) - (state.get("allocated_mb") or 0)
+    )
+    state["freed_reserved_mb"] = int(
+        (before.get("reserved_mb") or 0) - (state.get("reserved_mb") or 0)
+    )
+    return state
+
+
 @app.get("/api/input-mode")
 async def get_input_mode():
     """Which way voice input is handled right now."""
@@ -1358,6 +1682,20 @@ async def toggle_tts(request: Request):
             )
             _tts_load_task = task
             success = await asyncio.shield(task)
+            if success:
+                # The extra Whisper is loaded on every start, and is only used
+                # to transcribe a voice sample. Cloning needs it exactly once,
+                # to fill the cache - dropping it before that would make the
+                # engine transcribe by itself and load a third ASR model of its
+                # own, which measured +1.5 GB instead of -1.5 GB. Instruct mode
+                # never needs it, so there it is dead weight right away.
+                mode = getattr(_assistant._tts, "_voice_mode", "instruct")
+                if mode != "clone" and _drop_tts_whisper_copy():
+                    freed = await asyncio.to_thread(_release_cuda_cache)
+                    logger.info(
+                        f"TTS: dropped the unused Whisper copy, "
+                        f"returned {freed} MB to the GPU"
+                    )
         else:
             # Turning TTS off has to be possible while the model is still
             # loading. Racing it would leave OmniVoice installed after the user
@@ -1372,6 +1710,19 @@ async def toggle_tts(request: Request):
             success = await asyncio.to_thread(
                 _run_off_loop, _assistant._tts.disable_omnivoice
             )
+            # disable_omnivoice swaps in a dummy engine, so the models are gone
+            # - but PyTorch keeps its blocks cached and the GPU still reads as
+            # busy. Measured: 18 MB in use against 3612 MB reserved.
+            if success:
+                freed = await asyncio.to_thread(_release_cuda_cache)
+                # disable_omnivoice cannot release OmniVoice's own network, which
+                # that library keeps alive through a closure - about 770 MB that
+                # would otherwise stay for the rest of the session.
+                stranded = await asyncio.to_thread(_evict_stranded_modules)
+                logger.info(
+                    f"TTS off: returned {freed} MB to the GPU"
+                    + (f", plus {stranded} MB of stranded modules" if stranded else "")
+                )
     except Exception as e:
         logger.error(f"TTS toggle failed: {type(e).__name__}: {e}")
         return {
@@ -1465,6 +1816,16 @@ async def tts_config(request: dict):
             )
             applied = True
             logger.info(f"Config applied to loaded OmniVoice: mode={mode}, ref={ref_audio}")
+            # set_voice_config is where a voice sample gets transcribed and
+            # cached. After that the copy has nothing left to do, and the cache
+            # keeps working without it - the engine is only reached for another
+            # transcription when the cache misses.
+            if _drop_tts_whisper_copy():
+                freed = await asyncio.to_thread(_release_cuda_cache)
+                logger.info(
+                    f"TTS: dropped the extra Whisper copy after caching, "
+                    f"returned {freed} MB to the GPU"
+                )
         except Exception as e:
             logger.warning(f"TTS config not applied to the live engine: {e}")
             _assistant._tts._voice_mode = mode

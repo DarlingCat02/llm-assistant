@@ -211,5 +211,16 @@
   "settings.wake.modelShared": "shared with recognition",
   "chat.mode.hotkeyShort": "Hotkey",
   "chat.mode.backgroundShort": "Background",
-  "chat.error.backendHint": "The reason is written to logs/backend.log in the program folder and to the Terminal tab. Most often port 8000 is already taken by another running instance - close it and start again."
+  "chat.error.backendHint": "The reason is written to logs/backend.log in the program folder and to the Terminal tab. Most often port 8000 is already taken by another running instance - close it and start again.",
+  "settings.memory.title": "Graphics memory",
+  "settings.memory.used": "using {v} GB",
+  "settings.memory.free": "{v} GB free",
+  "settings.memory.resident": "in memory: {list}",
+  "settings.memory.empty": "no models loaded",
+  "settings.memory.wake": "background recognition",
+  "settings.memory.release": "Unload models",
+  "settings.memory.releasing": "Unloading...",
+  "settings.memory.released": "Freed {v} MB",
+  "settings.memory.blockedBackground": "Recognition was not unloaded: background mode is holding it.",
+  "settings.memory.failed": "Could not unload: {msg}"
 }

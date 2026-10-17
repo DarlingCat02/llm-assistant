@@ -186,6 +186,17 @@ function initEventListeners() {
     // opened left it dead on the screen it is shown on.
     initInputMode();
 
+    // GPU memory: read it on start, and keep it honest afterwards.
+    const releaseBtn = document.getElementById('release-models-btn');
+    if (releaseBtn) releaseBtn.addEventListener('click', releaseModels);
+    refreshGpuMemory();
+    setInterval(() => {
+        // Only while the section is on screen - polling a hidden one is work
+        // for nobody.
+        const panel = document.getElementById('gpu-memory-section');
+        if (panel && panel.offsetParent !== null) refreshGpuMemory();
+    }, 10000);
+
     // Files
     document.getElementById('file-input').addEventListener('change', handleFileSelect);
     document.getElementById('file-remove').addEventListener('click', clearFile);
@@ -1421,6 +1432,74 @@ function updateLangFieldBadges() {
             badge.remove();
         }
     });
+}
+
+// === GPU memory ===
+// Two numbers, because they answer different questions: what the assistant
+// holds, and how much is actually free (which also counts LM Studio, a separate
+// process we cannot see inside). Showing only the second made it look like the
+// app never gives anything back.
+
+let gpuMemoryState = null;
+
+async function refreshGpuMemory() {
+    try {
+        const resp = await fetchWithTimeout(`${API_BASE}/api/gpu-memory`, {}, 10000);
+        const data = await resp.json();
+        gpuMemoryState = data;
+        renderGpuMemory();
+        return data;
+    } catch (e) {
+        return null;
+    }
+}
+
+function renderGpuMemory() {
+    const box = document.getElementById('gpu-memory-info');
+    if (!box || !gpuMemoryState) return;
+    const d = gpuMemoryState;
+    const gb = (v) => (v === null || v === undefined) ? '?' : (v / 1024).toFixed(1);
+
+    const parts = [t('settings.memory.used', { v: gb(d.allocated_mb) })];
+    parts.push(t('settings.memory.free', { v: gb(d.vram_free_mb) }));
+    box.textContent = parts.join(' · ');
+
+    const loaded = [];
+    if (d.tts_loaded) loaded.push('TTS');
+    if (d.stt_loaded) loaded.push(d.stt_shared_with_wake ? 'STT (общая)' : 'STT');
+    if (d.wake_running) loaded.push(t('settings.memory.wake'));
+    document.getElementById('gpu-memory-note').textContent = loaded.length
+        ? t('settings.memory.resident', { list: loaded.join(', ') })
+        : t('settings.memory.empty');
+}
+
+async function releaseModels() {
+    const btn = document.getElementById('release-models-btn');
+    const note = document.getElementById('gpu-memory-note');
+    if (btn) btn.disabled = true;
+    if (note) note.textContent = t('settings.memory.releasing');
+    try {
+        const resp = await fetchWithTimeout(`${API_BASE}/api/models/release`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ what: 'all' }),
+        }, 120000);
+        const data = await resp.json();
+        gpuMemoryState = data;
+        renderGpuMemory();
+        if (note) {
+            if (data.stt_blocked === 'background') {
+                // Say why instead of appearing to do nothing.
+                note.textContent = t('settings.memory.blockedBackground');
+            } else {
+                note.textContent = t('settings.memory.released', { v: data.freed_mb || 0 });
+            }
+        }
+    } catch (e) {
+        if (note) note.textContent = t('settings.memory.failed', { msg: e && e.message ? e.message : String(e) });
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 }
 
 // === Input mode (hotkey <-> background wake word) ===

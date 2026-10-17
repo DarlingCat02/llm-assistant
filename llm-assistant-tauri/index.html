@@ -314,6 +314,12 @@
 
             <!-- Voice Tab (STT + TTS) -->
             <div class="settings-tab-content" id="tab-voice">
+                <div class="settings-section" id="gpu-memory-section">
+                    <label data-i18n="settings.memory.title">Память видеокарты</label>
+                    <div class="slider-hint" id="gpu-memory-info"></div>
+                    <div class="slider-hint" id="gpu-memory-note"></div>
+                    <button id="release-models-btn" class="btn-secondary" data-i18n="settings.memory.release">Выгрузить модели</button>
+                </div>
                 <div class="settings-section">
                     <label data-i18n="settings.voice.sttTitle">Распознавание речи (STT)</label>
                     <div class="slider-hint" data-i18n="settings.voice.sttHint">Модель Whisper. Недостающие модели скачиваются при первом использовании. Требуется перезапуск.</div>

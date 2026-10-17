@@ -5,13 +5,15 @@ mode must borrow it instead of loading a second copy.
 That is the whole point of unifying the model setting - switching modes should
 cost nothing when the weights are already in VRAM.
 
+Judged on what the app reports, not on the log: when stderr is redirected to a
+file it is block-buffered, so log lines can lag the response by minutes and
+"no load line found" means nothing.
+
     python tests/check_mode_seamless.py
 """
 
-import io
 import json
 import os
-import re
 import sys
 import time
 import urllib.request
@@ -19,12 +21,12 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 API = "http://127.0.0.1:8000"
-LOG = os.environ.get("WAKE_TEST_LOG", "")
+MB = 1024 * 1024
 
 
-def post_json(path, payload, timeout=600):
+def post(path, payload, timeout=600):
     req = urllib.request.Request(
-        f"{API}{path}", data=json.dumps(payload).encode("utf-8"),
+        f"{API}{path}", data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
     )
     t0 = time.time()
@@ -32,103 +34,100 @@ def post_json(path, payload, timeout=600):
         return json.loads(r.read().decode("utf-8")), time.time() - t0
 
 
-def get(path, timeout=30):
+def get(path, timeout=60):
     with urllib.request.urlopen(f"{API}{path}", timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
-def log_since(marker_index):
-    if not LOG or not os.path.exists(LOG):
-        return ""
-    with open(LOG, encoding="utf-8", errors="replace") as f:
-        return f.read()[marker_index:]
-
-
-def log_size():
-    if not LOG or not os.path.exists(LOG):
-        return 0
-    return os.path.getsize(LOG)
-
-
-def wav_bytes(seconds=0.5, rate=16000):
-    import numpy as np
-    import soundfile as sf
-
-    t = np.linspace(0, seconds, int(seconds * rate), endpoint=False)
-    tone = (0.1 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
-    buf = io.BytesIO()
-    sf.write(buf, tone, rate, format="WAV", subtype="PCM_16")
-    return buf.getvalue()
+def release_stt():
+    """Get to a known-cold state, waiting for the memory to actually drop."""
+    for attempt in range(1, 6):
+        post("/api/models/release", {"what": "stt"})
+        mem = get("/api/gpu-memory")
+        if mem["allocated_mb"] < 100:
+            return mem
+        time.sleep(1.5)
+    return get("/api/gpu-memory")
 
 
 def upload_stt():
-    """One recognition request, which loads the speech model."""
+    import io
     import uuid
 
-    boundary = uuid.uuid4().hex
-    payload = wav_bytes()
-    body = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="t.wav"\r\n'
-        f"Content-Type: audio/wav\r\n\r\n"
-    ).encode() + payload + f"\r\n--{boundary}--\r\n".encode()
+    import numpy as np
+    import soundfile as sf
 
+    t = np.linspace(0, 0.5, 8000, endpoint=False)
+    tone = (0.1 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    buf = io.BytesIO()
+    sf.write(buf, tone, 16000, format="WAV", subtype="PCM_16")
+
+    b = uuid.uuid4().hex
+    body = (f"--{b}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="t.wav"\r\n'
+            f"Content-Type: audio/wav\r\n\r\n").encode() + buf.getvalue() + \
+           f"\r\n--{b}--\r\n".encode()
     req = urllib.request.Request(
         f"{API}/api/stt", data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-    )
-    with urllib.request.urlopen(req, timeout=600) as r:
+        headers={"Content-Type": f"multipart/form-data; boundary={b}"})
+    with urllib.request.urlopen(req, timeout=900) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
+def fail(msg):
+    print(f"\nFAIL: {msg}")
+    return 1
+
+
 def main():
-    post_json("/api/input-mode", {"mode": "hotkey"})
+    post("/api/input-mode", {"mode": "hotkey"})
     time.sleep(0.5)
 
-    mark = log_size()
-    print("loading the speech model with one recognition request...")
+    print("getting to a cold state...")
+    cold = release_stt()
+    print(f"  allocated {cold['allocated_mb']} MB, stt_loaded={cold['stt_loaded']}")
+    if cold["allocated_mb"] >= 100:
+        return fail("could not get the recognition model out of memory")
+
+    print("\nloading the speech model with one recognition request...")
     t0 = time.time()
     res = upload_stt()
-    print(f"  done in {time.time() - t0:.1f}s -> {res}")
+    loaded = get("/api/gpu-memory")
+    print(f"  took {time.time() - t0:.1f}s -> {res.get('text', '')!r}")
+    print(f"  allocated {loaded['allocated_mb']} MB, stt_loaded={loaded['stt_loaded']}")
+    if not loaded["stt_loaded"]:
+        return fail("the model did not load")
 
-    own = len(re.findall(r"Loading model from:", log_since(mark)))
-    print(f"  'Loading model from:' occurrences: {own}")
-    if own != 1:
-        print("\nFAIL: expected exactly one speech model load")
-        return 1
+    base_mb = loaded["allocated_mb"]
+    post("/api/models/release", {"what": "tts"})   # keep TTS out of the way
 
-    mark = log_size()
     print("\nswitching to background...")
-    _, dt = post_json("/api/input-mode", {"mode": "background"})
-    state = get("/api/input-mode")
-    tail = log_since(mark)
-
-    borrowed = "reuses the speech recognition model" in tail
-    own_loads = len(re.findall(r"Wake word model:", tail))
-
+    _, dt = post("/api/input-mode", {"mode": "background"})
+    bg = get("/api/input-mode")
+    bg_mem = get("/api/gpu-memory")
     print(f"  took {dt:.1f}s")
-    print(f"  model_shared reported : {state.get('model_shared')}")
-    print(f"  borrowed in the log   : {borrowed}")
-    print(f"  wake model own loads  : {own_loads}")
+    print(f"  model_shared: {bg.get('model_shared')}")
+    print(f"  allocated {bg_mem['allocated_mb']} MB (was {base_mb} MB before switching)")
 
-    if not borrowed or own_loads:
-        print("\nFAIL: the detector loaded a second copy instead of borrowing")
-        return 1
+    if not bg.get("model_shared"):
+        return fail("the detector did not borrow the recognition model")
+    grown = bg_mem["allocated_mb"] - base_mb
 
-    mark = log_size()
+    if not bg.get("model_shared"):
+        return fail("the detector did not borrow the recognition model")
+    grown = bg_mem["allocated_mb"] - base_mb
+    if grown > 200:
+        return fail(f"a second copy was loaded: +{grown} MB")
+
     print("\nswitching back to hotkey...")
-    post_json("/api/input-mode", {"mode": "hotkey"})
-    tail = log_since(mark)
-    released_only = "released its borrowed model" in tail
-    unloaded = "Wake word model unloaded" in tail
-    print(f"  released without unloading: {released_only}")
-    print(f"  wrongly unloaded it       : {unloaded}")
+    post("/api/input-mode", {"mode": "hotkey"})
+    back = get("/api/gpu-memory")
+    print(f"  stt_loaded: {back['stt_loaded']} (the model must survive)")
+    print(f"  allocated {back['allocated_mb']} MB")
+    if not back["stt_loaded"]:
+        return fail("switching back took the recognition model away")
 
-    if not released_only or unloaded:
-        print("\nFAIL: switching back took the shared model away from recognition")
-        return 1
-
-    print("\nPASS: background mode borrowed the model, and gave it back intact.")
+    print("\nPASS: background mode borrowed the model and gave it back intact.")
     return 0
 
 
