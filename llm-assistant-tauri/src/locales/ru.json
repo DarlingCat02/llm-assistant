@@ -210,5 +210,6 @@
   "chat.mode.error": "Не удалось переключить: {msg}",
   "settings.wake.modelShared": "общая с распознаванием",
   "chat.mode.hotkeyShort": "Хоткей",
-  "chat.mode.backgroundShort": "Фон"
+  "chat.mode.backgroundShort": "Фон",
+  "chat.error.backendHint": "Причина записана в файл logs/backend.log в папке программы и во вкладке «Терминал». Чаще всего порт 8000 уже занят другим запущенным экземпляром — закройте его и запустите программу снова."
 }

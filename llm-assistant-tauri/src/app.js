@@ -109,7 +109,10 @@ try {
 
 // === Initialization ===
 
-async function waitForApi(retries = 90, delay = 1000) {
+// A cold start loads the embedding model and ChromaDB before the port opens,
+// which measured 14 s warm and 45+ s cold. Stopping at 90 s produced a false
+// "backend not running" on a machine that simply needed a bit longer.
+async function waitForApi(retries = 120, delay = 1000) {
     for (let i = 0; i < retries; i++) {
         try {
             const response = await fetch(`${API_BASE}/api/status`, { method: 'GET' });
@@ -144,8 +147,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         connectWebSocket();
         updateStatus();
     } else {
-        document.getElementById('messages-container').innerHTML = 
-            `<div class="error">${t('chat.error.backend')}</div>`;
+        // Say where to look. "Backend not running" on its own sent the user
+        // hunting; the reason is almost always written down already.
+        document.getElementById('messages-container').innerHTML =
+            `<div class="error">${t('chat.error.backend')}<br><br>${t('chat.error.backendHint')}</div>`;
     }
 });
 

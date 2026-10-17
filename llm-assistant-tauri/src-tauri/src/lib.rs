@@ -209,6 +209,7 @@ fn spawn_log_pump<R>(
     logs: Arc<Mutex<Vec<String>>>,
     total: Arc<std::sync::atomic::AtomicU64>,
     handle: AppHandle,
+    log_file: Option<Arc<Mutex<std::fs::File>>>,
 ) where
     R: std::io::Read + Send + 'static,
 {
@@ -230,6 +231,13 @@ fn spawn_log_pump<R>(
                         l.push(note.clone());
                     }
                     total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(file) = &log_file {
+                        use std::io::Write;
+                        if let Ok(mut f) = file.lock() {
+                            let _ = writeln!(f, "{}", note);
+                            let _ = f.flush();
+                        }
+                    }
                     let _ = handle.emit("backend-log", note);
                     break;
                 }
@@ -262,6 +270,18 @@ fn spawn_log_pump<R>(
                     }
                 }
                 total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // Also on disk. The terminal is only visible once the window
+                // opens, and the in-memory buffer is capped - so a backend that
+                // dies before anyone looks left no trace of why. Failures here
+                // are ignored on purpose: a full disk must not stop the pump
+                // and freeze the terminal.
+                if let Some(file) = &log_file {
+                    use std::io::Write;
+                    if let Ok(mut f) = file.lock() {
+                        let _ = writeln!(f, "{}", line);
+                        let _ = f.flush();
+                    }
+                }
                 // No println!/eprintln! here on purpose: this is a GUI process
                 // whose stdout/stderr are not attached to anything, and the
                 // write blocks once the (undrained) pipe buffer fills - which
@@ -401,7 +421,7 @@ fn start_python_backend(app_handle: AppHandle) {
         "--port",
         "8000",
     ])
-    .current_dir(project_dir)
+    .current_dir(&project_dir)
     // Without this Python encodes stdout/stderr with the system ANSI code page
     // (cp1251 here), which the log pump then decodes as UTF-8 and turns every
     // Russian log line into unreadable garbage.
@@ -424,6 +444,21 @@ fn start_python_backend(app_handle: AppHandle) {
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let pid = child.id();
+
+    // Fresh log file per backend start, so the file always describes the run
+    // that is happening now rather than a mixture of old failures.
+    let log_file = std::fs::create_dir_all(project_dir.join("logs")).ok().and_then(|()| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(project_dir.join("logs").join("backend.log"))
+            .ok()
+            .map(|f| Arc::new(Mutex::new(f)))
+    });
+    if log_file.is_none() {
+        error!("Cannot open logs/backend.log for writing");
+    }
 
     // Reuse the existing log buffer when the backend is restarted, otherwise
     // create one. The pump threads must write into the very same Arc that
@@ -450,14 +485,14 @@ fn start_python_backend(app_handle: AppHandle) {
         let logs_clone = logs.clone();
         let total_clone = total_logs.clone();
         let handle_clone = app_handle.clone();
-        spawn_log_pump(out, logs_clone, total_clone, handle_clone);
+        spawn_log_pump(out, logs_clone, total_clone, handle_clone, log_file.clone());
     }
     // stderr thread
     if let Some(err) = stderr {
         let logs_clone = logs.clone();
         let total_clone = total_logs.clone();
         let handle_clone = app_handle.clone();
-        spawn_log_pump(err, logs_clone, total_clone, handle_clone);
+        spawn_log_pump(err, logs_clone, total_clone, handle_clone, log_file);
     }
     info!(
         "Python backend started with PID: {} (show_console={})",
