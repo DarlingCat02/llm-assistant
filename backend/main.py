@@ -18,6 +18,7 @@ import logging
 import re
 import sys
 import os
+import time
 import asyncio
 import gc
 import warnings
@@ -681,6 +682,60 @@ def _model_size_mb() -> int | None:
     return _APPROX_MODEL_MB.get(name)
 
 
+_vram_cache: tuple[float, dict] = (0.0, {})
+
+
+def _vram_totals() -> dict:
+    """
+    Real usage for the whole graphics card, including other programs.
+
+    torch.cuda.mem_get_info() reports only its own context on Windows: measured
+    1175 MB used against the card actually holding 5481 MB, because LM Studio
+    and everything else allocate outside it. Reading nvidia-smi is the only way
+    to tell the user what is really going on.
+
+    Cached briefly, because the UI polls this and NVML is not free.
+    """
+    global _vram_cache
+    now = time.time()
+    if now - _vram_cache[0] < 2.0 and _vram_cache[1]:
+        return dict(_vram_cache[1])
+
+    result: dict = {}
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total,memory.used,memory.free",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        line = (out.stdout or "").strip().splitlines()
+        if line:
+            total, used, free = (int(x.strip()) for x in line[0].split(","))
+            result = {"total_mb": total, "used_mb": used, "free_mb": free,
+                      "source": "nvidia-smi"}
+    except Exception as e:
+        logger.debug(f"nvidia-smi unavailable: {e}")
+
+    if not result:
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                free, total = torch.cuda.mem_get_info()
+                result = {"total_mb": int(total // (1024 * 1024)),
+                          "used_mb": int((total - free) // (1024 * 1024)),
+                          "free_mb": int(free // (1024 * 1024)),
+                          "source": "torch"}
+        except Exception:
+            pass
+
+    if result:
+        _vram_cache = (now, result)
+    return dict(result)
+
+
 def _gpu_free_mb() -> int | None:
     """Free VRAM right now, so the warning is about this machine, not a guess."""
     try:
@@ -867,25 +922,35 @@ async def gpu_memory_status():
     view) and how much is actually free (which also accounts for LM Studio, a
     separate process we cannot see inside).
     """
-    allocated = reserved = free = total = None
+    allocated = reserved = None
     try:
         import torch
 
         if torch.cuda.is_available():
             allocated = int(torch.cuda.memory_allocated() // (1024 * 1024))
             reserved = int(torch.cuda.memory_reserved() // (1024 * 1024))
-            free, total = torch.cuda.mem_get_info()
-            free = int(free // (1024 * 1024))
-            total = int(total // (1024 * 1024))
     except Exception as e:
         logger.debug(f"Memory probe failed: {e}")
+
+    totals = _vram_totals()
+    total = totals.get("total_mb")
+    used = totals.get("used_mb")
+    free = totals.get("free_mb")
+    # What the rest of the machine holds: LM Studio is usually most of it, and
+    # without this the assistant's own number reads as if nothing else is there.
+    others = None
+    if used is not None and allocated is not None:
+        others = max(0, used - allocated)
 
     detector = _wake_detector
     return {
         "allocated_mb": allocated,
         "reserved_mb": reserved,
+        "vram_used_mb": used,
+        "vram_used_by_others_mb": others,
         "vram_free_mb": free,
         "vram_total_mb": total,
+        "vram_source": totals.get("source"),
         "stt_loaded": _stt_loaded(),
         "stt_shared_with_wake": bool(
             detector and not detector.owns_model and detector.is_model_loaded

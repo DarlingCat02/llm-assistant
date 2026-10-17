@@ -1460,7 +1460,14 @@ function renderGpuMemory() {
     const d = gpuMemoryState;
     const gb = (v) => (v === null || v === undefined) ? '?' : (v / 1024).toFixed(1);
 
-    const parts = [t('settings.memory.used', { v: gb(d.allocated_mb) })];
+    // The whole card first, then what is ours. Showing only our share made the
+    // app look idle while LM Studio held several GB - the number simply did not
+    // add up with what Task Manager showed.
+    const parts = [t('settings.memory.totalUsed', { v: gb(d.vram_used_mb) })];
+    parts.push(t('settings.memory.ours', { v: gb(d.allocated_mb) }));
+    if (d.vram_used_by_others_mb) {
+        parts.push(t('settings.memory.others', { v: gb(d.vram_used_by_others_mb) }));
+    }
     parts.push(t('settings.memory.free', { v: gb(d.vram_free_mb) }));
     box.textContent = parts.join(' · ');
 

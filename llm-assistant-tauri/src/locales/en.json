@@ -222,5 +222,8 @@
   "settings.memory.releasing": "Unloading...",
   "settings.memory.released": "Freed {v} MB",
   "settings.memory.blockedBackground": "Recognition was not unloaded: background mode is holding it.",
-  "settings.memory.failed": "Could not unload: {msg}"
+  "settings.memory.failed": "Could not unload: {msg}",
+  "settings.memory.totalUsed": "{v} GB used",
+  "settings.memory.ours": "ours {v} GB",
+  "settings.memory.others": "other programs {v} GB"
 }

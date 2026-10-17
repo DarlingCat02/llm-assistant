@@ -222,5 +222,8 @@
   "settings.memory.releasing": "Выгружаю…",
   "settings.memory.released": "Освободиено {v} МБ",
   "settings.memory.blockedBackground": "Распознавание не выгружено: его держит фоновое распознавание.",
-  "settings.memory.failed": "Не удалось выгрузить: {msg}"
+  "settings.memory.failed": "Не удалось выгрузить: {msg}",
+  "settings.memory.totalUsed": "занято {v} ГБ",
+  "settings.memory.ours": "наша {v} ГБ",
+  "settings.memory.others": "другие программы {v} ГБ"
 }
