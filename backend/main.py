@@ -826,6 +826,52 @@ def _drop_tts_whisper_copy() -> int:
         return 0
 
 
+def _ensure_tts_whisper_copy(ref_audio: str = "") -> bool:
+    """
+    Bring OmniVoice's transcription Whisper back, on demand.
+
+    Instruct mode never needs it and it is dropped on load, so switching to
+    cloning afterwards used to leave the engine fetching a third model of its
+    own: the same 1.5 GB, a different path, about 3 s slower. Loading it here
+    fills the cache properly, and the copy is dropped again right after the
+    voice is configured.
+
+    Skipped when the sample is already cached, or when the recognition model
+    can simply be reused - that is the same weights in the same place.
+    """
+    try:
+        engine = getattr(_assistant._tts, "_engine", None) if _assistant else None
+        if engine is None:
+            return False
+        if getattr(engine, "_whisper_model", None) is not None:
+            return False
+        cache = getattr(engine, "_ref_text_cache", None)
+        if ref_audio and isinstance(cache, dict) and ref_audio in cache:
+            logger.info("Voice sample is already cached, no copy needed")
+            return False
+
+        import torch
+        from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+        from src.stt_engine import resolve_whisper_model
+
+        path = resolve_whisper_model(get_config().stt.model)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16 if device.startswith("cuda") else torch.float32
+        processor = AutoProcessor.from_pretrained(path, local_files_only=True)
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            path, local_files_only=True, torch_dtype=dtype)
+        model.to(device)
+        model.eval()
+        engine._whisper_processor = processor
+        engine._whisper_model = model
+        logger.info(f"Loaded the transcription copy on demand ({path} on {device})")
+        return True
+    except Exception as e:
+        logger.warning(f"Could not load the transcription copy on demand: {e}")
+        return False
+
+
 def _evict_stranded_modules(min_mb: int = 64) -> int:
     """
     Move orphaned GPU modules to the CPU, which gives the VRAM back.
@@ -1872,6 +1918,10 @@ async def tts_config(request: dict):
     applied = False
     if _tts_engine_ready():
         try:
+            # Cloning transcribes the sample once; that needs the copy, which
+            # instruct mode released on load. Put it back for this call.
+            if mode == "clone" and ref_audio:
+                await asyncio.to_thread(_ensure_tts_whisper_copy, ref_audio)
             _assistant._tts.set_voice_config(
                 mode=mode,
                 instruct=instruct,
