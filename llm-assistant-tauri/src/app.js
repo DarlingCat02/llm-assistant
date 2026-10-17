@@ -186,6 +186,14 @@ function initEventListeners() {
     // opened left it dead on the screen it is shown on.
     initInputMode();
 
+    // The header is the name of the open chat, and it is where you rename it -
+    // the same double-click the sidebar uses, so the gesture is consistent.
+    const chatTitleEl = document.getElementById('chat-title');
+    if (chatTitleEl) {
+        chatTitleEl.addEventListener('dblclick', startRenameChatHeader);
+        chatTitleEl.title = 'Двойной щелчок — переименовать';
+    }
+
     // GPU memory: read it on start, and keep it honest afterwards.
     const releaseBtn = document.getElementById('release-models-btn');
     if (releaseBtn) releaseBtn.addEventListener('click', releaseModels);
@@ -483,6 +491,87 @@ function updateConnectionStatus(connected) {
 
 // === Chats ===
 
+// Title per chat id, so the header and the sidebar never disagree and a rename
+// made in either place shows up in the other without reloading the list.
+const chatTitles = {};
+
+function setChatHeader(title) {
+    const el = document.getElementById('chat-title');
+    if (!el) return;
+    // Never yank the text out from under someone who is typing a new name.
+    if (el.dataset.editing === '1') return;
+    el.textContent = title || t('chat.select');
+}
+
+async function renameChat(chatId, title) {
+    // Save a new name and reflect it everywhere, without reloading the list.
+    await fetch(`${API_BASE}/api/chats/${chatId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+    });
+    chatTitles[chatId] = title;
+    const side = document.querySelector(`.chat-item-title[data-chat-id="${chatId}"]`);
+    if (side) {
+        side.textContent = title;
+        side.dataset.originalTitle = title;
+    }
+    if (chatId === currentChatId) setChatHeader(title);
+}
+
+function startRenameChatHeader() {
+    const chatId = currentChatId;
+    const el = document.getElementById('chat-title');
+    if (!chatId || !el || el.dataset.editing === '1') return;
+
+    const original = chatTitles[chatId] || el.textContent.trim();
+    el.dataset.editing = '1';
+    el.contentEditable = true;
+    el.focus();
+
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    let done = false;
+    const finish = async (save) => {
+        if (done) return;
+        done = true;
+        const next = el.textContent.trim();
+        el.contentEditable = false;
+        el.dataset.editing = '0';
+        if (save && next && next !== original) {
+            try {
+                await renameChat(chatId, next);
+            } catch (error) {
+                console.error('Ошибка переименования:', error);
+                el.textContent = original;
+            }
+        } else {
+            el.textContent = original;
+        }
+    };
+
+    // finish() is called directly rather than only on blur: a contenteditable
+    // does not always deliver the blur that Enter is expected to trigger, and
+    // the name would then never be saved.
+    el.addEventListener('blur', () => finish(true));
+    el.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            finish(true);
+            el.blur();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            finish(false);
+            el.blur();
+        }
+    });
+}
+
 async function loadChats() {
     try {
         const response = await fetch(`${API_BASE}/api/chats`);
@@ -490,11 +579,17 @@ async function loadChats() {
         
         const chatsList = document.getElementById('chats-list');
         chatsList.innerHTML = '';
-        
+
         chats.forEach(chat => {
+            chatTitles[chat.id] = chat.title;
             const chatEl = createChatElement(chat);
             chatsList.appendChild(chatEl);
         });
+
+        // The header follows the sidebar, including after a rename elsewhere.
+        if (currentChatId && chatTitles[currentChatId]) {
+            setChatHeader(chatTitles[currentChatId]);
+        }
     } catch (error) {
         console.error('Ошибка загрузки чатов:', error);
     }
@@ -549,20 +644,18 @@ async function startRenameChat(chatId, element) {
     sel.removeAllRanges();
     sel.addRange(range);
     
-    const finishRename = async () => {
+    const finishRename = async (save = true) => {
         element.contentEditable = false;
         const newTitle = element.textContent.trim();
-        
-        if (newTitle && newTitle !== element.dataset.originalTitle) {
+
+        if (save && newTitle && newTitle !== element.dataset.originalTitle) {
             try {
-                await fetch(`${API_BASE}/api/chats/${chatId}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: newTitle }),
-                });
-                await loadChats();
+                // Same path as the header: both places end up showing the same
+                // name, and the header follows if this is the open chat.
+                await renameChat(chatId, newTitle);
             } catch (error) {
                 console.error('Ошибка переименования:', error);
+                element.textContent = element.dataset.originalTitle;
             }
         } else {
             element.textContent = element.dataset.originalTitle;
@@ -570,15 +663,27 @@ async function startRenameChat(chatId, element) {
     };
     
     element.dataset.originalTitle = element.textContent;
-    
-    element.addEventListener('blur', finishRename, { once: true });
+
+    let settled = false;
+    const finish = (save) => {
+        if (settled) return;
+        settled = true;
+        finishRename(save);
+    };
+
+    element.addEventListener('blur', () => finish(true));
     element.addEventListener('keydown', (e) => {
+        e.stopPropagation();
         if (e.key === 'Enter') {
             e.preventDefault();
+            // Called directly: a contenteditable does not reliably deliver the
+            // blur that Enter is meant to cause, and the name would be lost.
+            finish(true);
             element.blur();
-        }
-        if (e.key === 'Escape') {
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
             element.textContent = element.dataset.originalTitle;
+            finish(false);
             element.blur();
         }
     });
@@ -616,7 +721,7 @@ async function selectChat(chatId) {
     await loadChatMessages(chatId);
     
     // Update the title
-    document.getElementById('chat-title').textContent = `${getLang()==='ru'?'Чат':'Chat'} #${chatId}`;
+    setChatHeader(chatTitles[chatId]);
     
     // Reset the context indicator (it updates after the next response)
     updateContextIndicator(0, 8192);
@@ -654,7 +759,8 @@ async function deleteChat() {
         });
         
         currentChatId = null;
-        document.getElementById('chat-title').textContent = t('chat.select');
+        delete chatTitles[null];
+        setChatHeader('');
         // Hide the context indicator
         const ctxIndicator = document.getElementById('context-indicator');
         if (ctxIndicator) ctxIndicator.style.display = 'none';
@@ -865,8 +971,8 @@ async function submitChat(fullMessage, options = {}) {
         // If this is the first message in a new chat, update currentChatId
         if (!currentChatId) {
             currentChatId = data.chat_id;
-            document.getElementById('chat-title').textContent = `${getLang()==='ru'?'Чат':'Chat'} #${currentChatId}`;
             await loadChats();
+            setChatHeader(chatTitles[currentChatId]);
         }
         
         // Render the response from the HTTP response

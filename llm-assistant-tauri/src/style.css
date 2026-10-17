@@ -154,6 +154,32 @@ body {
     font-weight: 600;
 }
 
+/* The header shows the chat's name and is where it is renamed, so it needs to
+   look editable and must not reflow while being typed into. */
+#chat-title {
+    padding: 2px 6px;
+    margin-left: -6px;
+    border-radius: 4px;
+    cursor: text;
+    outline: none;
+    max-width: 46vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: background-color 0.12s ease;
+}
+
+#chat-title:hover {
+    background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
+}
+
+#chat-title[contenteditable="true"] {
+    background: var(--bg-tertiary, rgba(255, 255, 255, 0.07));
+    cursor: text;
+    white-space: nowrap;
+    overflow-x: auto;
+}
+
 .chat-actions {
     display: flex;
     gap: 8px;
