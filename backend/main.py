@@ -120,6 +120,7 @@ from dataclasses import asdict
 
 from backend.database import ChatDatabase
 from src.personas import Persona
+from src import tts_voice_cache
 from backend.api import (
     memory_router,
     manager,
@@ -177,6 +178,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     global _config, _assistant, _db
     
     logger.info("Starting Local AI Assistant Backend...")
+
+    # Before anything can load speech synthesis: it decides whether a voice
+    # sample gets transcribed again or read from storage.
+    _patch_transcription_lookup()
 
     # Disable transformers progress bars (they flush stderr directly;
     # see _CrashProofStderr above for why that is fatal here)
@@ -682,6 +687,51 @@ def _model_size_mb() -> int | None:
     return _APPROX_MODEL_MB.get(name)
 
 
+def _patch_transcription_lookup() -> None:
+    """
+    Let a saved transcription satisfy the engine before it transcribes.
+
+    The engine transcribes a voice sample inside set_voice_config, which
+    enable_omnivoice calls while loading. That happens before any of our code
+    runs, so a stored transcription was never used on a switch-on: the sample
+    was transcribed again every time (visible as repeated "Transcribing
+    reference (caching)" lines in the log) even though the words were already
+    on disk.
+
+    Wrapping the method puts our lookup in front of it. The original runs only
+    when there is nothing saved, so the first use of a sample still
+    transcribes, and every later one does not.
+    """
+    try:
+        from src import tts_engine as engine_module
+
+        cls = getattr(engine_module, "OmniVoiceEngine", None)
+        if cls is None or getattr(cls, "_saved_lookup_installed", False):
+            return
+        original = cls._ensure_ref_text_cached
+
+        def with_saved_transcription(self, ref_audio_path):
+            try:
+                text = tts_voice_cache.lookup(ref_audio_path)
+                if text:
+                    self._ref_text_cache[ref_audio_path] = text
+                    logger.info(
+                        f"Using the saved transcription for "
+                        f"{Path(str(ref_audio_path)).name}"
+                    )
+                    return
+            except Exception as e:
+                logger.debug(f"Saved transcription lookup failed: {e}")
+            return original(self, ref_audio_path)
+
+        with_saved_transcription._saved_lookup_installed = True
+        with_saved_transcription._original = original
+        cls._ensure_ref_text_cached = with_saved_transcription
+        logger.info("Voice transcriptions will be reused when they exist")
+    except Exception as e:
+        logger.warning(f"Could not install the saved transcription lookup: {e}")
+
+
 _vram_cache: tuple[float, dict] = (0.0, {})
 
 
@@ -826,24 +876,75 @@ def _drop_tts_whisper_copy() -> int:
         return 0
 
 
+def _prime_voice_transcription(ref_audio: str) -> bool:
+    """
+    Put a saved transcription straight into the engine.
+
+    The text for a voice sample never changes while the file does not, so once
+    it has been transcribed once there is nothing left to compute: this hands
+    the engine the saved words and no model is loaded at all. That is the
+    difference between a first switch and every switch after it - measured
+    3.3 s and 1.5 GB against 0 s and nothing.
+
+    Returns False when there is nothing saved for this sample, which is when
+    the copy has to be loaded and the sample actually transcribed.
+    """
+    try:
+        engine = getattr(_assistant._tts, "_engine", None) if _assistant else None
+        if engine is None or not ref_audio:
+            return False
+        text = tts_voice_cache.lookup(ref_audio)
+        if not text:
+            return False
+        cache = getattr(engine, "_ref_text_cache", None)
+        if not isinstance(cache, dict):
+            return False
+        cache[ref_audio] = text
+        logger.info(f"Using the saved transcription for {Path(ref_audio).name}")
+        return True
+    except Exception as e:
+        logger.warning(f"Could not read the saved transcription: {e}")
+        return False
+
+
+def _remember_voice_transcription(ref_audio: str) -> bool:
+    """Persist whatever the engine just cached for this sample."""
+    try:
+        engine = getattr(_assistant._tts, "_engine", None) if _assistant else None
+        if engine is None or not ref_audio:
+            return False
+        cache = getattr(engine, "_ref_text_cache", None)
+        if not isinstance(cache, dict):
+            return False
+        text = cache.get(ref_audio)
+        return tts_voice_cache.remember(ref_audio, text) if text else False
+    except Exception as e:
+        logger.warning(f"Could not save the transcription: {e}")
+        return False
+
+
 def _ensure_tts_whisper_copy(ref_audio: str = "") -> bool:
     """
     Bring OmniVoice's transcription Whisper back, on demand.
 
-    Instruct mode never needs it and it is dropped on load, so switching to
-    cloning afterwards used to leave the engine fetching a third model of its
-    own: the same 1.5 GB, a different path, about 3 s slower. Loading it here
-    fills the cache properly, and the copy is dropped again right after the
-    voice is configured.
+    Only for a sample that has never been transcribed, or whose audio file
+    changed since: a saved transcription is used instead (see
+    _prime_voice_transcription), so this loads nothing at all on ordinary
+    switch-ons.
 
-    Skipped when the sample is already cached, or when the recognition model
-    can simply be reused - that is the same weights in the same place.
+    Instruct mode never needs it and it is dropped on load, so switching to
+    cloning used to leave the engine fetching a third model of its own: the
+    same 1.5 GB, a different path, about 3 s slower. Loading it here fills the
+    cache properly, and the copy is dropped again right after the voice is
+    configured.
     """
     try:
         engine = getattr(_assistant._tts, "_engine", None) if _assistant else None
         if engine is None:
             return False
         if getattr(engine, "_whisper_model", None) is not None:
+            return False
+        if _prime_voice_transcription(ref_audio):
             return False
         cache = getattr(engine, "_ref_text_cache", None)
         if ref_audio and isinstance(cache, dict) and ref_audio in cache:
@@ -1794,14 +1895,13 @@ async def toggle_tts(request: Request):
             _tts_load_task = task
             success = await asyncio.shield(task)
             if success:
-                # The extra Whisper is loaded on every start, and its only job is
-                # transcribing a voice sample. enable_omnivoice applies the
-                # saved voice config as part of loading, so by the time it
-                # returns the sample is already cached - in cloning mode too.
-                # Leaving it behind there is what made a second switch-on cost
-                # 1.5 GB more than the first (released 216 MB on the first
-                # switch-off, 2810 MB on the next). If a later voice change
-                # needs it again, _ensure_tts_whisper_copy brings it back.
+                # enable_omnivoice applies the saved voice config while
+                # loading, so a sample may have just been transcribed. Save it
+                # now - that is what makes every later switch-on free - and
+                # hand the copy back: its only job was that one transcription.
+                ref = getattr(_assistant._tts, "_voice_ref_audio", "") or ""
+                if ref:
+                    await asyncio.to_thread(_remember_voice_transcription, ref)
                 if _drop_tts_whisper_copy():
                     freed = await asyncio.to_thread(_release_cuda_cache)
                     logger.info(
@@ -1909,6 +2009,13 @@ async def tts_config(request: dict):
     ref_audio = request.get("ref_audio", None)  # path to reference file
     position_temp = request.get("position_temperature", 0.0)
     class_temp = request.get("class_temperature", 0.0)
+
+    # One canonical form for the sample, everywhere from here on. The engine
+    # keys its transcription cache on the exact string it is given, so
+    # 'voices/x.mp3' and an absolute path were counted as two different samples
+    # and the same file was transcribed twice in a row.
+    if ref_audio:
+        ref_audio = tts_voice_cache.normalize(ref_audio)
     
     # The facade forwards unconditionally to whatever engine object exists.
     # While OmniVoice is still loading that object is the un-initialised one,
@@ -1920,7 +2027,8 @@ async def tts_config(request: dict):
     if _tts_engine_ready():
         try:
             # Cloning transcribes the sample once; that needs the copy, which
-            # instruct mode released on load. Put it back for this call.
+            # instruct mode released on load. Put it back for this call - unless
+            # the words are already on disk, in which case nothing loads at all.
             if mode == "clone" and ref_audio:
                 await asyncio.to_thread(_ensure_tts_whisper_copy, ref_audio)
             _assistant._tts.set_voice_config(
@@ -1933,9 +2041,10 @@ async def tts_config(request: dict):
             applied = True
             logger.info(f"Config applied to loaded OmniVoice: mode={mode}, ref={ref_audio}")
             # set_voice_config is where a voice sample gets transcribed and
-            # cached. After that the copy has nothing left to do, and the cache
-            # keeps working without it - the engine is only reached for another
-            # transcription when the cache misses.
+            # cached. Keep the words so no later switch has to do it again,
+            # then hand the copy back - it has nothing left to do.
+            if mode == "clone" and ref_audio:
+                await asyncio.to_thread(_remember_voice_transcription, ref_audio)
             if _drop_tts_whisper_copy():
                 freed = await asyncio.to_thread(_release_cuda_cache)
                 logger.info(
@@ -1991,17 +2100,29 @@ async def get_voices():
 async def get_tts_config():
     """Get the current TTS configuration."""
     if not _assistant or not _assistant._tts:
-        return {"instruct": "female", "position_temperature": 0.0, "class_temperature": 0.0}
-    
+        return {"instruct": "female", "position_temperature": 0.0,
+                "class_temperature": 0.0}
+
     engine = _assistant._tts._engine
+    base = {"instruct": "female", "position_temperature": 0.0,
+            "class_temperature": 0.0}
     if hasattr(engine, '_instruct'):
-        return {
+        base.update({
             "instruct": engine._instruct,
             "position_temperature": engine._position_temperature,
             "class_temperature": engine._class_temperature,
-        }
-    
-    return {"instruct": "female", "position_temperature": 0.0, "class_temperature": 0.0}
+        })
+
+    # Say plainly whether the sample is already transcribed, so the saving is
+    # visible rather than something the user has to take on trust - and so the
+    # file they can edit to fix a wrong transcription is on screen.
+    ref = getattr(_assistant._tts, "_voice_ref_audio", "") or ""
+    try:
+        base["transcriptions"] = tts_voice_cache.summary(ref)
+    except Exception as e:
+        logger.debug(f"Transcription summary failed: {e}")
+        base["transcriptions"] = {}
+    return base
 
 
 @app.post("/api/tts/speak")

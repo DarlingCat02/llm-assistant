@@ -225,5 +225,10 @@
   "settings.memory.failed": "Не удалось выгрузить: {msg}",
   "settings.memory.totalUsed": "занято {v} ГБ",
   "settings.memory.ours": "наша {v} ГБ",
-  "settings.memory.others": "другие программы {v} ГБ"
+  "settings.memory.others": "другие программы {v} ГБ",
+  "settings.tts.transcript": "Транскрибация образца",
+  "settings.tts.transcript.saved": "Образец уже расшифрован — повторно не распознаётся.",
+  "settings.tts.transcript.missing": "Образец ещё не расшифрован.",
+  "settings.tts.transcript.path": "Файл: {file} (записей: {count}). Его можно открыть и поправить текст вручную.",
+  "settings.tts.transcript.idle": "Образец голоса не выбран."
 }

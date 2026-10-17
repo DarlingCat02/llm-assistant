@@ -225,5 +225,10 @@
   "settings.memory.failed": "Could not unload: {msg}",
   "settings.memory.totalUsed": "{v} GB used",
   "settings.memory.ours": "ours {v} GB",
-  "settings.memory.others": "other programs {v} GB"
+  "settings.memory.others": "other programs {v} GB",
+  "settings.tts.transcript": "Sample transcription",
+  "settings.tts.transcript.saved": "The sample is already transcribed - it is not transcribed again.",
+  "settings.tts.transcript.missing": "The sample has not been transcribed yet.",
+  "settings.tts.transcript.path": "File: {file} ({count} entries). You can open it and correct the text by hand.",
+  "settings.tts.transcript.idle": "No voice sample selected."
 }

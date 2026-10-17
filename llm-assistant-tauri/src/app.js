@@ -190,6 +190,7 @@ function initEventListeners() {
     const releaseBtn = document.getElementById('release-models-btn');
     if (releaseBtn) releaseBtn.addEventListener('click', releaseModels);
     refreshGpuMemory();
+    refreshTranscriptionInfo();
     setInterval(() => {
         // Only while the section is on screen - polling a hidden one is work
         // for nobody.
@@ -1432,6 +1433,35 @@ function updateLangFieldBadges() {
             badge.remove();
         }
     });
+}
+
+// === Voice transcription store ===
+// Worth saying out loud: the sample is transcribed once, and the words are
+// kept so no later start pays for it again. The file is also the place to fix
+// a transcription the model got wrong, so it is shown, not hidden.
+
+async function refreshTranscriptionInfo() {
+    const box = document.getElementById('tts-transcript-info');
+    if (!box) return;
+    try {
+        const resp = await fetchWithTimeout(`${API_BASE}/api/tts/config`, {}, 10000);
+        const data = await resp.json();
+        const info = data.transcriptions || {};
+        if (!info.file) {
+            box.textContent = '';
+            return;
+        }
+        const head = !info.has_sample
+            ? t('settings.tts.transcript.idle')
+            : (info.cached
+                ? t('settings.tts.transcript.saved')
+                : t('settings.tts.transcript.missing'));
+        box.textContent = `${head} ${t('settings.tts.transcript.path', {
+            file: info.file, count: info.count || 0,
+        })}`;
+    } catch (e) {
+        box.textContent = '';
+    }
 }
 
 // === GPU memory ===
