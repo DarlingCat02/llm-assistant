@@ -1794,17 +1794,18 @@ async def toggle_tts(request: Request):
             _tts_load_task = task
             success = await asyncio.shield(task)
             if success:
-                # The extra Whisper is loaded on every start, and is only used
-                # to transcribe a voice sample. Cloning needs it exactly once,
-                # to fill the cache - dropping it before that would make the
-                # engine transcribe by itself and load a third ASR model of its
-                # own, which measured +1.5 GB instead of -1.5 GB. Instruct mode
-                # never needs it, so there it is dead weight right away.
-                mode = getattr(_assistant._tts, "_voice_mode", "instruct")
-                if mode != "clone" and _drop_tts_whisper_copy():
+                # The extra Whisper is loaded on every start, and its only job is
+                # transcribing a voice sample. enable_omnivoice applies the
+                # saved voice config as part of loading, so by the time it
+                # returns the sample is already cached - in cloning mode too.
+                # Leaving it behind there is what made a second switch-on cost
+                # 1.5 GB more than the first (released 216 MB on the first
+                # switch-off, 2810 MB on the next). If a later voice change
+                # needs it again, _ensure_tts_whisper_copy brings it back.
+                if _drop_tts_whisper_copy():
                     freed = await asyncio.to_thread(_release_cuda_cache)
                     logger.info(
-                        f"TTS: dropped the unused Whisper copy, "
+                        f"TTS: dropped the Whisper copy after caching, "
                         f"returned {freed} MB to the GPU"
                     )
         else:
