@@ -19,6 +19,7 @@ import re
 import sys
 import os
 import asyncio
+import warnings
 import tempfile
 import base64
 import io
@@ -180,8 +181,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     try:
         from transformers.utils import logging as hf_logging
         hf_logging.disable_progress_bar()
+        # Whisper repeats the same handful of warnings on every generate()
+        # call - attention mask, custom logits processor, forced_decoder_ids.
+        # They arrive the first time speech recognition runs and then never
+        # stop, drowning the one part of the terminal the user actually reads
+        # when something breaks. Errors still get through.
+        hf_logging.set_verbosity_error()
     except Exception:
         pass
+
+    # Browser voice notes arrive as webm/opus, which soundfile cannot open, so
+    # librosa always drops down to audioread. That fallback works - verified on
+    # the user's own recordings - and the warning says nothing they can act on,
+    # so it only makes the terminal harder to read.
+    warnings.filterwarnings("ignore", message=".*PySoundFile failed.*")
+    warnings.filterwarnings("ignore", category=FutureWarning, module=r"librosa.*")
 
     # Load configuration
     _config = get_config()
