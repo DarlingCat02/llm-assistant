@@ -22,6 +22,9 @@ Local AI assistant with voice input/output, web search, **Vision-Language (VL) c
 - 🖥️ **Desktop app** — Tauri (exe file)
 - ⚡ **Fast** — runs on local models via Ollama / LM Studio
 - ⌨️ **Global hotkeys** — work outside the app window, editable in Settings → General
+- 🗣️ **Wake word** — a spoken phrase starts voice input, no keyboard needed (off by default)
+- 🎚️ **Input modes** — hotkey or an always-open background listener, one Whisper instance either way
+- 📉 **VRAM readout** — who holds the video memory right now, and a button to hand it back
 - 🎛️ **Customizable UI** — resizable sidebar, settings tabs
 - 🧵 **Per-chat context** — each chat has isolated history
 - 📊 **Context indicator** — shows used tokens / limit
@@ -55,6 +58,7 @@ But it can still be used with full functionality for standard OS interactions, e
 However I have no ideas yet how to reduce VRAM consumption. Since I want to use high-quality STT and TTS (especially TTS) models and I haven't found an OmniVoice analog with lower VRAM usage that matches its quality. It is not the most flexible model to configure, but it is good out of the box.
 I personally use and recommend 2B-7B models with different quantization. Just browse Hugging Face and pick modern models (e.g. Qwen 3.5, Qwen 3.6, Gemma etc.).
 The project is under active development. As new models, ideas and tools appear, the stack will evolve. The architecture will also be gradually improved and refactored.
+Addendum: VRAM did become manageable later on, without giving up the models — one shared Whisper instead of two copies, unloading that actually returns the memory, and a readout that shows who holds what. See *VRAM: what is loaded, and how to give it back*.
 
 ## Quick start
 
@@ -466,6 +470,24 @@ HOTKEY_VOICE_NUM=Ctrl+Num0
 HOTKEY_LIVE=Ctrl+Shift+L
 ```
 
+## Input modes: hotkey or background
+
+The slider above the chat picks **how voice input is started**:
+
+- **Hotkey** — nothing listens. Recognition loads when you press the key.
+- **Background** — the microphone stays open and the first sound starts
+  recognition by itself (this is the wake-word listener, at full strength).
+
+The two are exclusive on purpose: only **one** Whisper instance is ever resident.
+The wake word borrows the same model the STT uses rather than loading a second
+copy — switching modes costs 0.0-0.1 s and no extra memory, and switching back
+and forth does not accumulate anything. In the API this is
+`GET/POST /api/input-mode`.
+
+If the background listener cannot start (no model, no audio backend, a busy
+microphone), the mode stays on hotkey and the reason is shown in Settings —
+the UI never claims the microphone is open when it is not.
+
 ## Voice output (TTS)
 
 ### Modes
@@ -478,6 +500,42 @@ HOTKEY_LIVE=Ctrl+Shift+L
 Add audio files to `voices/` folder:
 - Format: MP3, WAV
 - Recommended duration: 3-10 seconds
+
+OmniVoice needs a transcript of the sample, which means recognising it — an
+expensive step that used to run again on every clone. It is now computed **once
+per file** and kept in `storage/tts_voices.json`, keyed by the sample's
+name, size and modification time. Editing an entry by hand is respected and
+never overwritten; replacing or re-recording the sample re-transcribes it. The
+stored text is shown in **Settings → Voice**, next to the "unload models"
+button.
+
+## VRAM: what is loaded, and how to give it back
+
+**Settings → Voice** shows a live readout of the video memory: total, used,
+what the assistant itself holds, what other programs hold (LM Studio is usually
+the biggest neighbour, and without it the assistant's own number looks like the
+whole card), and what is free. Read through `nvidia-smi`, with torch as a
+fallback.
+
+**Unload models** frees the speech and recognition models on demand and reports
+how much came back. It refuses rather than damages: background input mode holds
+the very same recognition model, so releasing it while listening is refused with
+an explanation instead of silently breaking the microphone.
+
+Measured on a 12 GB card, TTS synthesis and cloning both settle at ~1.96 GB
+(they used to hold ~3.5 GB, because each mode kept a second copy of Whisper).
+Turning TTS off now hands nearly all of it back — 27 MB of ours left, ~70 MB
+reserved by the CUDA context. That last part never comes back and is not a leak:
+it is the context plus cuBLAS buffers.
+
+The first load of a model is dominated by disk, not by code. Reading OmniVoice
+(3.1 GB) cold at ~76 MB/s takes ~41 s; with the file cache warm it is ~2 s. If
+the assistant seems to hang for 40 seconds the first time you enable voice
+output, that is the disk — the log shows the load starting immediately.
+
+There is no idle timer that unloads models behind your back on purpose: measured
+on this machine, handing the cache back costs nothing but makes the next load
+read from disk again, so it is done on request instead.
 
 ## Configuration (.env)
 
@@ -535,6 +593,14 @@ LOG_LEVEL=INFO
 | POST | `/api/chat` | Send message (returns `used_context_tokens`, `max_context_tokens`, `actions`, supports `images` array) |
 | POST | `/api/stt` | Voice recognition |
 | POST | `/api/upload` | Upload file (document or image) |
+| GET | `/api/audio-inputs` | Available microphones |
+| GET | `/api/wake-word` | Wake phrase + listener state |
+| PUT | `/api/wake-word` | Set the wake phrase |
+| GET | `/api/input-mode` | Current input mode (`hotkey` / `background`) + listener state |
+| POST | `/api/input-mode` | Switch mode (`{"mode": "hotkey"\|"background"}`) |
+| GET | `/api/gpu-memory` | VRAM breakdown, what is loaded, freed context |
+| POST | `/api/gpu-memory/release` | Hand cached CUDA blocks back to the driver |
+| POST | `/api/models/release` | Unload models (`{"what": "all"\|"stt"\|"tts"}`), refuses if in use |
 | GET | `/api/chats` | List chats |
 | GET | `/api/config` | Current config |
 | PUT | `/api/config` | Update config |
@@ -546,7 +612,9 @@ LOG_LEVEL=INFO
 | GET | `/api/avatars/{name}` | Serve an avatar image |
 | DELETE | `/api/avatars/{name}` | Delete an avatar |
 | POST | `/api/tts/toggle` | Enable/disable TTS |
+| GET | `/api/tts/status` | TTS state |
 | POST | `/api/tts/config` | Configure voice |
+| GET | `/api/tts/voices` / `/api/tts/config` | Voice list / current voice |
 | POST | `/api/tts/speak` | Synthesize speech |
 
 ## Project structure
@@ -559,6 +627,7 @@ local_assistant/
 ├── personas.json           # Persona catalog (git-ignored)
 ├── personas.json.example   # Template personas.json
 ├── avatars/                # Uploaded avatars (git-ignored)
+├── logs/                   # Backend log written by the desktop app
 ├── config.py               # Python config
 ├── requirements.txt        # Python dependencies
 ├── requirements-dev.txt    # Test dependencies (pytest)
@@ -577,6 +646,8 @@ local_assistant/
 │   ├── personas.py         # Persona storage
 │   ├── stt_engine.py       # Whisper STT (Russian)
 │   ├── tts_engine.py       # OmniVoice TTS
+│   ├── wake_word.py        # Wake-word listener (VAD + borrowed Whisper)
+│   ├── tts_voice_cache.py  # Saved transcriptions of voice samples
 │   ├── web_search.py       # DuckDuckGo search
 │   ├── agent_tools.py      # Agent tools
 │   ├── file_processor.py   # File handling
@@ -601,8 +672,8 @@ local_assistant/
 ├── models/                  # Local models
 │   ├── omnivoice/           # TTS model
 │   └── whisper-large-v3-turbo/  # STT model
-├── storage/                 # ChromaDB data
-└── voices/                  # Voices for cloning
+├── storage/                 # ChromaDB data + tts_voices.json (git-ignored)
+└── voices/                  # Voices for cloning (git-ignored)
 ```
 
 ## Tools (Tool Calling)
@@ -633,6 +704,34 @@ round-trips and the tool-action payload.
 
 Run it after changing config, prompts, personas or memory logic — it needs about
 a second and catches the regressions that are hard to see in the UI.
+
+### Hardware checks (`tests/check_*.py`)
+
+These are **not** part of pytest: each one needs a real backend on port 8000 and
+touches hardware, so they are run by hand, one at a time, when the thing they
+guard has been touched. Each states in its first lines what it asserts and which
+defect it came from.
+
+```bash
+# start the app first, then:
+python tests/check_input_modes.py        # one Whisper only, no drift across switches
+python tests/check_memory_release.py     # unloading gives the memory back
+python tests/check_vram_creep.py         # no growth across load/unload cycles
+python tests/check_voice_transcript_cache.py  # a sample is transcribed once
+python tests/check_stt_noise.py          # the terminal stays readable
+python tests/check_wake_real.py          # wake phrase on a real recording
+```
+
+Groups: `check_wake_*` / `check_mic_levels` for the wake listener (some need a
+microphone), `check_tts_*` / `check_mode_*` / `check_clone_after_drop` for
+speech and mode switching, `check_input_modes` / `check_memory_release` /
+`check_vram_creep` for memory, `check_ws_disconnect` / `check_tool_*` for the
+backend. They are measurements first and tests second: several print numbers and
+assert a threshold, so a failure is as often "the machine is different" as
+"the code is wrong".
+
+`python tests/fetch_whisper_model.py tiny` downloads the small model the wake
+word needs, when it is missing.
 
 ## Troubleshooting
 
@@ -675,7 +774,7 @@ a second and catches the regressions that are hard to see in the UI.
 
 ### TTS model fails to load
 1. **Read the error text** — the app shows the backend reason in the alert
-2. **First load takes ~1 minute** (OmniVoice + Whisper cache), do not click twice
+2. **First load is disk-bound** — OmniVoice is 3.1 GB and reading it cold takes ~40 s at ~76 MB/s, do not click twice
 3. **Check VRAM** — full stack (LLM + Whisper + OmniVoice) needs 7-10 GB
 
 ### Voice recognition fails (STT 422)
@@ -709,6 +808,9 @@ MIT
 - 🖥️ **Desktop app** — Tauri (exe файл)
 - ⚡ **Быстрый** — работает на локальных моделях через Ollama/LM Studio
 - ⌨️ **Глобальные горячие клавиши** — работают вне окна приложения, меняются в Настройки → Общие
+- 🗣️ **Пробуждающая фраза** — голосом, без клавиатуры (по умолчанию выключено)
+- 🎚️ **Режимы ввода** — по горячей клавише или постоянно открытый микрофон, модель распознавания в обоих случаях одна
+- 📉 **Показатель видеопамяти** — кто сейчас занимает VRAM и кнопка «отдать обратно»
 - 🎛️ **Настраиваемый UI** — изменяемая ширина боковой панели, вкладки настроек
 - 🧵 **Контекст по чатам** — каждый чат имеет свою историю, не смешивается
 - 📊 **Индикатор контекста** — показывает использованные токены / лимит
@@ -742,6 +844,7 @@ MIT
 Однако пока у меня нет идей как можно уменьшить потребление VRAM. Поскольку я хочу использовать качественные STT и TTS (Особенно TTS) модели и аналог OmniVoice по качеству с меньшим потрелением VRAM я не нашел. Это не самая гибкая в настройке модель, но она хороша изначально.
 Лично я использую и советую модели на 2B-7B параметров разного квантования. Достаточно лазить в Hugging Face и брать современные модели (например Qwen 3.5, Qwen 3.6, Gemma и т.п).
 Проект находится в активной разработке. По мере появления новых моделей, идей и инструментов стек будет эволюционировать. Архитектура также будет постепенно улучшаться и рефакториться. 
+Дополнение: позже VRAM всё же стал управляемым, без отказа от моделей — один общий Whisper вместо двух копий, выгрузка, которая действительно возвращает память, и показатель, видно кто что занимает. См. *Видеопамять: что загружено и как вернуть*. 
 
 ## Быстрый старт
 
@@ -1152,6 +1255,24 @@ HOTKEY_VOICE_NUM=Ctrl+Num0
 HOTKEY_LIVE=Ctrl+Shift+L
 ```
 
+## Режимы ввода: горячая клавиша или фон
+
+Ползунок над чатом выбирает, **как запускается голосовой ввод**:
+
+- **Горячая клавиша** — микрофон не открыт, модель грузится по нажатию.
+- **Фон** — микрофон остаётся открыт, первый же звук запускает
+  распознавание сам (это и есть слушатель пробуждающей фразы, на полную).
+
+Режимы исключают друг друга намеренно: одновременно в памяти живёт **один**
+экземпляр Whisper. Пробуждающая фраза занимает ту же модель, что и обычное
+распознавание, а не грузит вторую копию — переключение занимает 0.0-0.1 с и не
+добавляет памяти, повторные переключения тоже ничего не накапливают. В API это
+`GET/POST /api/input-mode`.
+
+Если фоновый слушатель не смог запуститься (нет модели, нет аудио-бэкенда,
+микрофон занят), режим остаётся на горячей клавише, а причина показывается в
+настройках — интерфейс никогда не пишет, что микрофон открыт, если это не так.
+
 ## Голосовой вывод (TTS)
 
 ### Режимы
@@ -1164,6 +1285,40 @@ HOTKEY_LIVE=Ctrl+Shift+L
 Добавьте аудио файлы в папку `voices/`:
 - Формат: MP3, WAV
 - Рекомендуемая длительность: 3-10 секунд
+
+OmniVoice нужен текст образца, то есть его распознавание — дорогая операция,
+которая раньше повторялась при каждом клонировании. Теперь она считается
+**один раз на файл** и хранится в `storage/tts_voices.json` под именем, размером
+и временем изменения файла. Правка записи руками не перезаписывается, а
+замена или перезапись образца приводит к новому распознаванию. Сохранённый
+текст показывается в **Настройки → Голос** рядом с кнопкой выгрузки моделей.
+
+## Видеопамять: что загружено и как вернуть
+
+**Настройки → Голос** показывают текущее состояние видеопамяти: всего, занято,
+сколько занимает сам ассистент, сколько — другие программы (обычно главный
+сосед — LM Studio, без него цифра ассистента выглядит как вся карта) и сколько
+свободно. Данные читаются через `nvidia-smi`, с запасным вариантом через torch.
+
+**Кнопка «Выгрузить модели»** освобождает модели речи и распознавания и
+показывает, сколько вернулось. Лучше отказать, чем навредить: фоновый режим
+ввода держит ту же самую модель распознавания, поэтому выгрузка во время
+слушания отклоняется с объяснением, а не ломает микрофон молча.
+
+Замерено на карте 12 ГБ: синтез и клонирование голоса укладываются в ~1.96 ГБ
+(раньше держали ~3.5 ГБ, потому что каждый режим держал вторую копию Whisper).
+После выключения TTS почти вся память возвращается — остаётся 27 МБ наших и
+~70 МБ, удерживаемых контекстом CUDA. Вот это последнее не возвращается и утечкой
+не является: контекст плюс буферы cuBLAS.
+
+Первую загрузку модели определяет диск, а не код. Чтение OmniVoice (3.1 ГБ) с
+холодного кэша со скоростью ~76 МБ/с занимает ~41 с, с прогретым — ~2 с. Если
+при первом включении голоса ассистент «висит» 40 секунд, это диск — по журналу
+видно, что загрузка начинается сразу.
+
+Таймера простоя, который выгружает модели за спиной у пользователя, здесь нет:
+по замерам на этой машине возврат кэша ничего не стоит, но заставляет следующую
+загрузку снова читать с диска, поэтому выгрузка делается по запросу.
 
 ## Конфигурация (.env)
 
@@ -1221,6 +1376,14 @@ LOG_LEVEL=INFO
 | POST | `/api/chat` | Отправить сообщение (возвращает `used_context_tokens`, `max_context_tokens`, `actions`, поддерживает `images` массив) |
 | POST | `/api/stt` | Распознать голос |
 | POST | `/api/upload` | Загрузить файл (документ или изображение) |
+| GET | `/api/audio-inputs` | Доступные микрофоны |
+| GET | `/api/wake-word` | Фраза пробуждения и состояние слушателя |
+| PUT | `/api/wake-word` | Задать фразу пробуждения |
+| GET | `/api/input-mode` | Текущий режим ввода (`hotkey` / `background`) и состояние слушателя |
+| POST | `/api/input-mode` | Сменить режим (`{"mode": "hotkey"\|"background"}`) |
+| GET | `/api/gpu-memory` | Разбивка VRAM, что загружено, сколько освобождено |
+| POST | `/api/gpu-memory/release` | Вернуть зарезервированные блоки CUDA драйверу |
+| POST | `/api/models/release` | Выгрузить модели (`{"what": "all"\|"stt"\|"tts"}`), отказ при использовании |
 | GET | `/api/chats` | Список чатов |
 | GET | `/api/config` | Текущая конфигурация |
 | PUT | `/api/config` | Обновить конфигурацию |
@@ -1232,7 +1395,9 @@ LOG_LEVEL=INFO
 | GET | `/api/avatars/{name}` | Отдать картинку аватара |
 | DELETE | `/api/avatars/{name}` | Удалить аватар |
 | POST | `/api/tts/toggle` | Включить/выключить TTS |
+| GET | `/api/tts/status` | Состояние TTS |
 | POST | `/api/tts/config` | Настроить голос |
+| GET | `/api/tts/voices` / `/api/tts/config` | Список голосов / текущий голос |
 | POST | `/api/tts/speak` | Озвучить текст |
 
 ## Структура проекта
@@ -1245,6 +1410,7 @@ local_assistant/
 ├── personas.json           # Каталог персон (игнорируется git'ом)
 ├── personas.json.example   # Шаблон personas.json
 ├── avatars/                # Загруженные аватары (игнорируется git'ом)
+├── logs/                   # Лог бэкенда, который пишет приложение
 ├── config.py               # Python конфиг
 ├── requirements.txt        # Зависимости Python
 ├── requirements-dev.txt    # Зависимости для тестов (pytest)
@@ -1263,6 +1429,8 @@ local_assistant/
 │   ├── personas.py         # Хранилище персон
 │   ├── stt_engine.py       # Whisper STT (русский)
 │   ├── tts_engine.py       # OmniVoice TTS
+│   ├── wake_word.py        # Пробуждающая фраза (VAD + общий Whisper)
+│   ├── tts_voice_cache.py  # Сохранённые расшифровки образцов голоса
 │   ├── web_search.py       # DuckDuckGo поиск
 │   ├── agent_tools.py      # Агентные инструменты
 │   ├── file_processor.py   # Обработка файлов
@@ -1287,8 +1455,8 @@ local_assistant/
 ├── models/                  # Локальные модели
 │   ├── omnivoice/           # TTS модель
 │   └── whisper-large-v3-turbo/  # STT модель
-├── storage/                 # ChromaDB данные
-└── voices/                  # Голоса для клонирования
+├── storage/                 # ChromaDB данные + tts_voices.json (игнорируется git'ом)
+└── voices/                  # Голоса для клонирования (игнорируется git'ом)
 ```
 
 ## Инструменты (Tool Calling)
@@ -1319,6 +1487,33 @@ python -m pytest -q
 
 Запускайте после правок конфига, промптов, персон или логики памяти — тесты
 работают около секунды и ловят регрессии, которые в UI не видны.
+
+### Проверки на реальном железе (`tests/check_*.py`)
+
+Они **не** входят в pytest: каждой нужен запущенный бэкенд на порту 8000 и
+настоящее железо, поэтому их запускают вручную и по одной — когда затронуто то,
+что они охраняют. В первых строках каждой написано, что именно она проверяет и
+из какого дефекта выросла.
+
+```bash
+# сначала запустите приложение, затем:
+python tests/check_input_modes.py        # модель распознавания одна, без накопления
+python tests/check_memory_release.py     # выгрузка возвращает память
+python tests/check_vram_creep.py         # нет роста по циклам загрузки/выгрузки
+python tests/check_voice_transcript_cache.py  # образец расшифровывается один раз
+python tests/check_stt_noise.py          # терминал остаётся читаемым
+python tests/check_wake_real.py          # фраза пробуждения на реальной записи
+```
+
+Группы: `check_wake_*` и `check_mic_levels` — слушатель пробуждения (части
+требуют микрофон), `check_tts_*`, `check_mode_*`, `check_clone_after_drop` —
+озвучка и переключение режимов, `check_input_modes`, `check_memory_release`,
+`check_vram_creep` — память, `check_ws_disconnect`, `check_tool_*` — бэкенд.
+Это сначала измерения, и только потом тесты: многие печатают числа и проверяют
+порог, так что провал — это порой «машина другая», а не «код неверен».
+
+`python tests/fetch_whisper_model.py tiny` скачает маленькую модель для фразы
+пробуждения, если её нет.
 
 ## Устранение проблем
 
@@ -1361,7 +1556,7 @@ python -m pytest -q
 
 ### Модель TTS не загружается
 1. **Прочитайте текст ошибки** — приложение показывает причину из backend в алерте
-2. **Первая загрузка занимает ~минуту** (OmniVoice + кэш Whisper), не кликайте дважды
+2. **Первая загрузка упирается в диск** — OmniVoice это 3.1 ГБ, холодное чтение занимает ~40 с при ~76 МБ/с, не кликайте дважды
 3. **Проверьте VRAM** — полный стек (LLM + Whisper + OmniVoice) требует 7-10 ГБ
 
 ### Не работает распознавание голоса (STT 422)
