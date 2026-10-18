@@ -106,9 +106,26 @@ class LLMConfig(BaseConfig):
         if self.provider == LLMProvider.OPENROUTER:
             return "https://openrouter.ai/api/v1"
         elif self.provider == LLMProvider.LM_STUDIO:
-            if "localhost" in self.host and ":" not in self.host:
-                return "http://localhost:1234/v1"
-            return f"{self.host}/v1"
+            # A host without a scheme is a URL httpx cannot open, and the old
+            # fixup only recognised the literal "localhost" - point the config
+            # at another machine and every chat request failed.
+            host = self.host.strip()
+            if "://" not in host:
+                host = f"http://{host}"
+            host = host.rstrip("/")
+            # Someone who writes the full OpenAI-style base (…/v1) must not end up
+            # with /v1/v1/chat/completions. LM Studio answers that with 200 and an
+            # empty completion, so it looks like a broken model rather than a
+            # broken setting - measured while installing the release.
+            #
+            # Order matters: the /v1 has to go before the default port is added,
+            # otherwise "gpu-box.lan/v1" gains a port at the end of the path and
+            # becomes "gpu-box.lan/v1:1234".
+            if host.lower().endswith("/v1"):
+                host = host[:-3]
+            if ":" not in host.split("://", 1)[1]:
+                host = f"{host}:1234"
+            return f"{host}/v1"
         else:
             # Ollama - without /v1
             return self.host
@@ -454,13 +471,6 @@ class Config(BaseSettings):
         extra="ignore",
     )
     
-    def get_storage_dir(self) -> Path:
-        storage_path = Path(self.chroma.persist_dir)
-        if not storage_path.is_absolute():
-            storage_path = self.base_dir / storage_path
-        storage_path.mkdir(parents=True, exist_ok=True)
-        return storage_path
-    
     def get_logs_dir(self) -> Path:
         logs_dir = self.base_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -527,6 +537,7 @@ def save_config(
     wake_action: str | None = None,
     wake_cooldown: float | None = None,
     wake_threshold: float | None = None,
+    env_path: "Path | None" = None,
 ) -> None:
     """
     Save the configuration to the .env file.
@@ -535,11 +546,15 @@ def save_config(
     load_dotenv() at import time, and OS environment variables take priority
     over the .env file in pydantic-settings. Without the mirror, a settings
     change saved at runtime would never be picked up by reload_config().
+
+    env_path exists for the tests: without it, every round-trip test rewrote
+    the developer's real .env, and an aborted run left their settings mangled.
     """
     import os
     from pathlib import Path
 
-    env_path = Path(__file__).parent / ".env"
+    if env_path is None:
+        env_path = Path(__file__).parent / ".env"
     
     # Read the current .env
     env_vars = {}
@@ -606,7 +621,10 @@ def save_config(
         env_vars["PERSONALITY_RU"] = personality_ru.replace("\r\n", "\n").replace("\n", "\\n")
 
     if personality_en is not None:
-        env_vars["PERSONALITY_EN"] = personality_en
+        # Escaped like the Russian one: written raw, a multi-line personality
+        # became several physical lines in .env and everything after the first
+        # newline was silently lost on the next read.
+        env_vars["PERSONALITY_EN"] = personality_en.replace("\r\n", "\n").replace("\n", "\\n")
 
     if stt_model is not None and stt_model != "":
         env_vars["STT_MODEL"] = stt_model.strip()
