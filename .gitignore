@@ -31,8 +31,12 @@ models/*
 storage/*
 !storage/.gitkeep
 
+# Logs: the app writes its backend log here, so the folder is part of the
+# program - but the contents are pure output.
+logs/*
+!logs/.gitkeep
+
 # Pure output - no placeholder needed
-logs/
 screenshots/
 debug_tts/
 ffmpeg/
