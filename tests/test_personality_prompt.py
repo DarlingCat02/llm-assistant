@@ -74,22 +74,28 @@ def test_persona_with_empty_language_falls_back(monkeypatch, ru_env, engine):
 
 
 def test_newlines_survive_env_roundtrip(tmp_path, monkeypatch):
-    """.env is line based - newlines must be escaped on write, restored on read."""
-    from config import save_config, reload_config
-    import config as cfg_mod
+    """.env is line based - newlines must be escaped on write, restored on read.
 
-    env_path = cfg_mod.Path(cfg_mod.__file__).parent / ".env"
-    backup = env_path.read_text(encoding="utf-8") if env_path.exists() else None
+    The file used to be the developer's real .env. If the file did not exist
+    yet, this test left one behind containing nothing but a personality.
+    """
+    import os
+
+    from config import save_config, reload_config
+
+    env_path = tmp_path / ".env"
+    environment = dict(os.environ)
     try:
         text = "Строка 1\nСтрока 2"
-        save_config(personality_ru=text)
+        save_config(personality_ru=text, env_path=env_path)
         raw = env_path.read_text(encoding="utf-8")
         assert "PERSONALITY_RU=Строка 1\\nСтрока 2" in raw
         assert get_config.cache_clear() is None
-        monkeypatch.setenv("PERSONALITY_RU", raw.split("PERSONALITY_RU=")[1].split("\n")[0])
+        monkeypatch.setenv("PERSONALITY_RU",
+                           raw.split("PERSONALITY_RU=")[1].split("\n")[0])
         reload_config()
         assert get_config().personality.ru == text
     finally:
-        if backup is not None:
-            env_path.write_text(backup, encoding="utf-8")
+        os.environ.clear()
+        os.environ.update(environment)
         get_config.cache_clear()

@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -76,6 +77,10 @@ def round_trip(ref, label):
 
 
 def main():
+    if len(sys.argv) < 2:
+        print("usage: python tests/check_voice_transcript_cache.py <voice sample>")
+        print("  e.g. ... voices\\RU_Wushu_MatchStartMap_Ascent.mp3")
+        return 2
     ref = os.path.abspath(sys.argv[1])
     failures = []
 
@@ -83,6 +88,38 @@ def main():
         print(f"  {'PASS' if ok else 'FAIL'}  {msg}")
         if not ok:
             failures.append(msg)
+
+    # This check empties the real store to prove the first run transcribes. That
+    # store holds the user's hand-corrected transcriptions, which no amount of
+    # re-transcribing brings back, so it is kept aside and put back whatever
+    # happens - including a crash halfway through.
+    backup = None
+    if os.path.exists(STORE):
+        with open(STORE, "rb") as f:
+            backup = f.read()
+    # Scratch space for the "the file changed" step, so nothing lands in the
+    # user's voices/ folder.
+    probe_dir = tempfile.mkdtemp(prefix="laa_transcript_probe_")
+
+    try:
+        return run_checks(ref, check, failures, probe_dir)
+    finally:
+        if backup is None:
+            if os.path.exists(STORE):
+                os.remove(STORE)
+        else:
+            with open(STORE, "wb") as f:
+                f.write(backup)
+        shutil.rmtree(probe_dir, ignore_errors=True)
+        # The check leaves speech synthesis switched on with the sample loaded,
+        # which is ~2 GB of video memory the user did not ask to keep.
+        try:
+            post("/api/tts/toggle", {"enabled": False}, timeout=120)
+        except Exception:
+            pass
+
+
+def run_checks(ref, check, failures, probe_dir):
 
     print("1. starting with an empty store")
     if os.path.exists(STORE):
@@ -124,7 +161,7 @@ def main():
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     print("\n5. replacing the audio file must invalidate it")
-    copy_path = os.path.join(os.path.dirname(ref), "_transcript_probe.mp3")
+    copy_path = os.path.join(probe_dir, "_transcript_probe.mp3")
     shutil.copyfile(ref, copy_path)
     round_trip(copy_path, "copy of the sample")
     key2 = next((k for k in read_store() if "_transcript_probe" in k), None)

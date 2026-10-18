@@ -83,6 +83,27 @@ def test_empty_device_spec_means_system_default():
         assert problem is None
 
 
+def _device_is_plugged_in(fragment):
+    """Whether a microphone with this name exists on this machine."""
+    try:
+        import sounddevice as sd
+        names = [d["name"] for d in sd.query_devices()]
+    except Exception:
+        return False
+    return any(fragment.lower() in (n or "").lower() for n in names)
+
+
+# The two tests below assert the real thing only where the microphone is
+# actually present. They used to name a specific device and failed on every
+# other machine, which contradicts what the suite promises: no microphone, no
+# GPU, no models.
+requires_steelseries = pytest.mark.skipif(
+    not _device_is_plugged_in("SteelSeries"),
+    reason="no SteelSeries microphone on this machine",
+)
+
+
+@requires_steelseries
 def test_device_resolved_by_name_not_index():
     """Indices move when devices are replugged, so we match on the name."""
     from src.wake_word import resolve_input_device
@@ -93,6 +114,7 @@ def test_device_resolved_by_name_not_index():
     assert isinstance(device, int)
 
 
+@requires_steelseries
 def test_device_partial_name_matches():
     from src.wake_word import resolve_input_device
 

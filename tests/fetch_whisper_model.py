@@ -1,12 +1,14 @@
 """
-One-off helper: download a Whisper model into ./models/.
+One-off helper: download a speech or embedding model into ./models/.
 
-src/memory_manager.py hard-sets HF_HUB_OFFLINE=1 at import time (plain
-assignment, not setdefault), which makes the lazy download inside
-resolve_whisper_model() impossible inside the app. This script imports src
-first, then clears the flags, so the existing download path can be reused.
+Both models live inside the project so that a copied folder keeps working.
+Nothing here needs the offline flags cleared any more - the app itself refuses
+to download only when you ask it to, via HF_HUB_OFFLINE=1.
 
-Usage: python tests/fetch_whisper_model.py tiny
+Usage:
+    python tests/fetch_whisper_model.py tiny          # a speech model
+    python tests/fetch_whisper_model.py large-v3-turbo
+    python tests/fetch_whisper_model.py --embedding   # the memory embeddings
 """
 
 import os
@@ -14,35 +16,53 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, ".")
-
-import src  # noqa: E402  (side effect: forces HF offline)
-
-# Undo the hard-coded offline flags so the snapshot can be fetched
-os.environ["HF_HUB_OFFLINE"] = "0"
-os.environ.pop("TRANSFORMERS_OFFLINE", None)
-
-from src.stt_engine import resolve_whisper_model  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def main() -> None:
-    spec = sys.argv[1] if len(sys.argv) > 1 else "tiny"
+def _report(path, already, started):
+    files = [f for f in Path(path).rglob("*") if f.is_file()]
+    size = sum(f.stat().st_size for f in files)
+    print(f"model: {path}")
+    print(f"files: {len(files)}  size: {size / 1024 / 1024:.0f} MB")
+    print(f"took: {time.time() - started:.1f}s{' (already present)' if already else ''}")
+
+
+def fetch_embedding():
+    from src.memory_manager import embedding_model_path, ensure_embedding_model
+
+    started = time.time()
+    target = embedding_model_path()
+    already = target.is_dir()
+    try:
+        path = ensure_embedding_model()
+    except Exception as exc:
+        print(f"download failed: {type(exc).__name__}: {exc}")
+        return 1
+    _report(path, already, started)
+    return 0
+
+
+def fetch_whisper(spec):
+    from src.stt_engine import resolve_whisper_model
+
+    started = time.time()
     target = Path(__file__).parent.parent / "models" / f"whisper-{spec}"
     already = target.exists()
-
-    t = time.time()
     try:
         path = resolve_whisper_model(spec)
-    except Exception as e:
-        print(f"download failed: {type(e).__name__}: {e}")
-        return
+    except Exception as exc:
+        print(f"download failed: {type(exc).__name__}: {exc}")
+        return 1
+    _report(path, already, started)
+    return 0
 
-    files = list(Path(path).rglob("*"))
-    size = sum(f.stat().st_size for f in files if f.is_file())
-    print(f"model: {path}")
-    print(f"files: {sum(1 for f in files if f.is_file())}  size: {size / 1024 / 1024:.0f} MB")
-    print(f"took: {time.time() - t:.1f}s{' (already present)' if already else ''}")
+
+def main() -> int:
+    arg = sys.argv[1] if len(sys.argv) > 1 else "tiny"
+    if arg in ("--embedding", "embedding"):
+        return fetch_embedding()
+    return fetch_whisper(arg)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
