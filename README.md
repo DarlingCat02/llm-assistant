@@ -131,6 +131,23 @@ Run the exe — the app will start the backend automatically and open the window
 
 Download ready builds from https://github.com/DarlingCat02/llm-assistant/releases
 
+**If the installer does not work on your machine**, there is a second route that
+needs nothing but Git: clone the repository and run `install.bat` there. It
+performs the same steps in the same order, and it is the route this project was
+tested on — a clean folder, no `.env`, no `venv`, no models:
+
+```bash
+git clone https://github.com/DarlingCat02/llm-assistant.git
+cd llm-assistant
+install.bat     # choose [8] Full installation
+run.bat
+```
+
+This route builds the exe itself, so it needs Python 3.11+, Node.js 20+ and Rust
+on the machine — the installer bundles Python and ffmpeg instead. It also prints
+each step and stops with an error, so if something fails you get told what,
+which is worth having when the installer failed silently.
+
 ### Option 2: Build from source
 
 Easiest on Windows: run `install.bat` and choose option [8] (full
@@ -1022,6 +1039,23 @@ GENERAL_LANGUAGE=en
 ### Вариант 1: GitHub Releases
 
 Скачайте готовые сборки из https://github.com/DarlingCat02/llm-assistant/releases
+
+**Если установщик на вашей машине не пошёл**, есть второй путь, которому нужен
+только Git: склонировать репозиторий и запустить `install.bat` прямо в нём. Он
+делает те же шаги в том же порядке, и именно этот путь проверялся — чистая
+папка, без `.env`, без `venv`, без моделей:
+
+```bash
+git clone https://github.com/DarlingCat02/llm-assistant.git
+cd llm-assistant
+install.bat     # выберите пункт [8] полная установка
+run.bat
+```
+
+Этот путь собирает exe сам, поэтому на машине нужны Python 3.11+, Node.js 20+ и
+Rust — установщик вместо этого несёт Python и ffmpeg с собой. И он печатает
+каждый шаг и останавливается с ошибкой, то есть при неудаче вы узнаете что
+именно сломалось. Это того стоит, когда установщик молча не сработал.
 
 ### Вариант 2: Сборка из исходников
 
