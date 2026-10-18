@@ -1,5 +1,7 @@
 @echo off
 chcp 65001 >nul 2>&1
+REM Nuzhno dlya !VENV_HOME! vostoit do kontca stroki v odnom bloke
+setlocal enabledelayedexpansion
 REM ============================================================================
 REM Local AI Assistant - One-Click Launcher (Windows)
 REM ============================================================================
@@ -19,10 +21,30 @@ REM 1. Proverka nalichiya virtualnogo okruzheniya
 REM ----------------------------------------------------------------------------
 echo [1/3] Proverka venv...
 
-if exist "venv\Scripts\activate.bat" (
+REM Venv, skopirovannuyu s drugoy mashiny, ne rabotaet: venv\pyvenv.cfg
+REM vse eshchyo ukazyvaet na Python, kotorogo zdes net. Proveriaem, chto
+REM zapomnennyi interpretator sushchestvuet. Zapusk samogo
+REM venv\Scripts\python.exe ne delaem - on otkryvaet sistemnoe okno
+REM ob oshibke i zavisaet.
+set "VENV_OK="
+set "VENV_HOME="
+for /f "tokens=1,* delims==" %%A in ('findstr /i /b /c:"home" "venv\pyvenv.cfg" 2^>nul') do for /f "tokens=* delims= " %%B in ("%%B") do set "VENV_HOME=%%B"
+REM for /f leaves a trailing space, which would break the path test
+:STRIP_VENV_HOME
+if defined VENV_HOME if "!VENV_HOME:~-1!"==" " (
+    set "VENV_HOME=!VENV_HOME:~0,-1!"
+    goto STRIP_VENV_HOME
+)
+REM home has no trailing backslash, hence the one below
+if exist "venv\Scripts\python.exe" if exist "venv\pyvenv.cfg" if defined VENV_HOME if exist "!VENV_HOME!\python.exe" set "VENV_OK=1"
+set "VENV_HOME="
+
+if defined VENV_OK (
     echo       OK - venv naydeno
 ) else (
-    echo       ERROR - venv ne naydeno!
+    if exist "venv\Scripts\python.exe" echo       ERROR - venv s drugoy mashiny!
+    if not exist "venv\Scripts\python.exe" echo       ERROR - venv ne naydeno!
+    if exist "venv" echo       Udalite papku venv pered sozdaniem novoy.
     echo.
     echo       Neobhodimo sozdat virtualnoe okruzhenie:
     echo       1. Otkroyte komandnuyu stroku v etoy papke

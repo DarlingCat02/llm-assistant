@@ -31,6 +31,15 @@ echo.
 set /p "choice=Select option: "
 echo.
 
+REM set /p leaves the variable untouched when there is no input left, so on a
+REM closed stdin this printed "Invalid input" and looped forever - 25 MB of log
+REM in five minutes, with no way out but killing the window.
+if %errorlevel% neq 0 (
+    echo.
+    echo  No input - leaving the installer.
+    goto EOF
+)
+
 if "%choice%"=="1" goto CHECK_ENV
 if "%choice%"=="2" goto INSTALL_PYTHON_DEPS
 if "%choice%"=="3" goto DOWNLOAD_WHISPER
@@ -75,7 +84,7 @@ if %errorlevel% equ 0 (
     echo    [+] Node.js found
     echo    [%date% %time%] Node.js found >> "%LOG_FILE%"
 ) else (
-    echo    [-] Node.js not found! Install Node.js 18+
+    echo    [-] Node.js not found! Install Node.js 20+
     echo    [%date% %time%] Node.js NOT found >> "%LOG_FILE%"
     set "all_ok=0"
 )
@@ -99,6 +108,12 @@ if %errorlevel% equ 0 (
 ) else (
     echo    [-] Rust not found! Install from https://rustup.rs
     echo    [%date% %time%] Rust NOT found >> "%LOG_FILE%"
+    set "all_ok=0"
+)
+
+call :CHECK_BUILD_TOOLS
+if "!build_ok!"=="0" (
+    echo    [%date% %time%] Build prerequisites missing >> "%LOG_FILE%"
     set "all_ok=0"
 )
 
@@ -142,17 +157,44 @@ echo =============================================
 echo.
 echo  [1/3] Creating virtual environment...
 
-if not exist "venv\Scripts\activate.bat" (
-    python -m venv venv
-    if !errorlevel! neq 0 (
-        echo  [!] Failed to create venv!
-        pause
-        goto MENU
-    )
-    echo    [+] Virtual environment created
-) else (
-    echo    [+] Virtual environment already exists
+REM A venv folder that travelled with a copied project is a trap: the files are
+REM there, but pyvenv.cfg still points at the Python it was created with, so
+REM every pip call dies with "no usable Python". Check that the base
+REM interpreter it names still exists.
+REM Deliberately NOT by running venv\Scripts\python.exe: on a machine without
+REM that Python it pops a system "DLL not found" dialog and the installer hangs
+REM on it forever.
+set "VENV_OK="
+set "VENV_HOME="
+for /f "tokens=1,* delims==" %%A in ('findstr /i /b /c:"home" "venv\pyvenv.cfg" 2^>nul') do for /f "tokens=* delims= " %%B in ("%%B") do set "VENV_HOME=%%B"
+REM for /f leaves a trailing space behind, which would break the path test below
+:STRIP_VENV_HOME
+if defined VENV_HOME if "!VENV_HOME:~-1!"==" " (
+    set "VENV_HOME=!VENV_HOME:~0,-1!"
+    goto STRIP_VENV_HOME
 )
+REM home has no trailing backslash, hence the one below
+if exist "venv\Scripts\python.exe" if exist "venv\pyvenv.cfg" if defined VENV_HOME if exist "!VENV_HOME!\python.exe" set "VENV_OK=1"
+set "VENV_HOME="
+
+if defined VENV_OK (
+    echo    [+] Virtual environment already exists
+    goto VENV_READY
+)
+if exist "venv\Scripts\python.exe" (
+    echo    [!] This venv was made on another machine, recreating...
+    rmdir /s /q "venv" >nul 2>&1
+)
+
+python -m venv venv
+if !errorlevel! neq 0 (
+    echo  [!] Failed to create venv!
+    pause
+    goto MENU
+)
+echo    [+] Virtual environment created
+
+:VENV_READY
 
 echo  [2/3] Activating venv...
 call "venv\Scripts\activate.bat"
@@ -165,6 +207,8 @@ echo    [+] venv activated
 
 echo  [3/3] Installing dependencies...
 python -m pip install --upgrade pip >nul 2>&1
+REM PyTorch first and from the right index - see :INSTALL_TORCH for why.
+call :INSTALL_TORCH
 pip install -r requirements.txt
 if !errorlevel! neq 0 (
     echo  [!] Failed to install dependencies!
@@ -182,7 +226,9 @@ if !errorlevel! equ 0 (
     echo    [%date% %time%] CUDA available >> "%LOG_FILE%"
 ) else (
     echo    [!] WARNING: CUDA not available! STT will be slow, TTS may fail.
-    echo    [!] For NVIDIA GPU install: venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+    echo    [!] No NVIDIA GPU? Nothing to fix. With a GPU, either set TORCH_BUILD=cuda
+    echo    [!] in .env and run this installer again, or:
+    echo    [!] venv\Scripts\python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
     echo    [%date% %time%] CUDA NOT available >> "%LOG_FILE%"
 )
 
@@ -304,23 +350,14 @@ echo  Note: first build may take 10-30 minutes
 echo  (downloading Cargo dependencies and compiling Rust)
 echo.
 
-echo  [1/4] Checking Node.js...
-where node >nul 2>&1
-if !errorlevel! neq 0 (
-    echo  [!] Node.js not found! Install Node.js 18+
+echo  [1/4] Checking build prerequisites...
+call :CHECK_BUILD_TOOLS
+if "!build_ok!"=="0" (
+    echo.
+    echo  [!] The exe cannot be built until the above is fixed.
     pause
     goto MENU
 )
-echo    [+] Node.js found
-
-echo  [2/4] Checking Rust...
-where rustc >nul 2>&1
-if !errorlevel! neq 0 (
-    echo  [!] Rust not found! Install from https://rustup.rs
-    pause
-    goto MENU
-)
-echo    [+] Rust found
 
 echo  [3/4] Installing npm dependencies...
 echo.
@@ -417,14 +454,14 @@ if !errorlevel! equ 0 (
 
 echo  FFmpeg not found. Would you like to download and install it?
 echo.
-echo  Note: this will modify the user PATH (no admin rights
-echo  required, but you may need to restart the console)
+echo  Note: it is placed in the ffmpeg\ folder inside this project, which is
+echo  where the app looks for it. Your PATH is left alone.
 echo.
 set /p "ff_choice=Download FFmpeg? (y/n): "
 if /i not "!ff_choice!"=="y" goto MENU
 
 echo.
-echo  [1/3] Downloading FFmpeg...
+echo  [1/2] Downloading FFmpeg...
 echo.
 
 set "FFMPEG_DIR=%SCRIPT_DIR%\ffmpeg"
@@ -433,16 +470,20 @@ if not exist "%FFMPEG_DIR%" mkdir "%FFMPEG_DIR%"
 powershell -Command ^
 "$url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip';^
 $zipPath = [System.IO.Path]::GetTempFileName() + '.zip';^
+$extract = Join-Path $env:TEMP 'ffmpeg_extract';^
 Write-Host '  Downloading FFmpeg (~50 MB)...';^
 try {^
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;^
     Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing;^
     Write-Host '  [+] Downloaded. Extracting...';^
-    Expand-Archive -Path $zipPath -DestinationPath '$env:TEMP\ffmpeg_extract' -Force;^
+    Expand-Archive -Path $zipPath -DestinationPath $extract -Force;^
     Remove-Item -Path $zipPath -Force;^
-    $source = Join-Path '$env:TEMP\ffmpeg_extract' (Get-ChildItem '$env:TEMP\ffmpeg_extract' -Directory | Select-Object -First 1).Name;^
+    $source = Join-Path $extract (Get-ChildItem $extract -Directory | Select-Object -First 1).Name;^
     Copy-Item -Path (Join-Path $source 'bin\ffmpeg.exe') -Destination '%FFMPEG_DIR%\ffmpeg.exe' -Force;^
-    Remove-Item -Path '$env:TEMP\ffmpeg_extract' -Recurse -Force;^
+    if (Test-Path (Join-Path $source 'bin\ffprobe.exe')) {^
+        Copy-Item -Path (Join-Path $source 'bin\ffprobe.exe') -Destination '%FFMPEG_DIR%\ffprobe.exe' -Force;^
+    };^
+    Remove-Item -Path $extract -Recurse -Force;^
     Write-Host '  [+] FFmpeg extracted';^
 } catch {^
     Write-Host '  [-] Download error: ' $_.Exception.Message;^
@@ -457,22 +498,21 @@ if !errorlevel! neq 0 (
     goto MENU
 )
 
-echo  [2/3] Adding to user PATH...
-setx PATH "%FFMPEG_DIR%;%PATH%" >nul
+REM No setx here on purpose: it copied the machine PATH into the user PATH, and
+REM Windows truncates that at 1024 characters, so a long PATH silently lost
+REM entries. It was unnecessary anyway - the app looks for
+REM <project>\ffmpeg\ffmpeg.exe itself, which is where the files just went.
+echo  [2/2] Checking the installed FFmpeg...
+"%FFMPEG_DIR%\ffmpeg.exe" -version >nul 2>&1
 if !errorlevel! equ 0 (
-    echo    [+] FFmpeg added to user PATH
+    echo    [+] FFmpeg works - the app finds it in the ffmpeg\ folder
     echo    [%date% %time%] FFmpeg installed to %FFMPEG_DIR% >> "%LOG_FILE%"
 ) else (
-    echo    [!] Failed to add to PATH (setx unavailable)
-    echo    [!] Add manually: %FFMPEG_DIR% to your PATH
-)
-
-echo  [3/3] Verification...
-where ffmpeg >nul 2>&1
-if !errorlevel! equ 0 (
-    echo    [+] FFmpeg is working!
-) else (
-    echo    [!] Restart the console to apply PATH changes
+    echo  [!] %FFMPEG_DIR%\ffmpeg.exe does not run
+    echo  [!] Download a build from https://ffmpeg.org/download.html and put
+    echo  [!] ffmpeg.exe into the ffmpeg\ folder
+    pause
+    goto MENU
 )
 
 echo.
@@ -505,18 +545,39 @@ call :CHECK_ENV_SILENT
 echo.
 echo  === [2/6] Install Python Dependencies ===
 echo.
-if not exist "venv\Scripts\activate.bat" (
-    python -m venv venv
-    if !errorlevel! neq 0 (
-        echo  [!] Failed to create venv! Aborting.
-        pause
-        goto MENU
-    )
-    echo    [+] venv created
-) else (
-    echo    [+] venv already exists
+REM Same trap as option [2], same check: does the base interpreter named in
+REM pyvenv.cfg still exist? A copied venv keeps the files but not the Python
+REM it was built against.
+set "VENV_OK="
+set "VENV_HOME="
+for /f "tokens=1,* delims==" %%A in ('findstr /i /b /c:"home" "venv\pyvenv.cfg" 2^>nul') do for /f "tokens=* delims= " %%B in ("%%B") do set "VENV_HOME=%%B"
+:STRIP_FULL_VENV_HOME
+if defined VENV_HOME if "!VENV_HOME:~-1!"==" " (
+    set "VENV_HOME=!VENV_HOME:~0,-1!"
+    goto STRIP_FULL_VENV_HOME
+)
+REM home has no trailing backslash, hence the one below
+if exist "venv\Scripts\python.exe" if exist "venv\pyvenv.cfg" if defined VENV_HOME if exist "!VENV_HOME!\python.exe" set "VENV_OK=1"
+set "VENV_HOME="
+
+if defined VENV_OK goto FULL_VENV_READY
+if exist "venv\Scripts\python.exe" (
+    echo    [!] This venv was made on another machine, recreating...
+    rmdir /s /q "venv" >nul 2>&1
+)
+python -m venv venv
+if !errorlevel! neq 0 (
+    echo  [!] Failed to create venv! Aborting.
+    pause
+    goto MENU
+)
+echo    [+] venv created
+
+:FULL_VENV_READY
 )
 call "venv\Scripts\activate.bat"
+REM PyTorch first and from the right index - see :INSTALL_TORCH for why.
+call :INSTALL_TORCH
 pip install -r requirements.txt
 if !errorlevel! neq 0 (
     echo  [!] Failed to install dependencies! Aborting.
@@ -566,6 +627,23 @@ if !errorlevel! equ 0 (
     echo    [!] Failed to download OmniVoice
 )
 echo    [%date% %time%] Full: OmniVoice done >> "%LOG_FILE%"
+
+echo.
+echo  === [5b/6] Download the memory embedding model ===
+echo.
+REM ~90 MB, and the app cannot start without it: no embeddings, no memory, and
+REM every request answers 503. Only the PyTorch files are fetched - the full
+REM snapshot is 930 MB of ONNX/OpenVINO/TensorFlow copies of the same weights.
+set "EMB_DIR=%SCRIPT_DIR%\models\all-MiniLM-L6-v2"
+if not exist "%EMB_DIR%" mkdir "%EMB_DIR%"
+python -c "from huggingface_hub import snapshot_download; snapshot_download('sentence-transformers/all-MiniLM-L6-v2', local_dir=r'%EMB_DIR:\=\\%', allow_patterns=['*.json','*.txt','1_Pooling/*','model.safetensors']); print('Done')"
+if !errorlevel! equ 0 (
+    echo    [+] Embedding model downloaded
+) else (
+    echo    [!] Failed to download the embedding model
+    echo    [!] The app will try again on first start
+)
+echo    [%date% %time%] Full: embeddings done >> "%LOG_FILE%"
 
 echo.
 echo  === [6/6] Build Tauri Application ===
@@ -660,7 +738,117 @@ where node >nul 2>&1
 if !errorlevel! equ 0 (echo    [+] Node.js OK) else (echo    [-] Node.js not found!)
 where rustc >nul 2>&1
 if !errorlevel! equ 0 (echo    [+] Rust OK) else (echo    [-] Rust not found!)
+call :CHECK_BUILD_TOOLS
 echo.
+exit /b 0
+
+REM ---------------------------------------------------------------------------
+REM Node 20+ is required by the Tauri CLI, and Rust has to be able to LINK.
+REM Both fail late and cryptically otherwise: "18+" used to be written here
+REM while the toolchain needed 20, and a Rust install without the C++ toolset
+REM only fails half an hour into the build with "link.exe not found".
+REM ---------------------------------------------------------------------------
+REM ---------------------------------------------------------------------------
+REM PyTorch decides whether the GPU works at all, so it is installed first and
+REM from an explicit index. Left to PyPI it comes as the CPU build: measured on
+REM a zero-start install, torch 2.14.1+cpu, cuda unavailable, and speech
+REM recognition took 41 s for a four-second phrase. The project needs the GPU.
+REM
+REM TORCH_BUILD in .env overrides the guess: auto (default) / cuda / cpu.
+REM ---------------------------------------------------------------------------
+:INSTALL_TORCH
+set "TORCH_MODE=auto"
+for /f "usebackq tokens=1,* delims==" %%A in (`findstr /i /b /c:"TORCH_BUILD" "%SCRIPT_DIR%\.env" 2^>nul`) do (
+    for /f "tokens=* delims= " %%B in ("%%B") do set "TORCH_MODE=%%B"
+)
+if /i "!TORCH_MODE!"=="cuda" goto TORCH_CUDA
+if /i "!TORCH_MODE!"=="cpu" goto TORCH_CPU
+
+where nvidia-smi >nul 2>&1
+if !errorlevel! equ 0 (
+    set "TORCH_MODE=cuda"
+) else (
+    set "TORCH_MODE=cpu"
+)
+
+:TORCH_CUDA
+echo    [i] NVIDIA GPU found - installing the CUDA build of PyTorch
+echo        (large download; without it speech runs on the CPU)
+call :PIP_TORCH "https://download.pytorch.org/whl/cu128"
+if !errorlevel! equ 0 goto TORCH_DONE
+echo        [!] cu128 did not work, trying the older build
+call :PIP_TORCH "https://download.pytorch.org/whl/cu121"
+if !errorlevel! equ 0 goto TORCH_DONE
+echo    [!] No CUDA build could be installed - falling back to CPU
+goto TORCH_CPU
+
+:TORCH_CPU
+echo    [i] Installing the CPU build of PyTorch
+call :PIP_TORCH "https://download.pytorch.org/whl/cpu"
+
+:TORCH_DONE
+python -c "import torch; print('    [+] torch', torch.__version__, '| CUDA', torch.cuda.is_available())"
+goto :eof
+
+:PIP_TORCH
+REM pip is satisfied by ANY installed torch, the CPU build included, so asking
+REM it to install torch over a CPU build downloads nothing and says so. The old
+REM one goes first - otherwise the GPU build is never fetched at all.
+pip uninstall -y torch torchaudio >nul 2>&1
+pip install torch torchaudio --index-url %~1
+goto :eof
+
+REM ---------------------------------------------------------------------------
+REM Node 20+ is required by the Tauri CLI, and Rust has to be able to LINK.
+:CHECK_BUILD_TOOLS
+set "build_ok=1"
+for /f "tokens=1 delims=." %%V in ('node --version 2^>nul') do set "NODE_MAJOR=%%V"
+if defined NODE_MAJOR set "NODE_MAJOR=!NODE_MAJOR:v=!"
+if not defined NODE_MAJOR (
+    echo    [-] Node.js did not answer - install Node.js 20+
+    set "build_ok=0"
+) else if !NODE_MAJOR! lss 20 (
+    echo    [-] Node.js !NODE_MAJOR! is too old - the Tauri CLI needs 20+
+    set "build_ok=0"
+) else (
+    echo    [+] Node.js !NODE_MAJOR! OK
+)
+
+where rustc >nul 2>&1
+if !errorlevel! equ 0 (
+    call :RUST_LINK_PROBE
+    if !errorlevel! equ 0 (
+        echo    [+] Rust can build and link
+    ) else (
+        set "build_ok=0"
+    )
+) else (
+    echo    [-] Rust not found - install from https://rustup.rs
+    set "build_ok=0"
+)
+goto :eof
+
+REM Compile and link a one-line program: the only honest test of whether the
+REM toolchain can produce an exe on this machine. It lives outside a block on
+REM purpose - "fn main(){}" inside parentheses is a cmd syntax error - and the
+REM source has no "!" either, which delayed expansion would swallow.
+:RUST_LINK_PROBE
+set "RUST_PROBE_DIR=%TEMP%\laa_rust_probe"
+if not exist "!RUST_PROBE_DIR!" mkdir "!RUST_PROBE_DIR!" >nul 2>&1
+> "!RUST_PROBE_DIR!\probe.rs" echo fn main(){}
+rustc "!RUST_PROBE_DIR!\probe.rs" -o "!RUST_PROBE_DIR!\probe.exe" > "%TEMP%\laa_rust_probe.log" 2>&1
+set "PROBE_RC=!errorlevel!"
+REM rustc leaves a .pdb next to the exe; without deleting it the folder would
+REM survive every run and pile up in %TEMP%.
+del /q "!RUST_PROBE_DIR!\probe.exe" "!RUST_PROBE_DIR!\probe.rs" "!RUST_PROBE_DIR!\probe.pdb" >nul 2>&1
+rmdir /s /q "!RUST_PROBE_DIR!" >nul 2>&1
+if not "!PROBE_RC!"=="0" (
+    echo    [-] Rust cannot link on this machine.
+    echo        The usual cause of "link.exe not found" is the missing
+    echo        Visual Studio Build Tools with the C++ workload:
+    echo        https://visualstudio.microsoft.com/visual-cpp-build-tools/
+    echo        Details of the failed test: %TEMP%\laa_rust_probe.log
+)
 exit /b 0
 
 :EOF
