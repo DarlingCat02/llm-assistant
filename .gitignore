@@ -26,6 +26,8 @@ voices/*
 # Local model files (Whisper, OmniVoice)
 models/*
 !models/.gitkeep
+# ...but the note explaining what the app expects in here travels with the repo
+!models/README.txt
 
 # Runtime data: ChromaDB vector store and chat SQLite database
 storage/*

@@ -39,7 +39,37 @@ Local AI assistant with voice input/output, web search, **Vision-Language (VL) c
 - Python 3.11+
 - Ollama or LM Studio (for LLM)
 - GPU with 8GB+ VRAM (for OmniVoice + Whisper + VL)
-- Node.js 18+ and Rust (only to build the exe; easiest via `install.bat` option 8)
+- Node.js 20+ and Rust (only to build the exe; easiest via `install.bat` option 8)
+- FFmpeg (only for voice input — see below)
+
+**PyTorch decides whether the GPU is used at all.** Left to PyPI it installs as
+the CPU build — measured on a zero-start install: `torch 2.14.1+cpu`,
+`cuda.is_available() = False`, and speech recognition of a 2.5-second clip took
+**41 s** where the CUDA build takes **0.2 s**. `install.bat` therefore installs
+PyTorch *first*, from an explicit index: CUDA if `nvidia-smi` is there, CPU
+otherwise, falling back from cu128 to cu121 if the driver is too old. It
+uninstalls any existing `torch`/`torchaudio` first — `pip` considers *any*
+installed torch a satisfied requirement, CPU build included, and would
+otherwise download nothing at all. Set `TORCH_BUILD=cpu` (or `=cuda`) in `.env`
+to decide yourself. Both `torch` and `torchaudio` come from the same index on
+purpose — mismatched versions break OmniVoice.
+
+**Node.js 20, not 18.** The Tauri CLI refuses to run on older Node, and it
+fails with an error that does not mention Node at all. `install.bat` checks the
+version before downloading anything.
+
+**Rust must be able to link.** `rustup` on its own installs the compiler but not
+the C++ toolset, so a build on a fresh Windows dies after a while with
+`link.exe not found`. Install
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+(the "Desktop development with C++" workload) alongside Rust. `install.bat`
+option 1 proves it by compiling and linking a one-line program, and option 8
+refuses to start a 60-minute build that would fail at the end.
+
+**FFmpeg** is needed for voice input: the browser records webm/opus, and that
+is what ffmpeg decodes. Either put it on PATH, or run `install.bat` option 7,
+which drops `ffmpeg/ffmpeg.exe` next to the project where the app looks for it.
+Without it, voice input fails with `422`.
 
 **For VL capabilities (recommended models in LM Studio):**
 - `qwen2.5-vl-3b-instruct` — optimal for 8-12GB VRAM
@@ -103,19 +133,14 @@ Download ready builds from https://github.com/DarlingCat02/llm-assistant/release
 
 ### Option 2: Build from source
 
-Easiest on Windows: run `install.bat` and choose option [8] (full installation). Manual steps below:
+Easiest on Windows: run `install.bat` and choose option [8] (full
+installation). It does the steps below in the right order — dependencies, then
+`.env`, then the models, then the build — and checks Node, Rust and the linker
+first. Manual steps below, **all of them from the project root**: the paths are
+relative to it, and a model downloaded from elsewhere ends up in a folder
+nothing reads.
 
-#### 1. Download models
-
-```bash
-# Whisper (STT)
-python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir='models/whisper-large-v3-turbo')"
-
-# OmniVoice (TTS)
-python -c "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice', local_dir='models/omnivoice')"
-```
-
-#### 2. Install dependencies
+#### 1. Install dependencies
 
 ```bash
 python -m venv venv
@@ -123,15 +148,86 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-The app uses the `venv` Python automatically when it exists (both CLI and Tauri backend), falling back to system Python.
+The app uses the `venv` Python automatically when it exists (both CLI and Tauri
+backend), falling back to system Python.
 
-#### 3. Build Tauri app
+#### 2. Create .env
+
+```bash
+copy .env.example .env
+```
+
+Then open `.env` and set at least `LLM_PROVIDER`, `LLM_MODEL` and `LLM_HOST` for
+your LLM server. Everything else has a working default.
+
+#### 3. Download models
+
+Needs `huggingface_hub`, so it comes **after** step 1, not before:
+
+```bash
+# Whisper (STT)
+venv\Scripts\python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir='models/whisper-large-v3-turbo')"
+
+# OmniVoice (TTS)
+venv\Scripts\python -c "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice', local_dir='models/omnivoice')"
+```
+
+Whisper for the wake word is not a separate download: the wake listener borrows
+the same model as speech recognition.
+
+There is one more model the app needs and you did not download: the **memory
+embeddings** (`all-MiniLM-L6-v2`, ~90 MB). Without it there is no long-term
+memory, and every request comes back 503 — so it is downloaded automatically on
+first start into `models/all-MiniLM-L6-v2`, and from then on the app runs fully
+offline. `install.bat` option 8 fetches it as well, if you would rather have it
+before the first launch. To do it by hand:
+
+```bash
+venv\Scripts\python tests\fetch_whisper_model.py --embedding
+```
+
+Set `HF_HUB_OFFLINE=1` if you want a missing model to be an error instead of a
+download — the app will then say which folder it expected.
+
+#### 4. Build Tauri app
 
 ```bash
 cd llm-assistant-tauri
 npm install
 npm run tauri build
 ```
+
+### Where the app has to live
+
+Run the exe **from inside the project folder**:
+
+```
+llm-assistant-tauri\src-tauri\target\release\llm-assistant-tauri.exe
+```
+
+This is not a formality. The backend is Python and it is *not* bundled: the
+app looks for the project (the `backend` package, `.env`, `models/`, `storage/`)
+by walking up from the exe until it finds it. Copy the exe somewhere else —
+a desktop shortcut to `C:\Users\...\Desktop\app.exe` included — and there is
+nothing to find, so the backend cannot start.
+
+For the same reason **do not install the app from the generated installer**.
+The build produces an NSIS package, but the installed copy lives under
+`Program Files` or `%LOCALAPPDATA%`, outside the project, and cannot work.
+The installer exists as an artefact, not as a supported way to run the app.
+
+To put the app on the desktop, make a **shortcut to the exe inside the
+project**, not a copy of the exe.
+
+### What the app starts for itself
+
+- **The backend port is chosen at launch**, not fixed at 8000 — if something
+  else holds that port the app still starts. The frontend asks the launcher
+  which port it got.
+- **`logs/backend.log`** in the project folder holds the backend's output and
+  the launcher's own messages. If the project folder cannot be written to
+  (Program Files), the log goes to `%LOCALAPPDATA%\local_assistant\logs\`
+  instead. It is truncated at every launch.
 
 ## Web search
 
@@ -669,9 +765,10 @@ local_assistant/
 │   │       └── llm-assistant-tauri.exe  # Built app
 │   ├── package.json
 │   └── vite.config.ts
-├── models/                  # Local models
+├── models/                  # Local models (see models/README.txt)
 │   ├── omnivoice/           # TTS model
-│   └── whisper-large-v3-turbo/  # STT model
+│   ├── whisper-large-v3-turbo/  # STT model
+│   └── all-MiniLM-L6-v2/    # memory embeddings
 ├── storage/                 # ChromaDB data + tts_voices.json (git-ignored)
 └── voices/                  # Voices for cloning (git-ignored)
 ```
@@ -717,7 +814,7 @@ defect it came from.
 python tests/check_input_modes.py        # one Whisper only, no drift across switches
 python tests/check_memory_release.py     # unloading gives the memory back
 python tests/check_vram_creep.py         # no growth across load/unload cycles
-python tests/check_voice_transcript_cache.py  # a sample is transcribed once
+python tests/check_voice_transcript_cache.py voices\my_sample.mp3  # transcribed once, edits kept
 python tests/check_stt_noise.py          # the terminal stays readable
 python tests/check_wake_real.py          # wake phrase on a real recording
 ```
@@ -728,7 +825,10 @@ speech and mode switching, `check_input_modes` / `check_memory_release` /
 `check_vram_creep` for memory, `check_ws_disconnect` / `check_tool_*` for the
 backend. They are measurements first and tests second: several print numbers and
 assert a threshold, so a failure is as often "the machine is different" as
-"the code is wrong".
+"the code is wrong". None of them touch your data: where a check has to change
+something to prove a point (`check_voice_transcript_cache` empties the store to
+prove the first run really transcribes), it takes a copy first and puts
+everything back, including if it is interrupted.
 
 `python tests/fetch_whisper_model.py tiny` downloads the small model the wake
 word needs, when it is missing.
@@ -780,7 +880,13 @@ word needs, when it is missing.
 ### Voice recognition fails (STT 422)
 1. **Speak right after pressing the button**, louder and longer than a second
 2. Empty/silent recordings are rejected — check the microphone
-3. Slow recognition on CPU means torch without CUDA — reinstall: `venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121`
+3. **Is ffmpeg there?** — the browser records webm/opus and only ffmpeg decodes it. `install.bat` option 7, or put it on PATH
+4. Slow recognition on CPU means torch is the CPU build — check with `venv\Scripts\python -c "import torch; print(torch.cuda.is_available())"`, and reinstall with `venv\Scripts\python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128` (cu121 for older drivers)
+
+### Build fails with `link.exe not found`
+1. Rust is installed, the C++ toolset is not — install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload
+2. `install.bat` option 1 runs the same test in a second and says so before you spend an hour on a doomed build
+3. Check the Node version too (needs 20+): `node --version`
 
 ## License
 
@@ -825,7 +931,37 @@ MIT
 - Python 3.11+
 - Ollama или LM Studio (для LLM)
 - GPU с 8GB+ VRAM (для OmniVoice + Whisper + VL)
-- Node.js 18+ и Rust (только для сборки exe; проще всего через `install.bat` пункт 8)
+- Node.js 20+ и Rust (только для сборки exe; проще всего через `install.bat` пункт 8)
+- FFmpeg (только для голосового ввода — см. ниже)
+
+**От PyTorch зависит, используется ли видеокарта.** Если оставить его PyPI,
+ставится CPU-сборка — проверено на чистой установке: `torch 2.14.1+cpu`,
+`cuda.is_available() = False`, а распознавание клипа в 2,5 секунды заняло
+**41 с**, тогда как с CUDA — **0,2 с**. Поэтому `install.bat` ставит PyTorch
+**первым** и из явного индекса: CUDA, если есть `nvidia-smi`, иначе CPU, с
+откатом с cu128 на cu121 для старых драйверов. Перед установкой имеющиеся
+`torch` и `torchaudio` удаляются: `pip` считает *любой* установленный torch
+подходящим (версия не указана), CPU-сборка не исключение — и без удаления он
+не скачает вообще ничего. Решить самому можно строкой `TORCH_BUILD=cpu`
+(или `=cuda`) в `.env`. И `torch`, и `torchaudio` берутся с одного индекса
+намеренно — несовпадение версий ломает OmniVoice.
+
+**Node.js 20, а не 18.** Tauri CLI отказывается работать на более старой версии,
+и ошибка при этом не упоминает Node вообще. `install.bat` проверяет версию до того,
+как что-либо скачает.
+
+**Rust должен уметь линковать.** Один только `rustup` ставит компилятор, но не
+набор инструментов C++, и сборка на чистой Windows падает через некоторое время
+с `link.exe not found`. Поставьте вместе с Rust
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+(нагрузка «Разработка классических приложений на C++»). `install.bat` пункт 1
+проверяет это, скомпилировав и слинковав однострочную программу, а пункт 8 не
+начинает 60-минутную сборку, которая всё равно упала бы в конце.
+
+**FFmpeg** нужен для голосового ввода: браузер пишет webm/opus, а декодирует это
+ffmpeg. Либо он есть в PATH, либо выполните `install.bat` пункт 7 — он положит
+`ffmpeg\ffmpeg.exe` рядом с проектом, где приложение его ищет. Без него голосовой
+ввод отдаёт ошибку `422`.
 
 **Для VL возможностей (рекомендуемые модели в LM Studio):**
 - `qwen2.5-vl-3b-instruct` — оптимально для 8-12GB VRAM
@@ -889,19 +1025,13 @@ GENERAL_LANGUAGE=en
 
 ### Вариант 2: Сборка из исходников
 
-Проще всего на Windows: запустите `install.bat` и выберите пункт [8] (полная установка). Ручные шаги ниже:
+Проще всего на Windows: запустите `install.bat` и выберите пункт [8] (полная
+установка). Он выполняет шаги ниже в правильном порядке — зависимости, затем
+`.env`, затем модели, затем сборка — и сначала проверяет Node, Rust и линкер.
+Ручные шаги ниже, **все из корня проекта**: пути относительные, и модель,
+скачанная откуда-то ещё, окажется в папке, которую никто не читает.
 
-#### 1. Скачайте модели
-
-```bash
-# Whisper (STT)
-python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir='models/whisper-large-v3-turbo')"
-
-# OmniVoice (TTS)
-python -c "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice', local_dir='models/omnivoice')"
-```
-
-#### 2. Установите зависимости
+#### 1. Установите зависимости
 
 ```bash
 python -m venv venv
@@ -911,13 +1041,83 @@ pip install -r requirements.txt
 
 Приложение автоматически использует Python из `venv`, если он есть (и CLI, и Tauri backend), иначе — системный Python.
 
-#### 3. Соберите Tauri app
+#### 2. Создайте .env
+
+```bash
+copy .env.example .env
+```
+
+Откройте `.env` и задайте хотя бы `LLM_PROVIDER`, `LLM_MODEL` и `LLM_HOST` под
+ваш LLM-сервер. Остальное работает на значениях по умолчанию.
+
+#### 3. Скачайте модели
+
+Нужен `huggingface_hub`, поэтому это идёт **после** шага 1, а не до него:
+
+```bash
+# Whisper (STT)
+venv\Scripts\python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir='models/whisper-large-v3-turbo')"
+
+# OmniVoice (TTS)
+venv\Scripts\python -c "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice', local_dir='models/omnivoice')"
+```
+
+Whisper для фразы пробуждения отдельно не скачивается: слушатель берёт ту же
+модель, что и распознавание речи.
+
+Есть ещё одна модель, которая нужна приложению, но которую вы не скачивали:
+**эмбеддинги для памяти** (`all-MiniLM-L6-v2`, ~90 МБ). Без них нет долговременной
+памяти, и каждый запрос будет отдавать 503 — поэтому модель скачивается
+автоматически при первом запуске в `models/all-MiniLM-L6-v2`, а дальше приложение
+работает полностью офлайн. `install.bat` пункт 8 забирает её тоже, если хочется
+иметь её до первого запуска. Вручную:
+
+```bash
+venv\Scripts\python tests\fetch_whisper_model.py --embedding
+```
+
+Переменная `HF_HUB_OFFLINE=1` превращает отсутствующую модель из загрузки в
+ошибку — приложение тогда напишет, какую папку ожидало.
+
+#### 4. Соберите Tauri app
 
 ```bash
 cd llm-assistant-tauri
 npm install
 npm run tauri build
 ```
+
+### Где должно лежать приложение
+
+Запускайте exe **из папки проекта**:
+
+```
+llm-assistant-tauri\src-tauri\target\release\llm-assistant-tauri.exe
+```
+
+Это не формальность. Бэкенд — это Python, и он **не входит** в сборку:
+приложение ищет проект (пакет `backend`, `.env`, `models/`, `storage/`),
+поднимаясь вверх от exe, пока не найдёт. Скопируйте exe в другое место — даже
+ярлык на рабочий стол, указывающий на `C:\Users\...\Desktop\app.exe`, — и
+найти будет нечего, бэкенд не запустится.
+
+По той же причине **не устанавливайте приложение из собранного установщика**.
+Сборка делает NSIS-пакет, но установленная копия окажется в `Program Files`
+или `%LOCALAPPDATA%`, вне проекта, и работать не сможет. Установщик —
+артефакт сборки, а не поддерживаемый способ запуска.
+
+Чтобы приложение было под рукой, сделайте **ярлык на exe внутри проекта**,
+а не копию exe.
+
+### Что приложение запускает само
+
+- **Порт бэкенда выбирается при запуске**, а не жёстко равен 8000: если
+  порт занят другим процессом, приложение всё равно стартует. Фронтенд
+  спрашивает у лаунчера, какой порт тот получил.
+- **`logs/backend.log`** в папке проекта содержит вывод бэкенда и сообщения
+  самого лаунчера. Если папка проекта недоступна для записи (Program Files),
+  лог пишется в `%LOCALAPPDATA%\local_assistant\logs\`. При каждом запуске
+  файл очищается.
 
 ## Поиск в интернете
 
@@ -1452,9 +1652,10 @@ local_assistant/
 │   │       └── llm-assistant-tauri.exe  # Собранное приложение
 │   ├── package.json
 │   └── vite.config.ts
-├── models/                  # Локальные модели
-│   ├── omnivoice/           # TTS модель
-│   └── whisper-large-v3-turbo/  # STT модель
+├── models/                  # Локальные модели (см. models/README.txt)
+│   ├── omnivoice/           # Модель TTS
+│   ├── whisper-large-v3-turbo/  # Модель STT
+│   └── all-MiniLM-L6-v2/    # Эмбеддинги для памяти
 ├── storage/                 # ChromaDB данные + tts_voices.json (игнорируется git'ом)
 └── voices/                  # Голоса для клонирования (игнорируется git'ом)
 ```
@@ -1500,7 +1701,7 @@ python -m pytest -q
 python tests/check_input_modes.py        # модель распознавания одна, без накопления
 python tests/check_memory_release.py     # выгрузка возвращает память
 python tests/check_vram_creep.py         # нет роста по циклам загрузки/выгрузки
-python tests/check_voice_transcript_cache.py  # образец расшифровывается один раз
+python tests/check_voice_transcript_cache.py voices\my_sample.mp3  # расшифровывается один раз, правки сохраняются
 python tests/check_stt_noise.py          # терминал остаётся читаемым
 python tests/check_wake_real.py          # фраза пробуждения на реальной записи
 ```
@@ -1510,7 +1711,11 @@ python tests/check_wake_real.py          # фраза пробуждения н�
 озвучка и переключение режимов, `check_input_modes`, `check_memory_release`,
 `check_vram_creep` — память, `check_ws_disconnect`, `check_tool_*` — бэкенд.
 Это сначала измерения, и только потом тесты: многие печатают числа и проверяют
-порог, так что провал — это порой «машина другая», а не «код неверен».
+порог, так что провал — это порой «машина другая», а не «код неверен». Ни одна из
+них не трогает ваши данные: там, где проверке нужно что-то изменить, чтобы что-то
+доказать (`check_voice_transcript_cache` очищает хранилище, чтобы убедиться, что
+первый запуск действительно расшифровывает), она сначала делает копию и
+возвращает всё на место — даже если её прервали.
 
 `python tests/fetch_whisper_model.py tiny` скачает маленькую модель для фразы
 пробуждения, если её нет.
@@ -1562,7 +1767,13 @@ python tests/check_wake_real.py          # фраза пробуждения н�
 ### Не работает распознавание голоса (STT 422)
 1. **Говорите сразу после нажатия кнопки**, громче и дольше секунды
 2. Пустые/тихие записи отклоняются — проверьте микрофон
-3. Медленное распознавание на CPU означает torch без CUDA — переустановите: `venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121`
+3. **Есть ли ffmpeg?** — браузер пишет webm/opus, а декодирует это только ffmpeg. `install.bat` пункт 7 или добавьте его в PATH
+4. Медленное распознавание на CPU означает, что стоит CPU-сборка torch — проверьте `venv\Scripts\python -c "import torch; print(torch.cuda.is_available())"` и переустановите: `venv\Scripts\python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128` (для старых драйверов cu121)
+
+### Сборка падает с `link.exe not found`
+1. Rust установлен, а набор инструментов C++ — нет. Поставьте [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) с нагрузкой «Разработка классических приложений на C++»
+2. `install.bat` пункт 1 выполняет ту же проверку за секунду и говорит об этом до часа бесполезной сборки
+3. Заодно проверьте версию Node (нужен 20+): `node --version`
 
 ## Лицензия
 
