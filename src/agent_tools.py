@@ -267,13 +267,23 @@ async def app_open(name: str) -> str:
                 else:
                     subprocess.Popen([app_path], cwd=os.path.dirname(app_path))
             else:
-                subprocess.Popen([app_path], shell=True)
-            
+                # No shell. With shell=True the path went through cmd.exe, which
+                # chokes on "C:\Program Files\..." - and the return code was
+                # never looked at, so the assistant reported success while
+                # nothing had opened. CreateProcess searches PATH itself, so a
+                # bare "notepad" still resolves without a shell.
+                subprocess.Popen([app_path])
+
             logger.info(f"Application launched: {name} ({app_path})")
             return f"Открыто: {name}"
         except Exception as e:
+            # The usual reason on a different machine: the path in apps.json
+            # came from whoever filled it in and does not exist here.
             logger.error(f"Failed to launch {name}: {e}")
-            return f"Ошибка запуска {name}: {e}"
+            return (
+                f"Ошибка запуска {name}: {e} "
+                f"(проверьте путь в apps.json для этого компьютера)"
+            )
     
     # If the application is not found — open as a website
     logger.info(f"Application not found, opening as website: {name}")
