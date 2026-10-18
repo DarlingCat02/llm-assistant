@@ -11,8 +11,7 @@ import { initI18n, t, setLanguage, getLang } from './i18n.js';
 import { initAvatars, avatarHtml } from './avatars.js';
 import { initPersonas, renderPersonaSettings, loadPersonas, renderPersonaSelector,
          isPersonaEditorOpen, savePersonaEditor, closePersonaEditor } from './personas.js';
-
-const API_BASE = 'http://127.0.0.1:8000';
+import { apiBase, wsBase, ensureApiBase } from './api-base.js';
 
 /**
  * fetch() with a deadline.
@@ -115,7 +114,7 @@ try {
 async function waitForApi(retries = 120, delay = 1000) {
     for (let i = 0; i < retries; i++) {
         try {
-            const response = await fetch(`${API_BASE}/api/status`, { method: 'GET' });
+            const response = await fetch(`${apiBase()}/api/status`, { method: 'GET' });
             if (response.ok) {
                 const data = await response.json().catch(() => null);
                 // Older backends have no assistant_ready flag - treat as ready
@@ -132,6 +131,10 @@ async function waitForApi(retries = 120, delay = 1000) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // Before anything asks the backend where it is: in the desktop app the port
+    // is chosen at launch, and every request below has to aim at the one the
+    // launcher actually gave.
+    await ensureApiBase();
     try { await initI18n(); } catch {}
     console.log('Ожидание готовности Python бэкенда...');
     const ready = await waitForApi();
@@ -265,7 +268,7 @@ function initEventListeners() {
         // backend waits for the in-flight load before disabling.
         startTtsLoading(e.target);
         try {
-            const response = await fetchWithTimeout(`${API_BASE}/api/tts/toggle`, {
+            const response = await fetchWithTimeout(`${apiBase()}/api/tts/toggle`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(enabled),
@@ -391,12 +394,12 @@ function initEventListeners() {
 // === WebSocket ===
 
 function connectWebSocket() {
-    // Build the socket URL from API_BASE, never from window.location. Inside
-    // Tauri the page is served from tauri://localhost (or the Vite dev server),
-    // so the location host is never the backend - the socket silently went to
-    // the wrong place and the wake-word event never arrived.
-    const wsBase = API_BASE.replace(/^http/, 'ws');
-    const wsUrl = `${wsBase}/ws/events`;
+    // Build the socket URL from the backend address, never from
+    // window.location. Inside Tauri the page is served from tauri://localhost
+    // (or the Vite dev server), so the location host is never the backend - the
+    // socket silently went to the wrong place and the wake-word event never
+    // arrived.
+    const wsUrl = `${wsBase()}/ws/events`;
     console.log('Подключение к WebSocket:', wsUrl);
     
     ws = new WebSocket(wsUrl);
@@ -505,7 +508,7 @@ function setChatHeader(title) {
 
 async function renameChat(chatId, title) {
     // Save a new name and reflect it everywhere, without reloading the list.
-    await fetch(`${API_BASE}/api/chats/${chatId}`, {
+    await fetch(`${apiBase()}/api/chats/${chatId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title }),
@@ -574,7 +577,7 @@ function startRenameChatHeader() {
 
 async function loadChats() {
     try {
-        const response = await fetch(`${API_BASE}/api/chats`);
+        const response = await fetch(`${apiBase()}/api/chats`);
         const chats = await response.json();
         
         const chatsList = document.getElementById('chats-list');
@@ -691,7 +694,7 @@ async function startRenameChat(chatId, element) {
 
 async function createNewChat() {
     try {
-        const response = await fetch(`${API_BASE}/api/chats`, {
+        const response = await fetch(`${apiBase()}/api/chats`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: t('sidebar.newChat') }),
@@ -729,7 +732,7 @@ async function selectChat(chatId) {
 
 async function loadChatMessages(chatId) {
     try {
-        const response = await fetch(`${API_BASE}/api/chats/${chatId}/messages`);
+        const response = await fetch(`${apiBase()}/api/chats/${chatId}/messages`);
         const messages = await response.json();
         
         const container = document.getElementById('messages-container');
@@ -754,12 +757,14 @@ async function deleteChat() {
     if (!confirm(t('confirm.deleteChat'))) return;
     
     try {
-        await fetch(`${API_BASE}/api/chats/${currentChatId}`, {
+        await fetch(`${apiBase()}/api/chats/${currentChatId}`, {
             method: 'DELETE',
         });
         
+        // The id has to go before it is cleared, otherwise the deleted chat's
+        // name stays in the map and can resurface in the header.
+        delete chatTitles[currentChatId];
         currentChatId = null;
-        delete chatTitles[null];
         setChatHeader('');
         // Hide the context indicator
         const ctxIndicator = document.getElementById('context-indicator');
@@ -783,7 +788,7 @@ async function clearChat() {
     if (!confirm(t('confirm.clearChat'))) return;
     
     try {
-        await fetch(`${API_BASE}/api/chats/${currentChatId}/messages`, {
+        await fetch(`${apiBase()}/api/chats/${currentChatId}/messages`, {
             method: 'DELETE',
         });
         
@@ -810,7 +815,7 @@ async function handleFileSelect(e) {
             const formData = new FormData();
             formData.append('file', file);
             
-            const response = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: formData });
+            const response = await fetch(`${apiBase()}/api/upload`, { method: 'POST', body: formData });
             
             if (!response.ok) {
                 const err = await response.json();
@@ -949,7 +954,7 @@ async function submitChat(fullMessage, options = {}) {
         let searchProvider = '';
         if (searchDdg && searchDdg.checked) searchProvider = 'ddg';
 
-        const response = await fetch(`${API_BASE}/api/chat`, {
+        const response = await fetch(`${apiBase()}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1097,7 +1102,7 @@ async function loadAllMemoryEntries() {
     resultsDiv.innerHTML = `<p>${t('memory.loading')}</p>`;
     
     try {
-        const response = await fetch(`${API_BASE}/api/memory`);
+        const response = await fetch(`${apiBase()}/api/memory`);
         const data = await response.json();
         
         resultsDiv.innerHTML = '';
@@ -1138,7 +1143,7 @@ async function searchMemory() {
     resultsDiv.innerHTML = `<p>${t('memory.searching')}</p>`;
     
     try {
-        const response = await fetch(`${API_BASE}/api/memory/search`, {
+        const response = await fetch(`${apiBase()}/api/memory/search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ query: query, limit: 20 }),
@@ -1176,7 +1181,7 @@ async function deleteMemoryEntry(entryId) {
     if (!confirm(t('memory.confirmDelete'))) return;
     
     try {
-        const response = await fetch(`${API_BASE}/api/memory/${entryId}`, {
+        const response = await fetch(`${apiBase()}/api/memory/${entryId}`, {
             method: 'DELETE',
         });
         
@@ -1201,7 +1206,7 @@ async function addMemoryEntry() {
     if (!text) return;
     
     try {
-        const response = await fetch(`${API_BASE}/api/memory`, {
+        const response = await fetch(`${apiBase()}/api/memory`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: text }),
@@ -1237,7 +1242,7 @@ async function showStatus() {
     modal.classList.remove('hidden');
     
     try {
-        const response = await fetch(`${API_BASE}/api/status`);
+        const response = await fetch(`${apiBase()}/api/status`);
         const data = await response.json();
         
         content.innerHTML = `
@@ -1414,7 +1419,7 @@ async function openSettings() {
     
     // Load the current settings
     try {
-        const response = await fetch(`${API_BASE}/api/config`);
+        const response = await fetch(`${apiBase()}/api/config`);
         const config = await response.json();
         
         const langSel = document.getElementById('lang-select');
@@ -1550,7 +1555,7 @@ async function refreshTranscriptionInfo() {
     const box = document.getElementById('tts-transcript-info');
     if (!box) return;
     try {
-        const resp = await fetchWithTimeout(`${API_BASE}/api/tts/config`, {}, 10000);
+        const resp = await fetchWithTimeout(`${apiBase()}/api/tts/config`, {}, 10000);
         const data = await resp.json();
         const info = data.transcriptions || {};
         if (!info.file) {
@@ -1580,7 +1585,7 @@ let gpuMemoryState = null;
 
 async function refreshGpuMemory() {
     try {
-        const resp = await fetchWithTimeout(`${API_BASE}/api/gpu-memory`, {}, 10000);
+        const resp = await fetchWithTimeout(`${apiBase()}/api/gpu-memory`, {}, 10000);
         const data = await resp.json();
         gpuMemoryState = data;
         renderGpuMemory();
@@ -1622,7 +1627,7 @@ async function releaseModels() {
     if (btn) btn.disabled = true;
     if (note) note.textContent = t('settings.memory.releasing');
     try {
-        const resp = await fetchWithTimeout(`${API_BASE}/api/models/release`, {
+        const resp = await fetchWithTimeout(`${apiBase()}/api/models/release`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ what: 'all' }),
@@ -1763,7 +1768,7 @@ async function setInputMode(mode) {
 
     startInputModeLoading();
     try {
-        const resp = await fetchWithTimeout(`${API_BASE}/api/input-mode`, {
+        const resp = await fetchWithTimeout(`${apiBase()}/api/input-mode`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ mode: wanted }),
@@ -1787,7 +1792,7 @@ async function setInputMode(mode) {
 
 async function fetchInputModeState() {
     try {
-        const resp = await fetchWithTimeout(`${API_BASE}/api/input-mode`, {}, 10000);
+        const resp = await fetchWithTimeout(`${apiBase()}/api/input-mode`, {}, 10000);
         return await resp.json();
     } catch (e) {
         return null;
@@ -1854,7 +1859,7 @@ async function loadWakeDevices(selected) {
     const sel = document.getElementById('wake-device-select');
     if (!sel) return;
     try {
-        const resp = await fetch(`${API_BASE}/api/audio-inputs`);
+        const resp = await fetch(`${apiBase()}/api/audio-inputs`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         wakeDevices = Array.isArray(data.devices) ? data.devices : [];
@@ -1942,7 +1947,7 @@ function updateWakeFieldsVisibility() {
 
 async function loadWakeSettings() {
     try {
-        const resp = await fetch(`${API_BASE}/api/wake-word`);
+        const resp = await fetch(`${apiBase()}/api/wake-word`);
         if (!resp.ok) return;
         const data = await resp.json();
         wakeState = data;
@@ -2028,7 +2033,7 @@ async function saveWakeSettings() {
         return false;
     }
     try {
-        const resp = await fetch(`${API_BASE}/api/wake-word`, {
+        const resp = await fetch(`${apiBase()}/api/wake-word`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -2171,7 +2176,7 @@ async function loadModelsForProvider(provider) {
     const host = hostInput.value || 'http://localhost:11434';
     
     try {
-        const response = await fetch(`${API_BASE}/api/models?provider=${provider}&host=${encodeURIComponent(host)}`);
+        const response = await fetch(`${apiBase()}/api/models?provider=${provider}&host=${encodeURIComponent(host)}`);
         const data = await response.json();
         
         modelSelect.innerHTML = '';
@@ -2285,7 +2290,7 @@ async function saveSettings() {
     }
     
     try {
-        const response = await fetch(`${API_BASE}/api/config`, {
+        const response = await fetch(`${apiBase()}/api/config`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2332,7 +2337,7 @@ document.addEventListener('click', (e) => {
 
 async function updateStatus() {
     // Periodic status refresh
-    const response = await fetch(`${API_BASE}/api/status`);
+    const response = await fetch(`${apiBase()}/api/status`);
     const data = await response.json();
     console.log('Статус:', data);
     
@@ -2348,7 +2353,7 @@ async function updateStatus() {
     
     setInterval(async () => {
         try {
-            const resp = await fetch(`${API_BASE}/api/status`);
+            const resp = await fetch(`${apiBase()}/api/status`);
             const st = await resp.json();
             console.log('Статус:', st);
             
@@ -2596,7 +2601,7 @@ async function processVoiceRecording() {
         const formData = new FormData();
         formData.append('file', audioBlob, 'recording.webm');
         
-        const response = await fetch(`${API_BASE}/api/stt`, {
+        const response = await fetch(`${apiBase()}/api/stt`, {
             method: 'POST',
             body: formData
         });
@@ -2639,7 +2644,7 @@ async function playTTS(text) {
     console.log(t('voice.tts.synthesis'), text.substring(0, 50) + '...');
     
     try {
-        const response = await fetch(`${API_BASE}/api/tts/speak`, {
+        const response = await fetch(`${apiBase()}/api/tts/speak`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: text }),
@@ -2674,7 +2679,7 @@ async function playTTS(text) {
 // Load the voice list for cloning
 async function loadTTSVoices() {
     try {
-        const response = await fetch(`${API_BASE}/api/tts/voices`);
+        const response = await fetch(`${apiBase()}/api/tts/voices`);
         const data = await response.json();
         
         const cloneSelect = document.getElementById('tts-clone-select');
@@ -2715,7 +2720,7 @@ async function updateTTSConfig() {
     console.log('TTS конфиг:', { mode, instruct, ref_audio });
     
     try {
-        const response = await fetch(`${API_BASE}/api/tts/config`, {
+        const response = await fetch(`${apiBase()}/api/tts/config`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

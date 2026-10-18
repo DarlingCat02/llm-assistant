@@ -2,8 +2,7 @@
 // Custom user/bot avatars: preset emoji or an uploaded image (avatars/ folder).
 
 import { t, getLang } from './i18n.js';
-
-const API_BASE_AVATARS = 'http://127.0.0.1:8000';
+import { apiBase } from './api-base.js';
 
 const AVATAR_STORE_KEY = 'lai_avatars';
 
@@ -60,7 +59,7 @@ export function avatarHtml(role) {
     const val = getAvatar(role);
     if (typeof val === 'object' && val.file) {
         // The file may have been deleted outside the app -> fall back to the emoji
-        return `<img src="${API_BASE_AVATARS}/api/avatars/${encodeURIComponent(val.file)}"
+        return `<img src="${apiBase()}/api/avatars/${encodeURIComponent(val.file)}"
                      alt="" class="avatar-img"
                      onerror="this.onerror=null;this.outerHTML='${AVATAR_DEFAULT[role]}'">`;
     }
@@ -91,7 +90,7 @@ function avatarRefreshHeader() {
 
 async function avatarFetchUploaded() {
     try {
-        const resp = await fetch(`${API_BASE_AVATARS}/api/avatars`);
+        const resp = await fetch(`${apiBase()}/api/avatars`);
         if (!resp.ok) return [];
         const data = await resp.json();
         return Array.isArray(data.avatars) ? data.avatars : [];
@@ -136,7 +135,7 @@ function renderAvatarUploaded() {
     box.innerHTML = avatarUploaded.map(a =>
         `<button class="avatar-uploaded-item${a.name === currentFile ? ' active' : ''}"
                  data-file="${esc(a.name)}" title="${esc(a.name)}">
-            <img src="${API_BASE_AVATARS}/api/avatars/${encodeURIComponent(a.name)}" alt="">
+            <img src="${apiBase()}/api/avatars/${encodeURIComponent(a.name)}" alt="">
          </button>`
     ).join('');
 }
@@ -170,7 +169,7 @@ async function avatarUpload(file) {
     const form = new FormData();
     form.append('file', file);
     try {
-        const resp = await fetch(`${API_BASE_AVATARS}/api/avatars`, { method: 'POST', body: form });
+        const resp = await fetch(`${apiBase()}/api/avatars`, { method: 'POST', body: form });
         const data = await resp.json().catch(() => null);
         if (!resp.ok) {
             alert(isRu ? `Ошибка загрузки: ${(data && data.detail) || resp.status}`
@@ -193,7 +192,7 @@ async function avatarDeleteSelected() {
         return;
     }
     try {
-        const resp = await fetch(`${API_BASE_AVATARS}/api/avatars/${encodeURIComponent(cur.file)}`,
+        const resp = await fetch(`${apiBase()}/api/avatars/${encodeURIComponent(cur.file)}`,
                                  { method: 'DELETE' });
         if (!resp.ok) throw new Error(resp.status);
         setAvatar(avatarCurrentRole, AVATAR_DEFAULT[avatarCurrentRole]);

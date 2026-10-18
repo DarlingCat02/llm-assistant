@@ -1,8 +1,16 @@
 use log::{error, info};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
+
+/// The port the backend was given, readable before the app state exists.
+///
+/// The frontend asks for it as soon as the page loads, which can be before
+/// start_python_backend has finished registering the state. Keeping it here
+/// too means the answer is right in either order.
+static BACKEND_PORT: AtomicU16 = AtomicU16::new(8000);
 
 struct AppState {
     python_process: Option<std::process::Child>,
@@ -11,6 +19,9 @@ struct AppState {
     /// the UI cannot use its length to tell how much it already showed - this
     /// counter is what makes a sliding buffer safe to follow.
     total_logs: Arc<std::sync::atomic::AtomicU64>,
+    /// Port the backend was actually given, so the frontend can ask instead of
+    /// assuming 8000 and failing silently when something else holds it.
+    port: u16,
 }
 
 const LOG_BUFFER_MAX: usize = 2000;
@@ -30,21 +41,121 @@ fn get_show_console(project_dir: &std::path::Path) -> bool {
     false
 }
 
+/// Where the program keeps data that has to survive a reinstall: the user's
+/// app-data folder, which is writable even when the app was installed under
+/// Program Files.
+fn data_dir() -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            return std::path::PathBuf::from(local).join("local_assistant");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            return std::path::PathBuf::from(home).join(".local_assistant");
+        }
+    }
+    std::env::temp_dir().join("local_assistant")
+}
+
+/// Walk up from `start` looking for the file that only ever exists in the
+/// project: the backend package.
+fn find_project_dir(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    for dir in start.ancestors() {
+        if dir.join("backend").join("main.py").is_file() {
+            return Some(dir.to_path_buf());
+        }
+    }
+    None
+}
+
+/// The project root.
+///
+/// This used to count five parent directories up from the exe, which only
+/// holds for `<root>\llm-assistant-tauri\src-tauri\target\<profile>\app.exe`
+/// and unwrapped at every step: installed under Program Files the fourth
+/// `parent()` of `C:\` is `None`, so the app panicked before showing a window -
+/// and with no console in a release build, nothing said why. A marker file
+/// answers the same question without counting, and works wherever the project
+/// was cloned or moved to.
 fn project_dir() -> std::path::PathBuf {
-    let exe_path = std::env::current_exe().unwrap();
-    let binding = exe_path;
-    binding
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()));
+
+    if let Some(dir) = exe_dir.as_deref().and_then(find_project_dir) {
+        return dir.to_path_buf();
+    }
+
+    // The exe was copied or installed away from the project. Check the usual
+    // place a source tree lives before giving up on it.
+    let mut guesses: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(documents) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        let base = std::path::PathBuf::from(documents);
+        guesses.push(base.join("Documents").join("local_assistant"));
+        guesses.push(base.join("Desktop").join("local_assistant"));
+        guesses.push(base.join("local_assistant"));
+        guesses.push(base.clone());
+    }
+    guesses.push(std::env::current_dir().unwrap_or_else(|_| data_dir()));
+    for guess in &guesses {
+        if let Some(found) = find_project_dir(guess) {
+            return found;
+        }
+    }
+
+    let fallback = exe_dir.unwrap_or_else(|| data_dir());
+    error!(
+        "Project folder not found next to the exe; falling back to {:?}. \
+         The backend needs the project (backend/, .env, models/) - run the exe \
+         from llm-assistant-tauri\\src-tauri\\target\\release\\ inside the project, \
+         or see logs/backend.log",
+        fallback
+    );
+    fallback
+}
+
+/// The log directory, preferring the project and falling back to app data.
+///
+/// A project under Program Files cannot be written to, and a wrong project root
+/// means `logs/backend.log` is never created at all - which is exactly the file
+/// the UI tells the user to go and look at when something fails.
+fn logs_dir(project_dir: &std::path::Path) -> std::path::PathBuf {
+    let in_project = project_dir.join("logs");
+    if std::fs::create_dir_all(&in_project).is_ok() {
+        return in_project;
+    }
+    let fallback = data_dir().join("logs");
+    if std::fs::create_dir_all(&fallback).is_ok() {
+        error!("Cannot write logs inside the project; using {:?}", fallback);
+        return fallback;
+    }
+    in_project
+}
+
+/// Open the log file for appending, or None when even that fails.
+fn open_log_file(dir: &std::path::Path) -> Option<Arc<Mutex<std::fs::File>>> {
+    use std::fs::OpenOptions;
+    std::fs::create_dir_all(dir).ok()?;
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("backend.log"))
+        .ok()?;
+    Some(Arc::new(Mutex::new(file)))
+}
+
+/// A free TCP port on the loopback interface.
+///
+/// The backend port used to be hardcoded, so anything already listening on 8000
+/// on another machine left the app with a dead UI and nothing to explain it.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|l| l.local_addr())
+        .map(|addr| addr.port())
+        .unwrap_or(8000)
 }
 
 fn get_env_value(project_dir: &std::path::Path, key: &str) -> Option<String> {
@@ -340,23 +451,7 @@ fn stop_python_backend(app_handle: &AppHandle) {
 }
 
 fn start_python_backend(app_handle: AppHandle) {
-    info!("Starting Python backend...");
-
-    let exe_path = std::env::current_exe().unwrap();
-    let binding = exe_path;
-    let project_dir = binding
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-
+    let project_dir = project_dir();
     info!("Project dir: {:?}", project_dir);
 
     // Prefer the project's venv python (dependencies installed via install.bat),
@@ -411,6 +506,9 @@ fn start_python_backend(app_handle: AppHandle) {
     };
 
     let show_console = get_show_console(&project_dir);
+    let port = free_port();
+    BACKEND_PORT.store(port, Ordering::Relaxed);
+    info!("Backend port: {}", port);
     let mut cmd = Command::new(&python);
     cmd.args([
         "-m",
@@ -419,9 +517,13 @@ fn start_python_backend(app_handle: AppHandle) {
         "--host",
         "127.0.0.1",
         "--port",
-        "8000",
+        &port.to_string(),
     ])
     .current_dir(&project_dir)
+    // `backend.main:app` used to resolve only because the working directory
+    // happened to be the project root. Saying so explicitly means the backend
+    // still imports if that ever stops being true.
+    .env("PYTHONPATH", &project_dir)
     // Without this Python encodes stdout/stderr with the system ANSI code page
     // (cp1251 here), which the log pump then decodes as UTF-8 and turns every
     // Russian log line into unreadable garbage.
@@ -445,17 +547,11 @@ fn start_python_backend(app_handle: AppHandle) {
     let stderr = child.stderr.take();
     let pid = child.id();
 
-    // Fresh log file per backend start, so the file always describes the run
-    // that is happening now rather than a mixture of old failures.
-    let log_file = std::fs::create_dir_all(project_dir.join("logs")).ok().and_then(|()| {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(project_dir.join("logs").join("backend.log"))
-            .ok()
-            .map(|f| Arc::new(Mutex::new(f)))
-    });
+    // Fresh log file per run, so the file always describes what is happening now
+    // rather than a mixture of old failures. Append mode, not truncate: the
+    // Rust-side logger already writes into this same file from startup, and
+    // truncating on the backend's start would throw those lines away.
+    let log_file = open_log_file(&logs_dir(&project_dir));
     if log_file.is_none() {
         error!("Cannot open logs/backend.log for writing");
     }
@@ -502,6 +598,7 @@ fn start_python_backend(app_handle: AppHandle) {
     if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
         if let Ok(mut s) = state.lock() {
             s.python_process = Some(child);
+            s.port = port;
             return;
         }
     }
@@ -509,7 +606,23 @@ fn start_python_backend(app_handle: AppHandle) {
         python_process: Some(child),
         logs,
         total_logs,
+        port,
     }));
+}
+
+/// The port the backend was actually given.
+///
+/// The frontend used to hardcode 8000 in four places. When anything else held
+/// that port, the app showed an empty UI with no way to find out why; now the
+/// backend picks a free port and the frontend asks for it.
+#[tauri::command]
+fn backend_port(state: tauri::State<'_, Mutex<AppState>>) -> u16 {
+    match state.lock() {
+        Ok(s) => s.port,
+        // Not registered yet: the static already holds the port that was
+        // handed to uvicorn, which is the answer either way.
+        Err(_) => BACKEND_PORT.load(Ordering::Relaxed),
+    }
 }
 
 fn setup_global_shortcuts(app: &AppHandle) {
@@ -598,9 +711,40 @@ fn setup_global_shortcuts(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Start from a clean log, then send this app's own messages to the same
+    // file as the backend's. env_logger writes to stderr, and a release build
+    // has no console (main.rs sets windows_subsystem), so "Python not found"
+    // and "cannot open the log file" went nowhere at all - on another machine
+    // every failure of the launcher was invisible.
+    let log_dir = logs_dir(&project_dir());
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(log_dir.join("backend.log"));
+
+    let mut builder = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info"),
+    );
+    // Its own handle, in append mode: env_logger keeps writing for the whole
+    // run, while the backend's pump appends through a shared lock.
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("backend.log"))
+    {
+        Ok(file) => {
+            // target() mutates in place and returns &mut Builder.
+            builder.target(env_logger::Target::Pipe(Box::new(file)));
+        }
+        Err(e) => {
+            eprintln!("cannot open {}: {}", log_dir.join("backend.log").display(), e);
+        }
+    }
+    let _ = builder.try_init();
 
     info!("Starting Local AI Assistant...");
+    info!("Log file: {}", log_dir.join("backend.log").display());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -621,6 +765,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            backend_port,
             get_backend_logs,
             get_backend_log_total,
             clear_backend_logs

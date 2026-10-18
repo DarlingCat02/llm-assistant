@@ -3,8 +3,7 @@
 // No persona selected -> the standard system prompt is used.
 
 import { t, getLang } from './i18n.js';
-
-const API = 'http://127.0.0.1:8000';
+import { apiBase } from './api-base.js';
 
 export const personasState = {
     personas: [],
@@ -20,7 +19,7 @@ function esc(str) {
 
 function avatarImg(persona, size = 20) {
     if (persona && persona.avatar) {
-        return `<img src="${API}/api/avatars/${encodeURIComponent(persona.avatar)}"
+        return `<img src="${apiBase()}/api/avatars/${encodeURIComponent(persona.avatar)}"
                      class="avatar-img" style="width:${size}px;height:${size}px" alt="">`;
     }
     return '<span class="persona-emoji">🎭</span>';
@@ -28,7 +27,7 @@ function avatarImg(persona, size = 20) {
 
 export async function loadPersonas() {
     try {
-        const resp = await fetch(`${API}/api/personas`);
+        const resp = await fetch(`${apiBase()}/api/personas`);
         if (!resp.ok) throw new Error(resp.status);
         const data = await resp.json();
         personasState.personas = Array.isArray(data.personas) ? data.personas : [];
@@ -45,7 +44,7 @@ export async function loadPersonas() {
 }
 
 export async function savePersonas(personas, active) {
-    const resp = await fetch(`${API}/api/personas`, {
+    const resp = await fetch(`${apiBase()}/api/personas`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ personas, active }),
@@ -61,7 +60,7 @@ export async function savePersonas(personas, active) {
 }
 
 export async function activatePersona(id) {
-    const resp = await fetch(`${API}/api/personas/activate`, {
+    const resp = await fetch(`${apiBase()}/api/personas/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: id || null }),

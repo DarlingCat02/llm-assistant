@@ -1,3 +1,5 @@
+import { apiBase, ensureApiBase } from './api-base.js';
+
 let currentLang = 'en';
 let translations = {};
 
@@ -8,7 +10,11 @@ export async function initI18n() {
     currentLang = saved;
   } else {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/config');
+      // Ask the app which port the backend got before fetching from it, or the
+      // request would go to 8000 while the backend listens elsewhere - and the
+      // catch below would silently leave the interface in English.
+      await ensureApiBase();
+      const res = await fetch(`${apiBase()}/api/config`);
       if (res.ok) {
         const cfg = await res.json();
         if (cfg.language && ['en','ru'].includes(cfg.language)) {
