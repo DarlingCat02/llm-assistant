@@ -2593,7 +2593,11 @@ if __name__ == "__main__":
     # Run with host check disabled for WebSocket
     uvicorn.run(
         app,
-        host="0.0.0.0",  # Listen on all interfaces
+        # Loopback only. This API opens files, launches programs and takes
+        # screenshots on this machine, so listening on every interface would
+        # hand all of that to the whole local network. The desktop app already
+        # bound 127.0.0.1; this path used to disagree with it.
+        host="127.0.0.1",
         port=8000,
         reload=False,
         ws_ping_interval=None,  # Disable ping for stability

@@ -5,10 +5,16 @@ Memory Manager - Long-term memory manager based on ChromaDB.
 # Memory scope for facts about the user (shared by every persona)
 USER_SCOPE = "user"
 
-# Disable HuggingFace online requests BEFORE all imports
+# Telemetry off, but deliberately NOT offline mode.
+#
+# HF_HUB_OFFLINE=1 used to be set here at import time, before anything else in
+# the process. It is a process-wide switch: it also killed every model download
+# the app triggers on demand, including the one in stt_engine.resolve_model_dir.
+# On a machine that had no models/ folder yet - a fresh clone, or a project
+# copied to a new computer - speech recognition could therefore never fetch its
+# model and simply failed. Offline is now decided per model, in
+# ensure_embedding_model(), and only when the files are already on disk.
 import os
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 import asyncio
@@ -26,6 +32,100 @@ from config import get_config, ChromaConfig, MemoryConfig
 
 
 logger = logging.getLogger(__name__)
+
+# 80 MB, CPU, and the app cannot start without it: without an embedding model
+# Assistant.initialize() raises and every request comes back 503. It used to be
+# loaded straight out of the per-user HuggingFace cache, which travels with the
+# person and not with the project - so a copied folder had nothing to load.
+EMBEDDING_REPO = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_DIRNAME = "all-MiniLM-L6-v2"
+
+# The whole snapshot is 930 MB: ONNX 476, OpenVINO 108, and three more copies of
+# the same weights for TensorFlow and Rust. This assistant runs the model
+# through sentence-transformers on CPU with PyTorch, so it needs one set of
+# weights and the configs - measured 87 MB instead of 930.
+EMBEDDING_FILES = (
+    "*.json",
+    "*.txt",
+    "1_Pooling/*",
+    "model.safetensors",
+)
+
+
+def _offline_requested() -> bool:
+    """True when the user asked for offline mode themselves."""
+    value = os.environ.get("HF_HUB_OFFLINE", "").strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    # huggingface_hub reads the variable once, at import, so an already
+    # imported module can be in offline mode without the environment saying so.
+    try:
+        from huggingface_hub import constants as hf_constants
+        return bool(getattr(hf_constants, "HF_HUB_OFFLINE", False))
+    except Exception:
+        return False
+
+
+def _go_offline() -> None:
+    """From here on, HuggingFace must not touch the network."""
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    # The variable alone does nothing once huggingface_hub is imported - it
+    # copies the flag into its constants at import time and reads those.
+    try:
+        from huggingface_hub import constants as hf_constants
+        hf_constants.HF_HUB_OFFLINE = True
+    except Exception:
+        pass
+
+
+def embedding_model_path(base_dir: Path | None = None) -> Path:
+    """Where the embedding model lives inside the project."""
+    if base_dir is None:
+        base_dir = Path(__file__).resolve().parent.parent
+    return base_dir / "models" / EMBEDDING_DIRNAME
+
+
+def ensure_embedding_model(base_dir: Path | None = None) -> Path:
+    """
+    Return a local folder holding the embedding model, downloading it if needed.
+
+    Order matters:
+
+    * already in the project - use it, and only then go offline, so a machine
+      with no internet behaves exactly like one that has it;
+    * not there but online allowed - download into the project, so the folder
+      travels with the project from then on;
+    * not there and the user set HF_HUB_OFFLINE - say exactly what is missing
+      instead of failing inside sentence_transformers with a stack trace.
+    """
+    target = embedding_model_path(base_dir)
+    if target.is_dir() and any(target.iterdir()):
+        _go_offline()
+        return target
+
+    if _offline_requested():
+        raise RuntimeError(
+            f"Модель эмбеддингов не найдена: {target}\n"
+            "Скачайте её один раз (нужен интернет):\n"
+            f"    python tests/fetch_whisper_model.py --embedding\n"
+            "или удалите HF_HUB_OFFLINE из окружения и перезапустите приложение."
+        )
+
+    logger.info("Downloading embedding model %s to %s ...", EMBEDDING_REPO, target)
+    try:
+        from huggingface_hub import snapshot_download
+        snapshot_download(repo_id=EMBEDDING_REPO, local_dir=str(target),
+                          allow_patterns=list(EMBEDDING_FILES))
+    except Exception as exc:
+        raise RuntimeError(
+            f"Не удалось скачать модель эмбеддингов {EMBEDDING_REPO}: {exc}\n"
+            f"Ожидалась папка: {target}\n"
+            "Скопируйте её в models/ вручную или повторите при подключённом интернете."
+        ) from exc
+
+    _go_offline()
+    return target
 
 
 @dataclass
@@ -144,13 +244,15 @@ class ChromaStorage(IStorage):
 
         Creates persistent storage in the specified directory.
         """
-        # Disable HuggingFace online checks (model is loaded from cache)
-        import os
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        
         # Create the directory if it does not exist
-        persist_path = Path(self._config.persist_dir)
+        persist_path = Path(self._config.persist_dir).expanduser()
+        if not persist_path.is_absolute():
+            # A relative path belongs to the project, not to whatever directory
+            # the backend happened to be started from. Resolving it against the
+            # current directory meant that launching the backend from anywhere
+            # else created a brand-new empty vector store next to it, while the
+            # chats stayed where they were - which reads as "the memory is gone".
+            persist_path = Path(__file__).resolve().parent.parent / persist_path
         persist_path.mkdir(parents=True, exist_ok=True)
         
         # Initialize the client with persistent settings
@@ -358,12 +460,14 @@ class MemoryManager:
         
         logger.info("Loading embedding model...")
         from sentence_transformers import SentenceTransformer
-        
-        # local_files_only=True — the most reliable way to disable HuggingFace requests
+
+        # A folder inside the project, not a bare model name: the name made
+        # sentence_transformers look in the per-user HuggingFace cache, which a
+        # copied project does not carry, and the load failed with no clue.
+        model_path = ensure_embedding_model()
         self._embedding_model = SentenceTransformer(
-            "all-MiniLM-L6-v2",
+            str(model_path),
             device="cpu",
-            local_files_only=True,
         )
         logger.info("Embedding model loaded")
 

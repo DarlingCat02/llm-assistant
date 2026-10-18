@@ -149,6 +149,12 @@ class Assistant:
         """
         self._logger.info("Initializing assistant...")
         self._start_time = datetime.now()
+
+        # What is missing in models/, said before a feature needs it. The
+        # resolvers only check that a folder exists, so a wrong or half-copied
+        # one used to fail much later, inside transformers.
+        from src.model_check import warn_about_models
+        warn_about_models(self._config)
         
         # 1. LLM Engine
         self._llm = LLMEngine(config=self._config.llm)
