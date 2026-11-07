@@ -563,6 +563,8 @@ Set `STT_MODEL` in `.env`: an alias, a Hugging Face `owner/repo` id, or a local 
 | `large` | `openai/whisper-large-v3` | ~10 GB |
 | `large-v3-turbo` (default) | `openai/whisper-large-v3-turbo` | ~4 GB |
 
+**Custom models (Auto-Discovery):** You can place any fine-tuned Whisper model in Hugging Face format (with `config.json` and `model.safetensors`) into the `models/` folder. The app automatically discovers all valid model folders and displays them in the settings dropdown under their folder names (e.g. `whisper-small-ru-100h`).
+
 ### Hotkeys
 
 | Action | Key (default) |
@@ -704,6 +706,7 @@ LOG_LEVEL=INFO
 |-------|----------|----------|
 | GET | `/api/status` | App status |
 | POST | `/api/chat` | Send message (returns `used_context_tokens`, `max_context_tokens`, `actions`, supports `images` array) |
+| GET | `/api/stt/models` | List available STT models (discovered in `models/` + presets) |
 | POST | `/api/stt` | Voice recognition |
 | POST | `/api/upload` | Upload file (document or image) |
 | GET | `/api/audio-inputs` | Available microphones |
@@ -1469,6 +1472,8 @@ Whisper транскрибирует только на русском языке
 | `large` | `openai/whisper-large-v3` | ~10 ГБ |
 | `large-v3-turbo` (по умолчанию) | `openai/whisper-large-v3-turbo` | ~4 ГБ |
 
+**Кастомные модели (автообнаружение):** Любая дообученная модель Whisper в формате Hugging Face (с `config.json` и `model.safetensors`), помещенная в папку `models/`, автоматически обнаруживается приложением и появляется в выпадающем списке настроек под именем своей папки (например, `whisper-small-ru-100h`).
+
 ### Горячие клавиши
 
 | Действие | Клавиша (по умолчанию) |
@@ -1608,6 +1613,7 @@ LOG_LEVEL=INFO
 |-------|----------|----------|
 | GET | `/api/status` | Статус приложения |
 | POST | `/api/chat` | Отправить сообщение (возвращает `used_context_tokens`, `max_context_tokens`, `actions`, поддерживает `images` массив) |
+| GET | `/api/stt/models` | Список доступных STT моделей (найденные в `models/` + пресеты) |
 | POST | `/api/stt` | Распознать голос |
 | POST | `/api/upload` | Загрузить файл (документ или изображение) |
 | GET | `/api/audio-inputs` | Доступные микрофоны |

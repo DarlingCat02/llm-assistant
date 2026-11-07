@@ -104,9 +104,78 @@ WHISPER_ALIASES = {
     "medium": "openai/whisper-medium",
     "large": "openai/whisper-large-v3",
     "large-v3-turbo": "openai/whisper-large-v3-turbo",
+    "small-ru": "DarlingCat/whisper-small-ru-100h",
+    "whisper-small-ru-100h": "DarlingCat/whisper-small-ru-100h",
 }
 
 DEFAULT_WHISPER_ALIAS = "large-v3-turbo"
+
+
+def is_valid_whisper_folder(folder: Path) -> bool:
+    """Check if a folder is a valid Hugging Face Whisper model directory."""
+    if not folder.is_dir():
+        return False
+    cfg_file = folder / "config.json"
+    if not cfg_file.is_file():
+        return False
+    has_weights = (
+        (folder / "model.safetensors").is_file()
+        or (folder / "pytorch_model.bin").is_file()
+        or any(folder.glob("*.safetensors"))
+        or any(folder.glob("*.bin"))
+    )
+    if not has_weights:
+        return False
+    try:
+        import json
+        with open(cfg_file, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        if cfg.get("model_type") == "whisper":
+            return True
+        archs = cfg.get("architectures", [])
+        if any("whisper" in str(a).lower() for a in archs):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def list_available_stt_models() -> list[dict]:
+    """
+    List all available STT models.
+
+    Discovers all local model folders in ./models/ matching the Whisper structure,
+    and also lists standard online aliases if not yet downloaded.
+    """
+    base_dir = Path(__file__).parent.parent
+    models_dir = base_dir / "models"
+    result = []
+    seen_ids = set()
+
+    # 1. Local discovered models in ./models/
+    if models_dir.is_dir():
+        for item in sorted(models_dir.iterdir(), key=lambda p: p.name.lower()):
+            if item.is_dir() and is_valid_whisper_folder(item):
+                result.append({
+                    "id": item.name,
+                    "name": item.name,
+                    "is_local": True
+                })
+                seen_ids.add(item.name)
+
+    # 2. Standard aliases if not already represented as a local folder
+    for alias in sorted(WHISPER_ALIASES.keys()):
+        repo_id = WHISPER_ALIASES[alias]
+        model_name = repo_id.split("/")[-1]
+        if alias not in seen_ids and model_name not in seen_ids:
+            result.append({
+                "id": alias,
+                "name": alias,
+                "is_local": False
+            })
+            seen_ids.add(alias)
+
+    return result
 
 
 def resolve_whisper_model(spec: Optional[str]) -> str:
@@ -128,6 +197,12 @@ def resolve_whisper_model(spec: Optional[str]) -> str:
     # Explicit local folder?
     if Path(spec).is_dir():
         return str(Path(spec))
+
+    # Folder directly inside ./models/?
+    base_dir = Path(__file__).parent.parent
+    local_in_models = base_dir / 'models' / spec
+    if local_in_models.is_dir():
+        return str(local_in_models)
 
     # Alias or full repo id?
     alias = spec.lower()

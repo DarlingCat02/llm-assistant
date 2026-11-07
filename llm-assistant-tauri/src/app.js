@@ -1436,14 +1436,35 @@ async function openSettings() {
         if (pEn) pEn.value = config.personality_en || '';
         updatePersonalityCounters();
 
-        // Voice: STT model
+        // Voice: STT model (auto-discovery from models/ folder)
         const sttCustom = document.getElementById('stt-model-custom');
         const sttSelect = document.getElementById('stt-model-select');
         const sttModel = config.stt_model || 'large-v3-turbo';
         if (sttSelect) {
+            try {
+                const sttResp = await fetchWithTimeout(`${apiBase()}/api/stt/models`, {}, 3000);
+                if (sttResp.ok) {
+                    const sttData = await sttResp.json();
+                    if (sttData && Array.isArray(sttData.models) && sttData.models.length > 0) {
+                        sttSelect.innerHTML = '';
+                        sttData.models.forEach((m) => {
+                            const opt = document.createElement('option');
+                            opt.value = m.id;
+                            opt.textContent = m.name;
+                            sttSelect.appendChild(opt);
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to load dynamic STT models, keeping fallback options', e);
+            }
             const known = [...sttSelect.options].some((o) => o.value === sttModel);
-            sttSelect.value = known ? sttModel : 'large-v3-turbo';
-            if (sttCustom) sttCustom.value = known ? '' : sttModel;
+            if (known) {
+                sttSelect.value = sttModel;
+                if (sttCustom) sttCustom.value = '';
+            } else {
+                if (sttCustom) sttCustom.value = sttModel;
+            }
         }
 
         // Hotkeys

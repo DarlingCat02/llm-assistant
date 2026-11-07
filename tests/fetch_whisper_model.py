@@ -46,7 +46,8 @@ def fetch_whisper(spec):
     from src.stt_engine import resolve_whisper_model
 
     started = time.time()
-    target = Path(__file__).parent.parent / "models" / f"whisper-{spec}"
+    folder_name = spec if spec.startswith("whisper-") else f"whisper-{spec}"
+    target = Path(__file__).parent.parent / "models" / folder_name
     already = target.exists()
     try:
         path = resolve_whisper_model(spec)

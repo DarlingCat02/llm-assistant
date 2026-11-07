@@ -230,5 +230,6 @@
   "settings.tts.transcript.saved": "Образец уже расшифрован — повторно не распознаётся.",
   "settings.tts.transcript.missing": "Образец ещё не расшифрован.",
   "settings.tts.transcript.path": "Файл: {file} (записей: {count}). Его можно открыть и поправить текст вручную.",
-  "settings.tts.transcript.idle": "Образец голоса не выбран."
+  "settings.tts.transcript.idle": "Образец голоса не выбран.",
+  "settings.voice.sttFormatHint": "Папки моделей в models/ должны быть в формате Hugging Face (содержать config.json и model.safetensors)."
 }

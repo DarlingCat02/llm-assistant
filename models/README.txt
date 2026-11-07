@@ -20,6 +20,7 @@ The Whisper folder name depends on STT_MODEL in .env
 
   STT_MODEL=tiny              ->  models/whisper-tiny
   STT_MODEL=base              ->  models/whisper-base
+  STT_MODEL=small-ru          ->  models/whisper-small-ru-100h (DarlingCat/whisper-small-ru-100h)
   STT_MODEL=small             ->  models/whisper-small
   STT_MODEL=medium            ->  models/whisper-medium
   STT_MODEL=large             ->  models/whisper-large-v3      (v3, not "large")
@@ -63,8 +64,11 @@ If the name does not match STT_MODEL, the app does not complain about the
 folder: it goes off to download the model instead, and on a machine without
 internet that ends as a download error rather than "your folder is named wrong".
 
-Any folder name works for speech recognition if you point STT_MODEL straight at
-it - an absolute path is used as it is:
+Auto-discovery: any folder placed directly in ./models/ that contains a valid
+Hugging Face Whisper model (config.json + model.safetensors) is automatically
+discovered by the app and displayed in the UI dropdown settings by its folder name.
+
+Any folder name also works if you point STT_MODEL straight at it:
 
   STT_MODEL=D:\models\my-whisper
 
@@ -83,7 +87,7 @@ it - an absolute path is used as it is:
                               первом запуске, если их нет)
 
 Имя папки Whisper зависит от STT_MODEL в .env: tiny -> whisper-tiny,
-base -> whisper-base, small -> whisper-small, medium -> whisper-medium,
+base -> whisper-base, small-ru -> whisper-small-ru-100h (DarlingCat/whisper-small-ru-100h), small -> whisper-small, medium -> whisper-medium,
 large -> whisper-large-v3 (именно v3), large-v3-turbo -> whisper-large-v3-turbo
 (по умолчанию). Фразе пробуждения отдельная модель не нужна - она берёт эту же.
 
@@ -97,6 +101,9 @@ tokenizer_config.json.
 venv\Scripts\python tests\fetch_whisper_model.py large-v3-turbo
 
 Если имя папки не совпадает с STT_MODEL, приложение не пожалуется на папку, а
-попробует скачать модель - и без интернета закончит ошибкой загрузки. Любое
-имя папки подходит, если указать путь прямо в STT_MODEL, например
+попробует скачать модель - и без интернета закончит ошибкой загрузки. Автообнаружение: любая папка в ./models/, содержащая модель Whisper в формате
+Hugging Face (config.json + model.safetensors), автоматически обнаруживается и
+появляется в выпадающем списке настроек UI под своим именем папки.
+
+Любое другое имя папки также подходит, если указать путь прямо в STT_MODEL:
 STT_MODEL=D:\models\my-whisper

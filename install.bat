@@ -19,7 +19,7 @@ echo =============================================
 echo.
 echo  [1] Check environment
 echo  [2] Install Python dependencies
-echo  [3] Download Whisper Large V3 Turbo
+echo  [3] Download Whisper STT model (Small-RU / Large / Base / Tiny)
 echo  [4] Download OmniVoice
 echo  [5] Build Tauri app (exe)
 echo  [6] Setup .env and apps.json
@@ -240,12 +240,57 @@ goto MENU
 :DOWNLOAD_WHISPER
 cls
 echo =============================================
-echo   Download Whisper Large V3 Turbo
+echo   Download Whisper STT Model
 echo =============================================
 echo.
-echo  Model will be downloaded to:
-echo    %SCRIPT_DIR%\models\whisper-large-v3-turbo
+echo  Select model to download:
 echo.
+echo  [1] Whisper Small RU (DarlingCat/whisper-small-ru-100h) [Recommended: ~1 GB, fast and accurate RU]
+echo  [2] Whisper Large V3 Turbo (openai/whisper-large-v3-turbo) [Default: ~3 GB, multi-lingual]
+echo  [3] Whisper Small (openai/whisper-small) [Official: ~1 GB]
+echo  [4] Whisper Base (openai/whisper-base) [Official: ~290 MB, lightweight]
+echo  [5] Whisper Tiny (openai/whisper-tiny) [Official: ~150 MB, ultra-fast]
+echo  [6] Whisper Medium (openai/whisper-medium) [Official: ~5 GB]
+echo  [0] Back to main menu
+echo.
+set "w_choice="
+set /p "w_choice=Choice (1-6, 0 to cancel): "
+if "!w_choice!"=="0" goto MENU
+if "!w_choice!"=="1" (
+    set "W_REPO=DarlingCat/whisper-small-ru-100h"
+    set "W_DIR_NAME=whisper-small-ru-100h"
+    set "W_TITLE=Whisper Small RU (DarlingCat/whisper-small-ru-100h)"
+    set "W_SIZE=~1 GB"
+) else if "!w_choice!"=="2" (
+    set "W_REPO=openai/whisper-large-v3-turbo"
+    set "W_DIR_NAME=whisper-large-v3-turbo"
+    set "W_TITLE=Whisper Large V3 Turbo"
+    set "W_SIZE=~3 GB"
+) else if "!w_choice!"=="3" (
+    set "W_REPO=openai/whisper-small"
+    set "W_DIR_NAME=whisper-small"
+    set "W_TITLE=Whisper Small (Official)"
+    set "W_SIZE=~1 GB"
+) else if "!w_choice!"=="4" (
+    set "W_REPO=openai/whisper-base"
+    set "W_DIR_NAME=whisper-base"
+    set "W_TITLE=Whisper Base (Official)"
+    set "W_SIZE=~290 MB"
+) else if "!w_choice!"=="5" (
+    set "W_REPO=openai/whisper-tiny"
+    set "W_DIR_NAME=whisper-tiny"
+    set "W_TITLE=Whisper Tiny (Official)"
+    set "W_SIZE=~150 MB"
+) else if "!w_choice!"=="6" (
+    set "W_REPO=openai/whisper-medium"
+    set "W_DIR_NAME=whisper-medium"
+    set "W_TITLE=Whisper Medium (Official)"
+    set "W_SIZE=~5 GB"
+) else (
+    echo  [!] Invalid choice.
+    pause
+    goto DOWNLOAD_WHISPER
+)
 
 if not exist "venv\Scripts\activate.bat" (
     echo  [!] First run option [2] - Install Python dependencies
@@ -254,22 +299,25 @@ if not exist "venv\Scripts\activate.bat" (
 )
 call "venv\Scripts\activate.bat"
 
+echo.
 echo  [1/2] Installing huggingface_hub...
 pip install huggingface_hub >nul 2>&1
 echo    [+] huggingface_hub installed
 
-echo  [2/2] Downloading model...
-echo    This may take 5-15 minutes (size ~3 GB)
+echo.
+echo  [2/2] Downloading !W_TITLE!...
+echo    Size: !W_SIZE!
+echo    Target: %SCRIPT_DIR%\models\!W_DIR_NAME!
 echo.
 
-set "WHISPER_DIR=%SCRIPT_DIR%\models\whisper-large-v3-turbo"
+set "WHISPER_DIR=%SCRIPT_DIR%\models\!W_DIR_NAME!"
 if not exist "%WHISPER_DIR%" mkdir "%WHISPER_DIR%"
 
 python -c ^
 "import sys;^
 from huggingface_hub import snapshot_download;^
-print('  Downloading openai/whisper-large-v3-turbo...');^
-snapshot_download('openai/whisper-large-v3-turbo', local_dir=r'%WHISPER_DIR:\=\\%');^
+print('  Downloading !W_REPO!...');^
+snapshot_download('!W_REPO!', local_dir=r'%WHISPER_DIR:\=\\%');^
 print('  [+] Whisper model downloaded successfully')"
 
 if !errorlevel! neq 0 (
@@ -279,9 +327,9 @@ if !errorlevel! neq 0 (
     goto MENU
 )
 
-echo    [%date% %time%] Whisper downloaded >> "%LOG_FILE%"
+echo    [%date% %time%] Whisper !W_DIR_NAME! downloaded >> "%LOG_FILE%"
 echo.
-echo  [+] Whisper Large V3 Turbo downloaded!
+echo  [+] !W_TITLE! downloaded!
 echo.
 pause
 goto MENU
@@ -531,7 +579,7 @@ echo  Will execute:
 echo    1. Check environment
 echo    2. Install Python dependencies
 echo    3. Setup .env from template
-echo    4. Download Whisper Large V3 Turbo
+echo    4. Download Whisper STT model
 echo    5. Download OmniVoice
 echo    6. Build Tauri application
 echo.
@@ -602,18 +650,38 @@ if not exist ".env" (
 )
 
 echo.
-echo  === [4/6] Download Whisper Large V3 Turbo ===
+echo  === [4/6] Download Whisper STT Model ===
 echo.
-pip install huggingface_hub >nul 2>&1
-set "WHISPER_DIR=%SCRIPT_DIR%\models\whisper-large-v3-turbo"
-if not exist "%WHISPER_DIR%" mkdir "%WHISPER_DIR%"
-python -c "from huggingface_hub import snapshot_download; snapshot_download('openai/whisper-large-v3-turbo', local_dir=r'%WHISPER_DIR:\=\\%'); print('Done')"
-if !errorlevel! equ 0 (
-    echo    [+] Whisper downloaded
+echo    Choose model to download:
+echo      [1] Whisper Small RU (DarlingCat/whisper-small-ru-100h) [Recommended: ~1 GB, fast RU]
+echo      [2] Whisper Large V3 Turbo (openai/whisper-large-v3-turbo) [~3 GB]
+echo      [3] Whisper Base (openai/whisper-base) [~290 MB, lightweight]
+echo      [4] Whisper Tiny (openai/whisper-tiny) [~150 MB, ultra-fast]
+set "FULL_W_CHOICE=1"
+set /p "FULL_W_CHOICE=  Choice (default 1): "
+if "!FULL_W_CHOICE!"=="2" (
+    set "W_REPO=openai/whisper-large-v3-turbo"
+    set "W_DIR_NAME=whisper-large-v3-turbo"
+) else if "!FULL_W_CHOICE!"=="3" (
+    set "W_REPO=openai/whisper-base"
+    set "W_DIR_NAME=whisper-base"
+) else if "!FULL_W_CHOICE!"=="4" (
+    set "W_REPO=openai/whisper-tiny"
+    set "W_DIR_NAME=whisper-tiny"
 ) else (
-    echo    [!] Failed to download Whisper
+    set "W_REPO=DarlingCat/whisper-small-ru-100h"
+    set "W_DIR_NAME=whisper-small-ru-100h"
 )
-echo    [%date% %time%] Full: Whisper done >> "%LOG_FILE%"
+pip install huggingface_hub >nul 2>&1
+set "WHISPER_DIR=%SCRIPT_DIR%\models\!W_DIR_NAME!"
+if not exist "%WHISPER_DIR%" mkdir "%WHISPER_DIR%"
+python -c "from huggingface_hub import snapshot_download; snapshot_download('!W_REPO!', local_dir=r'%WHISPER_DIR:\=\\%'); print('Done')"
+if !errorlevel! equ 0 (
+    echo    [+] Whisper (!W_DIR_NAME!) downloaded
+) else (
+    echo    [!] Failed to download Whisper (!W_DIR_NAME!)
+)
+echo    [%date% %time%] Full: Whisper !W_DIR_NAME! done >> "%LOG_FILE%"
 
 echo.
 echo  === [5/6] Download OmniVoice ===

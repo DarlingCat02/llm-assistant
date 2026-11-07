@@ -1808,6 +1808,9 @@ async def update_config(request: dict):
         new_cfg = reload_config()
         global _config
         _config = new_cfg
+        if stt_model is not None and _stt_loaded():
+            if _input_mode != INPUT_MODE_BACKGROUND and _wake_detector is None:
+                await _release_stt_async()
         if _assistant:
             _assistant._config = new_cfg
             if _assistant._llm:
@@ -2510,6 +2513,18 @@ async def get_stt_engine():
         _stt_engine = get_stt_engine()
         await _stt_engine.initialize()
     return _stt_engine
+
+
+@app.get("/api/stt/models")
+async def get_stt_models():
+    """List all available STT models (discovered in ./models/ plus standard aliases)."""
+    from src.stt_engine import list_available_stt_models
+    models = list_available_stt_models()
+    current = _config.stt.model if _config else "large-v3-turbo"
+    return {
+        "models": models,
+        "current": current,
+    }
 
 
 @app.post("/api/stt")

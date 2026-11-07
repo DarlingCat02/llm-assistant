@@ -74,3 +74,6 @@ llm-assistant-tauri/src-tauri/Cargo.lock
 
 # === Installer logs ===
 install.log
+
+# === Agent local workspace configs ===
+.agents/

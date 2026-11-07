@@ -230,5 +230,6 @@
   "settings.tts.transcript.saved": "The sample is already transcribed - it is not transcribed again.",
   "settings.tts.transcript.missing": "The sample has not been transcribed yet.",
   "settings.tts.transcript.path": "File: {file} ({count} entries). You can open it and correct the text by hand.",
-  "settings.tts.transcript.idle": "No voice sample selected."
+  "settings.tts.transcript.idle": "No voice sample selected.",
+  "settings.voice.sttFormatHint": "Model folders in models/ must be in Hugging Face format (containing config.json and model.safetensors)."
 }
