@@ -315,7 +315,7 @@ class HotkeyConfig(BaseConfig):
     voice: str = Field(default="Ctrl+Shift+V", description="Голосовой ввод (Ctrl+Shift+V)")
     voice_num: str = Field(default="Ctrl+Num0", description="Голосовой ввод, доп. клавиша (Ctrl+Num0)")
     live: str = Field(default="Ctrl+Shift+L", description="Live-режим (Ctrl+Shift+L)")
-    stop_tts: str = Field(default="Ctrl+Shift+X", description="Остановка озвучки (Ctrl+Shift+X)")
+    stop_tts: str = Field(default="Ctrl+Alt+X", description="Остановка озвучки (Ctrl+Shift+X)")
 
     model_config = SettingsConfigDict(env_prefix="HOTKEY_", extra="ignore")
 

@@ -85,6 +85,14 @@ let currentChatId = null;
 let ws = null;
 let initialSettings = null;
 
+// === TTS & Audio Cues state ===
+let currentTTSAudio = null;
+let ttsAbortController = null;
+let currentCueAudio = null;
+let ttsVolume = 100;
+let wakeCueMode = 'voice';
+let cueStopEnabled = true;
+
 // === Tauri Hotkeys ===
 let isTauri = false;
 try {
@@ -124,13 +132,20 @@ try {
 // which measured 14 s warm and 45+ s cold. Stopping at 90 s produced a false
 // "backend not running" on a machine that simply needed a bit longer.
 async function waitForApi(retries = 120, delay = 1000) {
+    const timerText = document.getElementById('startup-timer-text');
     for (let i = 0; i < retries; i++) {
+        if (timerText) {
+            timerText.textContent = `${t('chat.startup.loading') || 'Инициализация памяти и моделей...'} (${i + 1}с)`;
+        }
         try {
             const response = await fetch(`${apiBase()}/api/status`, { method: 'GET' });
             if (response.ok) {
                 const data = await response.json().catch(() => null);
                 // Older backends have no assistant_ready flag - treat as ready
                 if (!data || data.assistant_ready !== false) return true;
+                if (timerText) {
+                    timerText.textContent = `${t('chat.startup.assistantLoading') || 'Бэкенд активен, подключение ассистента...'} (${i + 1}с)`;
+                }
                 console.log(`Backend is up, waiting for assistant... (${i + 1}/${retries})`);
             }
         } catch (e) {
@@ -152,6 +167,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ready = await waitForApi();
     if (ready) {
         console.log('API готово, загрузка...');
+        const startupMsg = document.getElementById('startup-message');
+        if (startupMsg) {
+            startupMsg.innerHTML = `
+                <h2 data-i18n="chat.welcome.title">${t('chat.welcome.title') || '🤖 Добро пожаловать в Local AI Assistant!'}</h2>
+                <p data-i18n="chat.welcome.subtitle">${t('chat.welcome.subtitle') || 'Выберите существующий чат или создайте новый'}</p>
+            `;
+            startupMsg.removeAttribute('id');
+        }
         initAvatars();
         initPersonas();
         window.addEventListener('lai:avatar-changed', () => {
@@ -1511,7 +1534,7 @@ async function openSettings() {
         if (hkVoice) hkVoice.value = config.hotkey_voice || 'Ctrl+Shift+V';
         if (hkVoiceNum) hkVoiceNum.value = config.hotkey_voice_num || 'Ctrl+Num0';
         if (hkLive) hkLive.value = config.hotkey_live || 'Ctrl+Shift+L';
-        if (hkStopTts) hkStopTts.value = config.hotkey_stop_tts || 'Ctrl+Shift+X';
+        if (hkStopTts) hkStopTts.value = config.hotkey_stop_tts || 'Ctrl+Alt+X';
 
         // TTS volume
         ttsVolume = config.tts_volume !== undefined ? config.tts_volume : 100;
@@ -2742,12 +2765,6 @@ async function processVoiceRecording() {
 }
 
 // === TTS (Text-to-Speech) & Audio Cues ===
-let currentTTSAudio = null;
-let ttsAbortController = null;
-let currentCueAudio = null;
-let ttsVolume = 100;
-let wakeCueMode = 'voice';
-let cueStopEnabled = true;
 
 function stopTTSPlayback() {
     let stopped = false;

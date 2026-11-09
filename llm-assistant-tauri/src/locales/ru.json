@@ -251,5 +251,8 @@
   "settings.wake.cueGenerating": "⏳ Генерация отклика «Слушаю»...",
   "settings.wake.cueSuccess": "Отклик успешно сгенерирован и сохранён!",
   "settings.wake.cueError": "Ошибка генерации отклика: {msg}",
-  "settings.tts.stopped": "Озвучка остановлена"
+  "settings.tts.stopped": "Озвучка остановлена",
+  "chat.startup.title": "⏳ Запуск Local AI Assistant...",
+  "chat.startup.loading": "Инициализация памяти и моделей...",
+  "chat.startup.assistantLoading": "Бэкенд активен, подключение ассистента..."
 }

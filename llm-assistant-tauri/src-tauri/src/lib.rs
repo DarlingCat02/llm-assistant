@@ -638,21 +638,21 @@ fn setup_global_shortcuts(app: &AppHandle) {
     let live_spec =
         get_env_value(&dir, "HOTKEY_LIVE").unwrap_or_else(|| "Ctrl+Shift+L".to_string());
     let stop_tts_spec =
-        get_env_value(&dir, "HOTKEY_STOP_TTS").unwrap_or_else(|| "Ctrl+Shift+X".to_string());
+        get_env_value(&dir, "HOTKEY_STOP_TTS").unwrap_or_else(|| "Ctrl+Alt+X".to_string());
 
     let voice_shortcut = parse_shortcut(&voice_spec).unwrap_or_else(|| {
         error!(
             "Invalid HOTKEY_VOICE='{}', falling back to Ctrl+Shift+V",
             voice_spec
         );
-        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV)
+        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyV)
     });
     let live_shortcut = parse_shortcut(&live_spec).unwrap_or_else(|| {
         error!(
             "Invalid HOTKEY_LIVE='{}', falling back to Ctrl+Shift+L",
             live_spec
         );
-        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyL)
+        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL)
     });
     let voice_num0_shortcut = parse_shortcut(&voice_num0_spec).unwrap_or_else(|| {
         error!(
@@ -663,10 +663,10 @@ fn setup_global_shortcuts(app: &AppHandle) {
     });
     let stop_tts_shortcut = parse_shortcut(&stop_tts_spec).unwrap_or_else(|| {
         error!(
-            "Invalid HOTKEY_STOP_TTS='{}', falling back to Ctrl+Shift+X",
+            "Invalid HOTKEY_STOP_TTS='{}', falling back to Ctrl+Alt+X",
             stop_tts_spec
         );
-        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyX)
+        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyX)
     });
 
     let app_handle = app.clone();

@@ -251,5 +251,8 @@
   "settings.wake.cueGenerating": "⏳ Generating voice cue...",
   "settings.wake.cueSuccess": "Voice cue generated and cached successfully!",
   "settings.wake.cueError": "Failed to generate voice cue: {msg}",
-  "settings.tts.stopped": "TTS playback stopped"
+  "settings.tts.stopped": "TTS playback stopped",
+  "chat.startup.title": "⏳ Starting Local AI Assistant...",
+  "chat.startup.loading": "Initializing memory and models...",
+  "chat.startup.assistantLoading": "Backend active, connecting assistant..."
 }

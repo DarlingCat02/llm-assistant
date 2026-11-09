@@ -54,9 +54,9 @@
             
             <div id="messages-container" class="messages-container">
                 <!-- Сообщения загружаются через JS -->
-                <div class="welcome-message">
-                    <h2 data-i18n="chat.welcome.title">🤖 Добро пожаловать в Local AI Assistant!</h2>
-                    <p data-i18n="chat.welcome.subtitle">Выберите существующий чат или создайте новый</p>
+                <div class="welcome-message" id="startup-message">
+                    <h2 data-i18n="chat.startup.title">⏳ Запуск Local AI Assistant...</h2>
+                    <p id="startup-timer-text" data-i18n="chat.startup.loading">Инициализация памяти и моделей... (1с)</p>
                 </div>
             </div>
             
@@ -233,7 +233,7 @@
                 </div>
                 <div class="settings-section">
                     <label for="hotkey-stop-tts-input" data-i18n="settings.hotkey.stopTts">Прерывание озвучки (Escape / глобальный)</label>
-                    <input type="text" id="hotkey-stop-tts-input" class="settings-input" value="Ctrl+Shift+X">
+                    <input type="text" id="hotkey-stop-tts-input" class="settings-input" value="Ctrl+Alt+X">
                 </div>
                 <div class="settings-section">
                     <div class="slider-hint" data-i18n="settings.wake.privacy">
