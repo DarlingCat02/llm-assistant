@@ -1722,7 +1722,7 @@ async def get_current_config():
             "stt_model": "large-v3-turbo",
             "hotkey_voice": "Ctrl+Shift+V", "hotkey_voice_num": "Ctrl+Num0",
             "hotkey_live": "Ctrl+Shift+L",
-            "hotkey_stop_tts": "Ctrl+Shift+X",
+            "hotkey_stop_tts": "Ctrl+Alt+X",
             "wake_cue_mode": "voice",
             "wake_cue_stop": True,
         }
@@ -1748,7 +1748,7 @@ async def get_current_config():
         "hotkey_voice": _config.hotkey.voice,
         "hotkey_voice_num": _config.hotkey.voice_num,
         "hotkey_live": _config.hotkey.live,
-        "hotkey_stop_tts": getattr(_config.hotkey, "stop_tts", "Ctrl+Shift+X"),
+        "hotkey_stop_tts": getattr(_config.hotkey, "stop_tts", "Ctrl+Alt+X"),
         "wake_cue_mode": getattr(_config.wake, "cue_wake_mode", "voice"),
         "wake_cue_stop": getattr(_config.wake, "cue_stop_enabled", True),
     }

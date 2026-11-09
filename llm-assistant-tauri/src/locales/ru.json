@@ -41,7 +41,7 @@
   "settings.voice.sttCustom": "Другая модель: owner/repo или путь к папке",
   "settings.voice.ttsTitle": "Озвучка (TTS)",
   "settings.hotkeys": "Горячие клавиши (глобальные)",
-  "settings.hotkeys.hint": "Формат: Ctrl+Shift+V, Alt+F9, F12, Ctrl+Num0. Применяется после перезапуска приложения.",
+  "settings.hotkeys.hint": "Нажмите на поле и зажмите нужное сочетание клавиш (например: Ctrl+Shift+V, Alt+F9, Ctrl+Alt+X). Escape — отмена, Backspace — очистить. Применяется после перезапуска.",
   "settings.hotkey.voice": "Голосовой ввод",
   "settings.hotkey.voiceNum": "Голосовой ввод (доп. клавиша)",
   "settings.hotkey.live": "Live-режим",
@@ -254,5 +254,8 @@
   "settings.tts.stopped": "Озвучка остановлена",
   "chat.startup.title": "⏳ Запуск Local AI Assistant...",
   "chat.startup.loading": "Инициализация памяти и моделей...",
-  "chat.startup.assistantLoading": "Бэкенд активен, подключение ассистента..."
+  "chat.startup.assistantLoading": "Бэкенд активен, подключение ассистента...",
+  "settings.hotkey.pressKeys": "Нажмите сочетание клавиш...",
+  "settings.hotkey.recording": "Слушаю клавиши...",
+  "settings.hotkey.tooltip": "Нажмите, чтобы записать сочетание клавиш (Escape — отмена, Backspace — очистить)"
 }

@@ -80,6 +80,13 @@ export async function setLanguage(lang) {
     if (memAdd) memAdd.placeholder = t('memory.add.placeholder');
     const apiKey = document.getElementById('api-key-input');
     if (apiKey) apiKey.placeholder = t('settings.apiKey.placeholder');
+    ['hotkey-voice-input', 'hotkey-voice-num-input', 'hotkey-live-input', 'hotkey-stop-tts-input'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && !el.classList.contains('recording')) {
+        el.placeholder = t('settings.hotkey.pressKeys');
+        el.title = t('settings.hotkey.tooltip');
+      }
+    });
   } catch {}
 }
 

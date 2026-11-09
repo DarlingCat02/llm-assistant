@@ -41,7 +41,7 @@
   "settings.voice.sttCustom": "Another model: owner/repo or a folder path",
   "settings.voice.ttsTitle": "Voice output (TTS)",
   "settings.hotkeys": "Hotkeys (global)",
-  "settings.hotkeys.hint": "Format: Ctrl+Shift+V, Alt+F9, F12, Ctrl+Num0. Applied after restarting the app.",
+  "settings.hotkeys.hint": "Click on the field and press your key combination (e.g. Ctrl+Shift+V, Alt+F9, Ctrl+Alt+X). Escape to cancel, Backspace to clear. Applied after restarting the app.",
   "settings.hotkey.voice": "Voice input",
   "settings.hotkey.voiceNum": "Voice input (extra key)",
   "settings.hotkey.live": "Live mode",
@@ -254,5 +254,8 @@
   "settings.tts.stopped": "TTS playback stopped",
   "chat.startup.title": "⏳ Starting Local AI Assistant...",
   "chat.startup.loading": "Initializing memory and models...",
-  "chat.startup.assistantLoading": "Backend active, connecting assistant..."
+  "chat.startup.assistantLoading": "Backend active, connecting assistant...",
+  "settings.hotkey.pressKeys": "Press key combination...",
+  "settings.hotkey.recording": "Listening for keys...",
+  "settings.hotkey.tooltip": "Click to record key combination (Escape to cancel, Backspace to clear)"
 }

@@ -384,6 +384,7 @@ function initEventListeners() {
     document.getElementById('close-status-btn').addEventListener('click', hideStatus);
     document.getElementById('close-settings-btn').addEventListener('click', closeSettings);
     document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
+    initHotkeyRecorders();
     document.getElementById('provider-select').addEventListener('change', onProviderChange);
     const cueModeSel = document.getElementById('wake-cue-mode-select');
     if (cueModeSel) cueModeSel.addEventListener('change', () => {
@@ -1472,6 +1473,148 @@ async function copyTerminal() {
 }
 
 // === Settings ===
+
+function initHotkeyRecorders() {
+    const ids = [
+        'hotkey-voice-input',
+        'hotkey-voice-num-input',
+        'hotkey-live-input',
+        'hotkey-stop-tts-input',
+    ];
+
+    ids.forEach(id => {
+        const input = document.getElementById(id);
+        if (!input) return;
+
+        input.classList.add('hotkey-input');
+        input.setAttribute('readonly', 'true');
+        input.setAttribute('autocomplete', 'off');
+        input.placeholder = t('settings.hotkey.pressKeys') || 'Нажмите сочетание клавиш...';
+        input.title = t('settings.hotkey.tooltip') || 'Нажмите, чтобы записать сочетание клавиш';
+
+        input.addEventListener('focus', () => {
+            input.dataset.prev = input.value;
+            input.value = '';
+            input.placeholder = t('settings.hotkey.recording') || 'Слушаю клавиши...';
+            input.classList.add('recording');
+        });
+
+        input.addEventListener('blur', () => {
+            input.classList.remove('recording');
+            // If empty or incomplete combination (ends with +), restore previous value
+            if ((!input.value || input.value.endsWith('+')) && input.dataset.prev) {
+                input.value = input.dataset.prev;
+            }
+            input.placeholder = t('settings.hotkey.pressKeys') || 'Нажмите сочетание клавиш...';
+        });
+
+        input.addEventListener('keydown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            // Cancel on Escape
+            if (e.key === 'Escape') {
+                input.value = input.dataset.prev || '';
+                input.blur();
+                return;
+            }
+
+            // Clear on Backspace or Delete without modifiers
+            if ((e.key === 'Backspace' || e.key === 'Delete') && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+                input.value = '';
+                input.dataset.prev = '';
+                input.blur();
+                return;
+            }
+
+            // Natural Tab navigation
+            if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+                input.value = input.dataset.prev || '';
+                input.blur();
+                return;
+            }
+
+            // Modifier key preview
+            const isModifierOnly = ['Control', 'Shift', 'Alt', 'Meta'].includes(e.key);
+            if (isModifierOnly) {
+                const mods = [];
+                if (e.ctrlKey) mods.push('Ctrl');
+                if (e.altKey) mods.push('Alt');
+                if (e.shiftKey) mods.push('Shift');
+                if (e.metaKey) mods.push('Win');
+                input.value = mods.length ? mods.join('+') + '+' : '';
+                return;
+            }
+
+            // Resolve main key name (hardware physical code to ignore Russian/other layouts)
+            let keyName = null;
+            const code = e.code || '';
+
+            if (code.startsWith('Key')) {
+                keyName = code.slice(3).toUpperCase();
+            } else if (code.startsWith('Digit')) {
+                keyName = code.slice(5);
+            } else if (code.startsWith('Numpad')) {
+                const sub = code.slice(6);
+                if (/^[0-9]$/.test(sub)) {
+                    keyName = `Num${sub}`;
+                } else if (sub === 'Enter') {
+                    keyName = 'Enter';
+                } else {
+                    keyName = `Num${sub}`;
+                }
+            } else if (/^F[1-9]$|^F1[0-2]$/.test(code)) {
+                keyName = code;
+            } else if (code === 'Space') {
+                keyName = 'Space';
+            } else if (code === 'Tab') {
+                keyName = 'Tab';
+            } else if (code === 'Enter') {
+                keyName = 'Enter';
+            } else if (code === 'Pause') {
+                keyName = 'Pause';
+            }
+
+            if (!keyName && e.key && e.key.length === 1 && e.key.charCodeAt(0) < 128) {
+                keyName = e.key.toUpperCase();
+            }
+
+            if (!keyName) return;
+
+            const hasModifier = e.ctrlKey || e.altKey || e.shiftKey || e.metaKey;
+            const isFunctionKey = /^F[1-9]$|^F1[0-2]$/.test(keyName);
+
+            // Require at least one modifier for non-F keys to protect global typing
+            if (!hasModifier && !isFunctionKey) {
+                return;
+            }
+
+            const parts = [];
+            if (e.ctrlKey) parts.push('Ctrl');
+            if (e.altKey) parts.push('Alt');
+            if (e.shiftKey) parts.push('Shift');
+            if (e.metaKey) parts.push('Win');
+            parts.push(keyName);
+
+            const finalShortcut = parts.join('+');
+            input.value = finalShortcut;
+            input.dataset.prev = finalShortcut;
+            input.blur();
+        });
+
+        input.addEventListener('keyup', (e) => {
+            if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+                const mods = [];
+                if (e.ctrlKey) mods.push('Ctrl');
+                if (e.altKey) mods.push('Alt');
+                if (e.shiftKey) mods.push('Shift');
+                if (e.metaKey) mods.push('Win');
+                input.value = mods.length ? mods.join('+') + '+' : '';
+            }
+        });
+    });
+}
+
 async function openSettings() {
     const modal = document.getElementById('settings-modal');
     modal.classList.remove('hidden');
@@ -1531,10 +1674,10 @@ async function openSettings() {
         const hkVoiceNum = document.getElementById('hotkey-voice-num-input');
         const hkLive = document.getElementById('hotkey-live-input');
         const hkStopTts = document.getElementById('hotkey-stop-tts-input');
-        if (hkVoice) hkVoice.value = config.hotkey_voice || 'Ctrl+Shift+V';
-        if (hkVoiceNum) hkVoiceNum.value = config.hotkey_voice_num || 'Ctrl+Num0';
-        if (hkLive) hkLive.value = config.hotkey_live || 'Ctrl+Shift+L';
-        if (hkStopTts) hkStopTts.value = config.hotkey_stop_tts || 'Ctrl+Alt+X';
+        if (hkVoice) { hkVoice.value = config.hotkey_voice || 'Ctrl+Shift+V'; hkVoice.dataset.prev = hkVoice.value; }
+        if (hkVoiceNum) { hkVoiceNum.value = config.hotkey_voice_num || 'Ctrl+Num0'; hkVoiceNum.dataset.prev = hkVoiceNum.value; }
+        if (hkLive) { hkLive.value = config.hotkey_live || 'Ctrl+Shift+L'; hkLive.dataset.prev = hkLive.value; }
+        if (hkStopTts) { hkStopTts.value = config.hotkey_stop_tts || 'Ctrl+Alt+X'; hkStopTts.dataset.prev = hkStopTts.value; }
 
         // TTS volume
         ttsVolume = config.tts_volume !== undefined ? config.tts_volume : 100;
