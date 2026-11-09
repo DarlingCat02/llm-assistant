@@ -232,6 +232,10 @@
                     <input type="text" id="hotkey-live-input" class="settings-input" value="Ctrl+Shift+L">
                 </div>
                 <div class="settings-section">
+                    <label for="hotkey-stop-tts-input" data-i18n="settings.hotkey.stopTts">Прерывание озвучки (Escape / глобальный)</label>
+                    <input type="text" id="hotkey-stop-tts-input" class="settings-input" value="Ctrl+Shift+X">
+                </div>
+                <div class="settings-section">
                     <div class="slider-hint" data-i18n="settings.wake.privacy">
                         Фоновое распознавание включается переключателем над чатом. Пока оно включено, приложение постоянно держит микрофон открытым и слушает фон. Запись нигде не сохраняется — звук распознаётся на лету и отбрасывается.
                     </div>
@@ -264,6 +268,34 @@
                         <option value="execute" data-i18n="settings.wake.actionExecute">Выполнить молча</option>
                     </select>
                     <div class="slider-hint" data-i18n="settings.wake.actionHint">«Показать фразу» надёжнее: детектор иногда оговаривает слово, и по видимому тексту это понятно.</div>
+                </div>
+                <div class="settings-section">
+                    <label for="wake-cue-mode-select" data-i18n="settings.wake.cueMode">Отклик на имя</label>
+                    <select id="wake-cue-mode-select" class="settings-select">
+                        <option value="voice" data-i18n="settings.wake.cueVoice">Голосовой («Слушаю»)</option>
+                        <option value="sound" data-i18n="settings.wake.cueSound">Звуковой сигнал</option>
+                        <option value="none" data-i18n="settings.wake.cueNone">Отключен</option>
+                    </select>
+                    <div class="slider-hint" data-i18n="settings.wake.cueModeHint">Что воспроизводится, когда ассистент распознаёт обращение к себе.</div>
+                </div>
+                <div class="settings-section" id="wake-voice-cue-panel">
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                        <span data-i18n="settings.wake.cueVoiceLabel" style="font-size:13px;color:var(--text-secondary);min-width:110px;">Голос отклика:</span>
+                        <select id="wake-cue-voice-select" class="settings-select" style="flex:1;"></select>
+                    </div>
+                    <div id="wake-cue-status-text" class="slider-hint" style="margin-bottom:8px;"></div>
+                    <div style="display:flex;gap:10px;">
+                        <button type="button" id="generate-cue-btn" class="btn-secondary" style="flex:1;" data-i18n="settings.wake.generateCue">🎙 Сгенерировать отклик</button>
+                        <button type="button" id="preview-cue-btn" class="btn-secondary" style="flex:1;" data-i18n="settings.wake.previewCue">▶️ Прослушать</button>
+                    </div>
+                    <div class="slider-hint" data-i18n="settings.wake.cueVoiceHint">Фраза «Слушаю» генерируется моделью TTS для выбранного голоса и сохраняется в voices/_cues. В дальнейшем воспроизводится мгновенно без нагрузки на систему.</div>
+                </div>
+                <div class="settings-section">
+                    <label class="settings-checkbox" style="display:flex;align-items:center;gap:8px;">
+                        <input type="checkbox" id="cue-stop-toggle" checked>
+                        <span data-i18n="settings.wake.cueStop">Звуковой сигнал при завершении записи</span>
+                    </label>
+                    <div class="slider-hint" data-i18n="settings.wake.cueStopHint">Мягкий сигнал, когда микрофон закончил запись вашей команды.</div>
                 </div>
                 <div class="settings-section" id="wake-advanced">
                     <div class="slider-hint" data-i18n="settings.wake.modelHint">Модель распознавания выбирается во вкладке «Голос» и используется обоими режимами — отдельной модели для фонового слушания больше нет.</div>
@@ -341,6 +373,12 @@
                 </div>
                 <div class="settings-section">
                     <label data-i18n="settings.voice.ttsTitle">Озвучка (TTS)</label>
+                </div>
+                <div class="settings-section">
+                    <label data-i18n="settings.tts.volume">Громкость озвучки: <span id="tts-volume-value">100%</span></label>
+                    <div class="slider-hint" data-i18n="settings.tts.volume.hint">Громкость воспроизведения ответов TTS и звуковых откликов</div>
+                    <input type="range" id="tts-volume-slider" class="settings-slider" min="0" max="100" value="100" step="5">
+                    <div class="slider-labels"><span>0%</span><span>50%</span><span>100%</span></div>
                 </div>
                 <div class="settings-section">
                     <label data-i18n="settings.tts.steps">Шаги генерации: <span id="tts-steps-value">64</span></label>

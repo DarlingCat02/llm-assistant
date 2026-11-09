@@ -1714,6 +1714,7 @@ async def get_current_config():
             "provider": "ollama", "model": "", "ollama_host": "http://localhost:11434",
             "api_key": "", "num_ctx": 8192, "temperature": 0.7,
             "tts_steps": 64, "tts_temperature": 1.0,
+            "tts_volume": 100,
             "memory_max_context": 20, "memory_search_results": 3, "memory_threshold": 0.3,
             "language": "en",
             "show_backend_console": False,
@@ -1721,6 +1722,9 @@ async def get_current_config():
             "stt_model": "large-v3-turbo",
             "hotkey_voice": "Ctrl+Shift+V", "hotkey_voice_num": "Ctrl+Num0",
             "hotkey_live": "Ctrl+Shift+L",
+            "hotkey_stop_tts": "Ctrl+Shift+X",
+            "wake_cue_mode": "voice",
+            "wake_cue_stop": True,
         }
     
     return {
@@ -1732,6 +1736,7 @@ async def get_current_config():
         "temperature": _config.llm.temperature,
         "tts_steps": _config.tts.steps,
         "tts_temperature": _config.tts.temperature,
+        "tts_volume": getattr(_config.tts, "volume", 100),
         "memory_max_context": _config.memory.max_context_messages,
         "memory_search_results": _config.memory.search_results,
         "memory_threshold": _config.memory.similarity_threshold,
@@ -1743,6 +1748,9 @@ async def get_current_config():
         "hotkey_voice": _config.hotkey.voice,
         "hotkey_voice_num": _config.hotkey.voice_num,
         "hotkey_live": _config.hotkey.live,
+        "hotkey_stop_tts": getattr(_config.hotkey, "stop_tts", "Ctrl+Shift+X"),
+        "wake_cue_mode": getattr(_config.wake, "cue_wake_mode", "voice"),
+        "wake_cue_stop": getattr(_config.wake, "cue_stop_enabled", True),
     }
 
 
@@ -1760,6 +1768,7 @@ async def update_config(request: dict):
     temperature = request.get("temperature")
     tts_steps = request.get("tts_steps")
     tts_temperature = request.get("tts_temperature")
+    tts_volume = request.get("tts_volume")
     memory_max_context = request.get("memory_max_context")
     memory_search_results = request.get("memory_search_results")
     memory_threshold = request.get("memory_threshold")
@@ -1776,6 +1785,9 @@ async def update_config(request: dict):
     hotkey_voice = request.get("hotkey_voice")
     hotkey_voice_num = request.get("hotkey_voice_num")
     hotkey_live = request.get("hotkey_live")
+    hotkey_stop_tts = request.get("hotkey_stop_tts")
+    wake_cue_mode = request.get("wake_cue_mode")
+    wake_cue_stop = request.get("wake_cue_stop")
     for name, val in (("personality_ru", personality_ru), ("personality_en", personality_en)):
         if val is not None and not isinstance(val, str):
             raise HTTPException(status_code=400, detail=f"{name} must be a string")
@@ -1802,6 +1814,10 @@ async def update_config(request: dict):
         hotkey_voice=hotkey_voice,
         hotkey_voice_num=hotkey_voice_num,
         hotkey_live=hotkey_live,
+        hotkey_stop_tts=hotkey_stop_tts,
+        tts_volume=tts_volume,
+        wake_cue_mode=wake_cue_mode,
+        wake_cue_stop=wake_cue_stop,
     )
     # Hot-swap without restart
     try:
@@ -2089,7 +2105,7 @@ async def get_voices():
     
     if voices_dir.exists():
         for f in voices_dir.iterdir():
-            if f.suffix.lower() in ['.wav', '.mp3', '.ogg', '.flac']:
+            if f.is_file() and f.suffix.lower() in ['.wav', '.mp3', '.ogg', '.flac'] and not f.name.startswith('.'):
                 voices.append({
                     "name": f.stem,
                     "file": f.name,
@@ -2175,6 +2191,134 @@ async def tts_speak(request: dict):
         media_type="audio/wav",
         headers={"Content-Disposition": "inline"},
     )
+
+
+# === TTS Voice Cues & Sounds ===
+
+def _get_cue_voice_id(mode: str | None = None, instruct: str | None = None, ref_audio: str | None = None) -> str:
+    """Compute a deterministic ID for cue files per voice."""
+    if mode is None:
+        if _assistant and _assistant._tts:
+            mode = getattr(_assistant._tts, "_voice_mode", "instruct")
+            instruct = getattr(_assistant._tts, "_voice_instruct", "female")
+            ref_audio = getattr(_assistant._tts, "_voice_ref_audio", "")
+        else:
+            mode = "instruct"
+            instruct = "female"
+            ref_audio = ""
+
+    if mode == "clone" and ref_audio:
+        stem = Path(ref_audio).stem
+        clean_name = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', stem)
+        return f"clone_{clean_name}"
+    else:
+        inst = instruct or "female"
+        clean_name = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', inst)
+        return f"instruct_{clean_name}"
+
+
+@app.get("/api/tts/cues/status")
+async def get_cue_status(voice_id: str = ""):
+    """Check whether a pre-recorded 'listen' cue exists for a given or active voice."""
+    if not voice_id:
+        voice_id = _get_cue_voice_id()
+    cues_dir = Path(__file__).parent.parent / "voices" / "_cues"
+    cue_file = cues_dir / f"{voice_id}_listen.wav"
+    return {
+        "voice_id": voice_id,
+        "exists": cue_file.is_file(),
+        "filename": f"{voice_id}_listen.wav" if cue_file.is_file() else None,
+    }
+
+
+@app.get("/api/tts/cues/listen")
+async def get_cue_listen(voice_id: str = ""):
+    """Stream the cached 'listen' audio cue for the active or given voice."""
+    from fastapi.responses import Response
+    if not voice_id:
+        voice_id = _get_cue_voice_id()
+    cues_dir = Path(__file__).parent.parent / "voices" / "_cues"
+    cue_file = cues_dir / f"{voice_id}_listen.wav"
+    if not cue_file.is_file():
+        raise HTTPException(status_code=404, detail=f"Cue for voice '{voice_id}' not found")
+    with open(cue_file, "rb") as f:
+        data = f.read()
+    return Response(
+        content=data,
+        media_type="audio/wav",
+        headers={"Content-Disposition": "inline"},
+    )
+
+
+@app.post("/api/tts/cues/generate")
+async def generate_cue(request: dict = None):
+    """Generate and cache the 'Слушаю.' cue using the specified or active voice."""
+    if request is None:
+        request = {}
+    if not _assistant or not _assistant._tts:
+        lang = getattr(get_config().general, "language", "en")
+        raise HTTPException(status_code=503, detail=t("api.tts_not_init", lang=lang))
+
+    # Check if OmniVoice is loaded, load if not
+    if not _assistant._tts.is_omnivoice_loaded:
+        if not await _assistant._tts.enable_omnivoice() or not _assistant._tts.is_omnivoice_loaded:
+            lang = getattr(get_config().general, "language", "en")
+            raise HTTPException(status_code=500, detail=t("api.tts_not_init", lang=lang))
+
+    mode = request.get("mode")
+    instruct = request.get("instruct")
+    ref_audio = request.get("ref_audio")
+
+    if mode is None:
+        mode = getattr(_assistant._tts, "_voice_mode", "instruct")
+        instruct = getattr(_assistant._tts, "_voice_instruct", "female")
+        ref_audio = getattr(_assistant._tts, "_voice_ref_audio", "")
+
+    voice_id = request.get("voice_id") or _get_cue_voice_id(mode, instruct, ref_audio)
+
+    # Temporarily apply voice config if needed
+    if _tts_engine_ready():
+        if mode == "clone" and ref_audio:
+            await asyncio.to_thread(_ensure_tts_whisper_copy, ref_audio)
+        _assistant._tts.set_voice_config(
+            mode=mode,
+            instruct=instruct,
+            ref_audio=ref_audio,
+        )
+
+    lang = getattr(get_config().general, "language", "ru")
+    default_phrase = "Слушаю." if lang == "ru" else "Listening."
+    phrase = request.get("text") or default_phrase
+
+    result = await _assistant._tts.speak(phrase)
+    if not result.success:
+        raise HTTPException(status_code=500, detail=result.error or "TTS synthesis failed")
+
+    cues_dir = Path(__file__).parent.parent / "voices" / "_cues"
+    cues_dir.mkdir(parents=True, exist_ok=True)
+    out_path = cues_dir / f"{voice_id}_listen.wav"
+    with open(out_path, "wb") as f:
+        f.write(result.audio_data)
+
+    return {
+        "success": True,
+        "voice_id": voice_id,
+        "filename": f"{voice_id}_listen.wav",
+        "text": phrase,
+    }
+
+
+@app.get("/api/sounds/{name}")
+async def get_sound_file(name: str):
+    """Serve custom or default sound cue (wake/stop)."""
+    from fastapi.responses import FileResponse
+    clean_name = re.sub(r'[^a-zA-Z0-9_\-]', '', name)
+    sounds_dir = Path(__file__).parent.parent / "sounds"
+    for ext in (".wav", ".mp3", ".ogg"):
+        candidate = sounds_dir / f"{clean_name}{ext}"
+        if candidate.is_file():
+            return FileResponse(candidate)
+    raise HTTPException(status_code=404, detail=f"Sound '{name}' not found")
 
 
 # === Personas ===

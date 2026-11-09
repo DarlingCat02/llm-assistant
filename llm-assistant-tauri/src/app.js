@@ -100,7 +100,19 @@ try {
                 console.log('Горячая клавиша: Live режим');
                 toggleLiveMode();
             });
+            listen('hotkey-stop-tts', () => {
+                console.log('Горячая клавиша: Прерывание озвучки');
+                stopTTSPlayback();
+            });
         }).catch(e => console.error('Tauri events error:', e));
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                if (currentTTSAudio || ttsAbortController || currentCueAudio) {
+                    stopTTSPlayback();
+                }
+            }
+        });
     }
 } catch (e) {
     console.log('Запуск в браузере (не Tauri)');
@@ -350,6 +362,21 @@ function initEventListeners() {
     document.getElementById('close-settings-btn').addEventListener('click', closeSettings);
     document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
     document.getElementById('provider-select').addEventListener('change', onProviderChange);
+    const cueModeSel = document.getElementById('wake-cue-mode-select');
+    if (cueModeSel) cueModeSel.addEventListener('change', () => {
+        wakeCueMode = cueModeSel.value;
+        updateCueModeVisibility();
+    });
+    const cueVoiceSel = document.getElementById('wake-cue-voice-select');
+    if (cueVoiceSel) cueVoiceSel.addEventListener('change', checkCueStatus);
+    const genCueBtn = document.getElementById('generate-cue-btn');
+    if (genCueBtn) genCueBtn.addEventListener('click', handleGenerateCue);
+    const prevCueBtn = document.getElementById('preview-cue-btn');
+    if (prevCueBtn) prevCueBtn.addEventListener('click', playPreviewCue);
+    const cueStopToggle = document.getElementById('cue-stop-toggle');
+    if (cueStopToggle) cueStopToggle.addEventListener('change', (e) => {
+        cueStopEnabled = e.target.checked;
+    });
     const termBtn = document.getElementById('terminal-btn');
     if (termBtn) termBtn.addEventListener('click', toggleTerminalPanel);
     const termClose = document.getElementById('terminal-close-btn');
@@ -437,17 +464,26 @@ function handleWebSocketMessage(data) {
 }
 
 // The backend heard the wake phrase and sent the whole utterance with it.
-function onWakeWordDetected(transcript) {
+async function onWakeWordDetected(transcript) {
     console.log('Wake word:', transcript);
     if (isRecording || isProcessingVoice) return;   // already busy
     const input = document.getElementById('message-input');
     if (input && input.value.trim()) return;        // user is typing, don't interrupt
 
     const text = (transcript || '').trim();
+    const hasCommand = hasCommandAfterPhrase(text);
+
+    // Play wake response if enabled
+    if (wakeCueMode === 'voice') {
+        await playWakeVoiceCue();
+    } else if (wakeCueMode === 'sound') {
+        await playSoundCue('wake');
+    }
+
     // Whisper already transcribed everything said after the phrase, so the
     // command usually arrived in the same breath. Only fall back to recording
     // when the utterance really was just the wake word on its own.
-    if (!hasCommandAfterPhrase(text)) {
+    if (!hasCommand) {
         startVoiceRecording();
         return;
     }
@@ -1471,9 +1507,30 @@ async function openSettings() {
         const hkVoice = document.getElementById('hotkey-voice-input');
         const hkVoiceNum = document.getElementById('hotkey-voice-num-input');
         const hkLive = document.getElementById('hotkey-live-input');
+        const hkStopTts = document.getElementById('hotkey-stop-tts-input');
         if (hkVoice) hkVoice.value = config.hotkey_voice || 'Ctrl+Shift+V';
         if (hkVoiceNum) hkVoiceNum.value = config.hotkey_voice_num || 'Ctrl+Num0';
         if (hkLive) hkLive.value = config.hotkey_live || 'Ctrl+Shift+L';
+        if (hkStopTts) hkStopTts.value = config.hotkey_stop_tts || 'Ctrl+Shift+X';
+
+        // TTS volume
+        ttsVolume = config.tts_volume !== undefined ? config.tts_volume : 100;
+        const volSlider = document.getElementById('tts-volume-slider');
+        if (volSlider) volSlider.value = ttsVolume;
+        const volVal = document.getElementById('tts-volume-value');
+        if (volVal) volVal.textContent = `${ttsVolume}%`;
+
+        // Wake cues
+        wakeCueMode = config.wake_cue_mode || 'voice';
+        const cueModeSelect = document.getElementById('wake-cue-mode-select');
+        if (cueModeSelect) {
+            cueModeSelect.value = wakeCueMode;
+            updateCueModeVisibility();
+        }
+        cueStopEnabled = config.wake_cue_stop !== undefined ? !!config.wake_cue_stop : true;
+        const cueStopChk = document.getElementById('cue-stop-toggle');
+        if (cueStopChk) cueStopChk.checked = cueStopEnabled;
+        await refreshWakeCueVoices();
         
         document.getElementById('provider-select').value = config.provider || 'ollama';
         document.getElementById('ollama-host-input').value = config.ollama_host || 'http://localhost:11434';
@@ -2125,6 +2182,16 @@ function initSliders() {
             ttsTempValue.textContent = (parseInt(ttsTempSlider.value) / 10).toFixed(1);
         });
     }
+
+    // TTS Volume
+    const ttsVolSlider = document.getElementById('tts-volume-slider');
+    const ttsVolValue = document.getElementById('tts-volume-value');
+    if (ttsVolSlider) {
+        ttsVolSlider.addEventListener('input', () => {
+            ttsVolume = parseInt(ttsVolSlider.value);
+            if (ttsVolValue) ttsVolValue.textContent = `${ttsVolume}%`;
+        });
+    }
     
     // Memory Search
     const memSearchSlider = document.getElementById('memory-search-slider');
@@ -2285,6 +2352,11 @@ async function saveSettings() {
     const hotkeyVoice = document.getElementById('hotkey-voice-input') ? document.getElementById('hotkey-voice-input').value.trim() : null;
     const hotkeyVoiceNum = document.getElementById('hotkey-voice-num-input') ? document.getElementById('hotkey-voice-num-input').value.trim() : null;
     const hotkeyLive = document.getElementById('hotkey-live-input') ? document.getElementById('hotkey-live-input').value.trim() : null;
+    const hotkeyStopTts = document.getElementById('hotkey-stop-tts-input') ? document.getElementById('hotkey-stop-tts-input').value.trim() : null;
+    const cueModeSelEl = document.getElementById('wake-cue-mode-select');
+    const wakeCueModeVal = cueModeSelEl ? cueModeSelEl.value : wakeCueMode;
+    const cueStopChkEl = document.getElementById('cue-stop-toggle');
+    const wakeCueStopVal = cueStopChkEl ? cueStopChkEl.checked : cueStopEnabled;
 
     // Apply language immediately so alert is in chosen language
     if (language !== getLang()) {
@@ -2304,6 +2376,7 @@ async function saveSettings() {
         if (hotkeyVoice && hotkeyVoice !== initialSettings.hotkey_voice) needsRestart = true;
         if (hotkeyVoiceNum && hotkeyVoiceNum !== initialSettings.hotkey_voice_num) needsRestart = true;
         if (hotkeyLive && hotkeyLive !== initialSettings.hotkey_live) needsRestart = true;
+        if (hotkeyStopTts && hotkeyStopTts !== initialSettings.hotkey_stop_tts) needsRestart = true;
         // apiKey change also needs restart for some providers, but is hot-swapped, so not required
     } else {
         // Fallback: if we have no initial, assume restart only for provider/host/model/numCtx/showConsole
@@ -2333,10 +2406,16 @@ async function saveSettings() {
                 hotkey_voice: hotkeyVoice,
                 hotkey_voice_num: hotkeyVoiceNum,
                 hotkey_live: hotkeyLive,
+                hotkey_stop_tts: hotkeyStopTts,
+                tts_volume: ttsVolume,
+                wake_cue_mode: wakeCueModeVal,
+                wake_cue_stop: wakeCueStopVal,
             }),
         });
         
         if (response.ok) {
+            wakeCueMode = wakeCueModeVal;
+            cueStopEnabled = wakeCueStopVal;
             showToast(t(needsRestart ? 'settings.saved' : 'settings.savedNoRestart'), needsRestart ? 'warning' : 'success', 3000);
             closeSettings();
         } else {
@@ -2581,6 +2660,10 @@ function stopVoiceRecording() {
         mediaRecorder.stop();
         isRecording = false;
         
+        if (cueStopEnabled) {
+            playSoundCue('stop');
+        }
+        
         if (voiceActivityTimeout) {
             clearTimeout(voiceActivityTimeout);
             voiceActivityTimeout = null;
@@ -2658,9 +2741,48 @@ async function processVoiceRecording() {
     }
 }
 
-// === TTS (Text-to-Speech) ===
+// === TTS (Text-to-Speech) & Audio Cues ===
+let currentTTSAudio = null;
+let ttsAbortController = null;
+let currentCueAudio = null;
+let ttsVolume = 100;
+let wakeCueMode = 'voice';
+let cueStopEnabled = true;
+
+function stopTTSPlayback() {
+    let stopped = false;
+    if (ttsAbortController) {
+        try { ttsAbortController.abort(); } catch (e) {}
+        ttsAbortController = null;
+        stopped = true;
+    }
+    if (currentTTSAudio) {
+        try {
+            currentTTSAudio.pause();
+            currentTTSAudio.currentTime = 0;
+        } catch (e) {}
+        currentTTSAudio = null;
+        stopped = true;
+    }
+    if (currentCueAudio) {
+        try {
+            currentCueAudio.pause();
+            currentCueAudio.currentTime = 0;
+        } catch (e) {}
+        currentCueAudio = null;
+        stopped = true;
+    }
+    if (stopped) {
+        console.log(t('settings.tts.stopped') || 'TTS playback stopped');
+        showToast(t('settings.tts.stopped') || 'Озвучка остановлена', 'info', 1500);
+    }
+}
+
 async function playTTS(text) {
     if (!text) return;
+    
+    stopTTSPlayback();
+    ttsAbortController = new AbortController();
     
     console.log(t('voice.tts.synthesis'), text.substring(0, 50) + '...');
     
@@ -2669,6 +2791,7 @@ async function playTTS(text) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: text }),
+            signal: ttsAbortController.signal,
         });
         
         if (!response.ok) {
@@ -2678,22 +2801,269 @@ async function playTTS(text) {
         const blob = await response.blob();
         const audioUrl = URL.createObjectURL(blob);
         const audio = new Audio(audioUrl);
+        audio.volume = Math.max(0, Math.min(1, ttsVolume / 100));
+        currentTTSAudio = audio;
         
         audio.onended = () => {
             URL.revokeObjectURL(audioUrl);
+            if (currentTTSAudio === audio) currentTTSAudio = null;
             console.log(t('voice.tts.done'));
         };
         
         audio.onerror = (e) => {
             console.error(t('voice.tts.playError'), e);
             URL.revokeObjectURL(audioUrl);
+            if (currentTTSAudio === audio) currentTTSAudio = null;
         };
         
         await audio.play();
         console.log(t('voice.tts.start'));
         
     } catch (error) {
+        if (error.name === 'AbortError') {
+            console.log('TTS fetch aborted');
+            return;
+        }
         console.error(t('voice.tts.error'), error);
+    } finally {
+        ttsAbortController = null;
+    }
+}
+
+function getCurrentVoiceId() {
+    const modeEl = document.querySelector('input[name="tts-mode"]:checked');
+    const mode = modeEl ? modeEl.value : 'instruct';
+    if (mode === 'clone') {
+        const cloneSel = document.getElementById('tts-clone-select');
+        const ref = cloneSel ? cloneSel.value : '';
+        if (ref) {
+            const stem = ref.split(/[\\/]/).pop().replace(/\.[^/.]+$/, '');
+            const clean = stem.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+            return `clone_${clean}`;
+        }
+        return 'clone_default';
+    } else {
+        const voiceSel = document.getElementById('tts-voice-select');
+        const inst = voiceSel ? voiceSel.value : 'female';
+        const clean = inst.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+        return `instruct_${clean}`;
+    }
+}
+
+function updateCueModeVisibility() {
+    const cueModeSelect = document.getElementById('wake-cue-mode-select');
+    const mode = cueModeSelect ? cueModeSelect.value : 'voice';
+    const panel = document.getElementById('wake-voice-cue-panel');
+    if (panel) {
+        panel.style.display = (mode === 'voice') ? 'block' : 'none';
+    }
+}
+
+async function refreshWakeCueVoices() {
+    const cueVoiceSel = document.getElementById('wake-cue-voice-select');
+    if (!cueVoiceSel) return;
+    
+    cueVoiceSel.innerHTML = '';
+    
+    // Add instruct presets
+    const instructPresets = [
+        { id: 'instruct_female', label: '👩 Женский (инструкция)' },
+        { id: 'instruct_male', label: '👨 Мужской (инструкция)' },
+        { id: 'instruct_female__russian', label: '🇷🇺 Русский женский (инструкция)' },
+        { id: 'instruct_female__young', label: '👧 Молодой женский (инструкция)' },
+        { id: 'instruct_female__low_pitch', label: '🔉 Низкий женский (инструкция)' },
+    ];
+    
+    instructPresets.forEach(preset => {
+        const opt = document.createElement('option');
+        opt.value = preset.id;
+        opt.textContent = preset.label;
+        cueVoiceSel.appendChild(opt);
+    });
+    
+    // Add cloned voices
+    const cloneSel = document.getElementById('tts-clone-select');
+    if (cloneSel) {
+        Array.from(cloneSel.options).forEach(opt => {
+            if (opt.value) {
+                const stem = opt.value.split(/[\\/]/).pop().replace(/\.[^/.]+$/, '');
+                const clean = stem.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+                const optEl = document.createElement('option');
+                optEl.value = `clone_${clean}`;
+                optEl.textContent = opt.textContent;
+                cueVoiceSel.appendChild(optEl);
+            }
+        });
+    }
+    
+    // Set to current voice
+    const curId = getCurrentVoiceId();
+    if (Array.from(cueVoiceSel.options).some(o => o.value === curId)) {
+        cueVoiceSel.value = curId;
+    }
+    
+    await checkCueStatus();
+}
+
+async function checkCueStatus() {
+    const cueVoiceSel = document.getElementById('wake-cue-voice-select');
+    const voiceId = cueVoiceSel ? cueVoiceSel.value : getCurrentVoiceId();
+    const statusText = document.getElementById('wake-cue-status-text');
+    if (!statusText) return;
+    
+    try {
+        const resp = await fetch(`${apiBase()}/api/tts/cues/status?voice_id=${encodeURIComponent(voiceId)}`);
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.exists) {
+                statusText.textContent = t('settings.wake.cueStatusReady') || '✅ Отклик сгенерирован и готов к воспроизведению';
+                statusText.style.color = 'var(--success, #98c379)';
+            } else {
+                statusText.textContent = t('settings.wake.cueStatusMissing') || '⚠️ Отклик ещё не сгенерирован для этого голоса';
+                statusText.style.color = 'var(--warning, #e5c07b)';
+            }
+        }
+    } catch (e) {
+        console.debug('Failed to check cue status:', e);
+    }
+}
+
+async function handleGenerateCue() {
+    const cueVoiceSel = document.getElementById('wake-cue-voice-select');
+    const voiceId = cueVoiceSel ? cueVoiceSel.value : getCurrentVoiceId();
+    const genBtn = document.getElementById('generate-cue-btn');
+    const prevText = genBtn ? genBtn.textContent : '';
+    if (genBtn) {
+        genBtn.disabled = true;
+        genBtn.textContent = t('settings.wake.cueGenerating') || '⏳ Генерация...';
+    }
+    
+    try {
+        let payload = { voice_id: voiceId };
+        if (voiceId.startsWith('clone_')) {
+            const cloneSel = document.getElementById('tts-clone-select');
+            for (const opt of (cloneSel ? cloneSel.options : [])) {
+                const stem = opt.value.split(/[\\/]/).pop().replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+                if (`clone_${stem}` === voiceId) {
+                    payload.mode = 'clone';
+                    payload.ref_audio = opt.value;
+                    break;
+                }
+            }
+            if (!payload.ref_audio && cloneSel && cloneSel.value) {
+                payload.mode = 'clone';
+                payload.ref_audio = cloneSel.value;
+            }
+        } else if (voiceId.startsWith('instruct_')) {
+            payload.mode = 'instruct';
+            const voiceSel = document.getElementById('tts-voice-select');
+            for (const opt of (voiceSel ? voiceSel.options : [])) {
+                const clean = opt.value.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+                if (`instruct_${clean}` === voiceId) {
+                    payload.instruct = opt.value;
+                    break;
+                }
+            }
+            if (!payload.instruct) {
+                payload.instruct = voiceId.replace('instruct_', '').replace(/__/g, ', ');
+            }
+        }
+        
+        const resp = await fetch(`${apiBase()}/api/tts/cues/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        
+        if (resp.ok) {
+            showToast(t('settings.wake.cueSuccess') || 'Отклик успешно сгенерирован!', 'success', 3000);
+            await checkCueStatus();
+            await playPreviewCue();
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showToast(t('settings.wake.cueError', { msg: err.detail || resp.status }), 'error', 4000);
+        }
+    } catch (e) {
+        showToast(t('settings.wake.cueError', { msg: String(e.message || e) }), 'error', 4000);
+    } finally {
+        if (genBtn) {
+            genBtn.disabled = false;
+            genBtn.textContent = prevText;
+        }
+    }
+}
+
+async function playPreviewCue() {
+    const cueVoiceSel = document.getElementById('wake-cue-voice-select');
+    const voiceId = cueVoiceSel ? cueVoiceSel.value : getCurrentVoiceId();
+    stopTTSPlayback();
+    try {
+        const audio = new Audio(`${apiBase()}/api/tts/cues/listen?voice_id=${encodeURIComponent(voiceId)}&t=${Date.now()}`);
+        audio.volume = Math.max(0, Math.min(1, ttsVolume / 100));
+        currentCueAudio = audio;
+        audio.onended = () => {
+            if (currentCueAudio === audio) currentCueAudio = null;
+        };
+        audio.onerror = () => {
+            if (currentCueAudio === audio) currentCueAudio = null;
+            showToast(t('settings.wake.cueStatusMissing') || 'Отклик ещё не сгенерирован для этого голоса', 'warning', 3000);
+        };
+        await audio.play();
+    } catch (e) {
+        showToast(t('settings.wake.cueStatusMissing') || 'Отклик ещё не сгенерирован для этого голоса', 'warning', 3000);
+    }
+}
+
+async function playSoundCue(name) {
+    stopTTSPlayback();
+    try {
+        const audio = new Audio(`${apiBase()}/api/sounds/${name}?t=${Date.now()}`);
+        audio.volume = Math.max(0, Math.min(1, ttsVolume / 100));
+        currentCueAudio = audio;
+        await new Promise((resolve) => {
+            audio.onended = () => {
+                if (currentCueAudio === audio) currentCueAudio = null;
+                resolve();
+            };
+            audio.onerror = () => {
+                if (currentCueAudio === audio) currentCueAudio = null;
+                resolve();
+            };
+            audio.play().catch(() => {
+                if (currentCueAudio === audio) currentCueAudio = null;
+                resolve();
+            });
+        });
+    } catch (e) {
+        console.debug('playSoundCue error:', e);
+    }
+}
+
+async function playWakeVoiceCue() {
+    stopTTSPlayback();
+    const voiceId = getCurrentVoiceId();
+    try {
+        const audio = new Audio(`${apiBase()}/api/tts/cues/listen?voice_id=${encodeURIComponent(voiceId)}&t=${Date.now()}`);
+        audio.volume = Math.max(0, Math.min(1, ttsVolume / 100));
+        currentCueAudio = audio;
+        await new Promise((resolve) => {
+            audio.onended = () => {
+                if (currentCueAudio === audio) currentCueAudio = null;
+                resolve();
+            };
+            audio.onerror = async () => {
+                if (currentCueAudio === audio) currentCueAudio = null;
+                await playSoundCue('wake');
+                resolve();
+            };
+            audio.play().catch(async () => {
+                if (currentCueAudio === audio) currentCueAudio = null;
+                await playSoundCue('wake');
+                resolve();
+            });
+        });
+    } catch (e) {
+        await playSoundCue('wake');
     }
 }
 
@@ -2721,6 +3091,7 @@ async function loadTTSVoices() {
         }
         
         console.log(t('voice.loaded'), data.voices?.length || 0);
+        await refreshWakeCueVoices();
     } catch (err) {
         console.error(t('voice.loadError'), err);
     }

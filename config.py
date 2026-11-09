@@ -234,6 +234,7 @@ class TTSConfig(BaseConfig):
     model: str = Field(default="silero_v3", description="TTS модель")
     steps: int = Field(default=64, ge=16, le=128, description="Шаги генерации")
     temperature: float = Field(default=1.0, ge=0.0, le=2.0, description="Temperature TTS")
+    volume: int = Field(default=100, ge=0, le=100, description="Громкость озвучки (0-100%)")
     debug_save: bool = Field(default=False, description="Сохранять отладочные WAV в debug_tts/")
 
     model_config = SettingsConfigDict(env_prefix="TTS_")
@@ -314,6 +315,7 @@ class HotkeyConfig(BaseConfig):
     voice: str = Field(default="Ctrl+Shift+V", description="Голосовой ввод (Ctrl+Shift+V)")
     voice_num: str = Field(default="Ctrl+Num0", description="Голосовой ввод, доп. клавиша (Ctrl+Num0)")
     live: str = Field(default="Ctrl+Shift+L", description="Live-режим (Ctrl+Shift+L)")
+    stop_tts: str = Field(default="Ctrl+Shift+X", description="Остановка озвучки (Ctrl+Shift+X)")
 
     model_config = SettingsConfigDict(env_prefix="HOTKEY_", extra="ignore")
 
@@ -353,6 +355,14 @@ class WakeWordConfig(BaseConfig):
         default=0.70,
         description="Порог совпадения фразы (0-1)",
     )
+    cue_wake_mode: str = Field(
+        default="voice",
+        description="Отклик на имя: voice / sound / none",
+    )
+    cue_stop_enabled: bool = Field(
+        default=True,
+        description="Звуковой сигнал при завершении записи",
+    )
 
     @field_validator("phrase")
     @classmethod
@@ -379,6 +389,21 @@ class WakeWordConfig(BaseConfig):
         if v not in ("chat", "execute"):
             raise ValueError("Действие wake-word: chat или execute")
         return v
+
+    @field_validator("cue_wake_mode")
+    @classmethod
+    def _check_cue_wake_mode(cls, v: str) -> str:
+        v = (v or "voice").strip().lower()
+        if v not in ("voice", "sound", "none"):
+            return "voice"
+        return v
+
+    @field_validator("cue_stop_enabled", mode="before")
+    @classmethod
+    def _check_cue_stop_enabled(cls, v) -> bool:
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "yes")
+        return bool(v)
 
     model_config = SettingsConfigDict(env_prefix="WAKE_", extra="ignore")
 
@@ -532,7 +557,11 @@ def save_config(
     hotkey_voice: str | None = None,
     hotkey_voice_num: str | None = None,
     hotkey_live: str | None = None,
+    hotkey_stop_tts: str | None = None,
+    tts_volume: int | None = None,
     wake_phrase: str | None = None,
+    wake_cue_mode: str | None = None,
+    wake_cue_stop: bool | None = None,
     wake_input_device: str | None = None,
     wake_action: str | None = None,
     wake_cooldown: float | None = None,
@@ -601,6 +630,9 @@ def save_config(
     
     if tts_temperature is not None:
         env_vars["TTS_TEMPERATURE"] = str(tts_temperature)
+
+    if tts_volume is not None:
+        env_vars["TTS_VOLUME"] = str(max(0, min(100, int(tts_volume))))
     
     if memory_max_context is not None:
         env_vars["MEMORY_MAX_CONTEXT_MESSAGES"] = str(memory_max_context)
@@ -631,7 +663,8 @@ def save_config(
 
     for key, val in (("HOTKEY_VOICE", hotkey_voice),
                      ("HOTKEY_VOICE_NUM", hotkey_voice_num),
-                     ("HOTKEY_LIVE", hotkey_live)):
+                     ("HOTKEY_LIVE", hotkey_live),
+                     ("HOTKEY_STOP_TTS", hotkey_stop_tts)):
         if val is not None and val != "":
             env_vars[key] = val.strip().replace("\r\n", "\n").replace("\n", "\\n")
 
@@ -646,6 +679,10 @@ def save_config(
         env_vars["WAKE_COOLDOWN"] = str(wake_cooldown)
     if wake_threshold is not None:
         env_vars["WAKE_MATCH_THRESHOLD"] = str(wake_threshold)
+    if wake_cue_mode is not None:
+        env_vars["WAKE_CUE_WAKE_MODE"] = wake_cue_mode.strip().lower()
+    if wake_cue_stop is not None:
+        env_vars["WAKE_CUE_STOP_ENABLED"] = "true" if wake_cue_stop else "false" 
     
     # Write back
     with open(env_path, "w", encoding="utf-8") as f:

@@ -572,6 +572,7 @@ Set `STT_MODEL` in `.env`: an alias, a Hugging Face `owner/repo` id, or a local 
 | Voice input | `Ctrl+Shift+V` or `Ctrl+Num0` |
 | Live mode | `Ctrl+Shift+L` |
 | Stop recording | Same voice key again or 2 sec silence |
+| Stop TTS playback | `Escape` (in-app) or `Ctrl+Shift+X` (global) |
 
 After stopping — 1 second pause, then text is sent to AI.
 
@@ -583,6 +584,8 @@ Set in `.env` (applied on app restart, format `Ctrl+Shift+V`, `Alt+F9`, `F12`, .
 HOTKEY_VOICE=Ctrl+Shift+V
 HOTKEY_VOICE_NUM=Ctrl+Num0
 HOTKEY_LIVE=Ctrl+Shift+L
+HOTKEY_STOP_TTS=Ctrl+Shift+X
+HOTKEY_STOP_TTS=Ctrl+Shift+X
 ```
 
 ## Input modes: hotkey or background
@@ -691,6 +694,11 @@ STT_MODEL=large-v3-turbo   # tiny / base / small / medium / large / large-v3-tur
 HOTKEY_VOICE=Ctrl+Shift+V
 HOTKEY_VOICE_NUM=Ctrl+Num0
 HOTKEY_LIVE=Ctrl+Shift+L
+HOTKEY_STOP_TTS=Ctrl+Shift+X
+
+# === Audio Cues ===
+WAKE_CUE_WAKE_MODE=voice       # voice ("Listening") / sound / none
+WAKE_CUE_STOP_ENABLED=true     # sound chime on mic recording finish
 
 # === Other ===
 LOG_LEVEL=INFO
@@ -705,6 +713,10 @@ LOG_LEVEL=INFO
 | Method | Endpoint | Description |
 |-------|----------|----------|
 | GET | `/api/status` | App status |
+| GET | `/api/tts/cues/status` | Check if cached 'listen' voice cue exists |
+| GET | `/api/tts/cues/listen` | Stream cached 'listen' voice cue audio |
+| POST | `/api/tts/cues/generate` | Generate and cache 'listen' voice cue for voice |
+| GET | `/api/sounds/{name}` | Serve sound cue (`wake.wav`, `stop.wav`) |
 | POST | `/api/chat` | Send message (returns `used_context_tokens`, `max_context_tokens`, `actions`, supports `images` array) |
 | GET | `/api/stt/models` | List available STT models (discovered in `models/` + presets) |
 | POST | `/api/stt` | Voice recognition |
@@ -1481,6 +1493,7 @@ Whisper транскрибирует только на русском языке
 | Голосовой ввод | `Ctrl+Shift+V` или `Ctrl+Num0` |
 | Live-режим | `Ctrl+Shift+L` |
 | Остановка записи | Та же клавиша повторно или 2 сек тишины |
+| Остановка озвучки | `Escape` (в окне) или `Ctrl+Shift+X` (глобально) |
 
 После остановки — 1 секунда паузы, затем текст отправляется AI.
 
@@ -1598,6 +1611,11 @@ STT_MODEL=large-v3-turbo   # tiny / base / small / medium / large / large-v3-tur
 HOTKEY_VOICE=Ctrl+Shift+V
 HOTKEY_VOICE_NUM=Ctrl+Num0
 HOTKEY_LIVE=Ctrl+Shift+L
+HOTKEY_STOP_TTS=Ctrl+Shift+X
+
+# === Звуковые и голосовые отклики ===
+WAKE_CUE_WAKE_MODE=voice       # voice («Слушаю») / sound / none
+WAKE_CUE_STOP_ENABLED=true     # звуковой сигнал окончания записи микрофона
 
 # === Прочее ===
 LOG_LEVEL=INFO
@@ -1612,6 +1630,10 @@ LOG_LEVEL=INFO
 | Метод | Эндпоинт | Описание |
 |-------|----------|----------|
 | GET | `/api/status` | Статус приложения |
+| GET | `/api/tts/cues/status` | Проверить наличие кэшированного отклика «Слушаю» |
+| GET | `/api/tts/cues/listen` | Поток аудио кэшированного отклика «Слушаю» |
+| POST | `/api/tts/cues/generate` | Сгенерировать и кэшировать отклик «Слушаю» для выбранного голоса |
+| GET | `/api/sounds/{name}` | Отдать звуковой сигнал (`wake.wav`, `stop.wav`) |
 | POST | `/api/chat` | Отправить сообщение (возвращает `used_context_tokens`, `max_context_tokens`, `actions`, поддерживает `images` массив) |
 | GET | `/api/stt/models` | Список доступных STT моделей (найденные в `models/` + пресеты) |
 | POST | `/api/stt` | Распознать голос |

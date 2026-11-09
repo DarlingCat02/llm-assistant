@@ -637,6 +637,8 @@ fn setup_global_shortcuts(app: &AppHandle) {
         get_env_value(&dir, "HOTKEY_VOICE_NUM").unwrap_or_else(|| "Ctrl+Num0".to_string());
     let live_spec =
         get_env_value(&dir, "HOTKEY_LIVE").unwrap_or_else(|| "Ctrl+Shift+L".to_string());
+    let stop_tts_spec =
+        get_env_value(&dir, "HOTKEY_STOP_TTS").unwrap_or_else(|| "Ctrl+Shift+X".to_string());
 
     let voice_shortcut = parse_shortcut(&voice_spec).unwrap_or_else(|| {
         error!(
@@ -658,6 +660,13 @@ fn setup_global_shortcuts(app: &AppHandle) {
             voice_num0_spec
         );
         Shortcut::new(Some(Modifiers::CONTROL), Code::Numpad0)
+    });
+    let stop_tts_shortcut = parse_shortcut(&stop_tts_spec).unwrap_or_else(|| {
+        error!(
+            "Invalid HOTKEY_STOP_TTS='{}', falling back to Ctrl+Shift+X",
+            stop_tts_spec
+        );
+        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyX)
     });
 
     let app_handle = app.clone();
@@ -703,9 +712,24 @@ fn setup_global_shortcuts(app: &AppHandle) {
         error!("Failed to register {}: {:?}", voice_num0_spec, e);
     }
 
+    // Shortcut to stop TTS playback
+    let app_handle4 = app.clone();
+    let stop_tts_spec_log = stop_tts_spec.clone();
+    if let Err(e) =
+        app.global_shortcut()
+            .on_shortcut(stop_tts_shortcut, move |_app, _shortcut, _event| {
+                info!("Hotkey: Stop TTS ({})", stop_tts_spec_log);
+                if let Some(window) = app_handle4.get_webview_window("main") {
+                    let _ = window.emit("hotkey-stop-tts", ());
+                }
+            })
+    {
+        error!("Failed to register {}: {:?}", stop_tts_spec, e);
+    }
+
     info!(
-        "Global shortcuts registered: {}, {} (voice), {} (live)",
-        voice_spec, voice_num0_spec, live_spec
+        "Global shortcuts registered: {}, {} (voice), {} (live), {} (stop tts)",
+        voice_spec, voice_num0_spec, live_spec, stop_tts_spec
     );
 }
 
