@@ -483,6 +483,12 @@ class WakeWordDetector:
         """
         self.stop()
         borrowed = not self.owns_model and self._model is not None
+        if not borrowed and self._model is not None:
+            try:
+                self._model.to("cpu")
+            except Exception:
+                pass
+            del self._model
         self._model = None
         self._processor = None
         self._vad = None

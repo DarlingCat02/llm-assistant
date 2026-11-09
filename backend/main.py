@@ -802,10 +802,14 @@ def _gpu_free_mb() -> int | None:
 def _stt_loaded() -> bool:
     """Whether the speech recognition model is resident right now."""
     try:
-        from src.stt_engine import get_stt_engine as peek
-
-        engine = peek()
-        return bool(getattr(engine, "_initialized", False))
+        from src import stt_engine as stt_mod
+        eng = getattr(stt_mod, "_stt_engine", None)
+        if eng is not None and getattr(eng, "_initialized", False):
+            return True
+        global _stt_engine
+        if _stt_engine is not None and getattr(_stt_engine, "_initialized", False):
+            return True
+        return False
     except Exception:
         return False
 
@@ -1010,9 +1014,10 @@ def _evict_stranded_modules(min_mb: int = 64) -> int:
         # the root left the encoder and decoder free to be moved - which is how
         # a live recognition model got dragged to the CPU.
         try:
-            from src.stt_engine import get_stt_engine as peek
-
-            _protect(getattr(peek(), "_model", None))
+            from src import stt_engine as stt_mod
+            eng = getattr(stt_mod, "_stt_engine", None) or _stt_engine
+            if eng is not None:
+                _protect(getattr(eng, "_model", None))
         except Exception:
             pass
         if _wake_detector is not None:
@@ -1146,15 +1151,12 @@ def _run_sync(coro_factory):
 
 async def _release_stt_async() -> int:
     """
-    Unload the recognition model by clearing every reference to it.
-
-    The engine is a module-level singleton with no unload of its own, so it is
-    released by dropping both holders and letting the garbage collector take
-    the tensors. Any reference left behind would keep ~1.5 GB resident, which is
-    why the freed amount is measured rather than assumed.
+    Unload the recognition model by calling unload() on both engine instances,
+    dropping references and clearing CUDA cache.
     """
     global _stt_engine
     try:
+        import gc
         import torch
 
         from src import stt_engine as stt_module
@@ -1162,10 +1164,23 @@ async def _release_stt_async() -> int:
         if not torch.cuda.is_available():
             return 0
         before = torch.cuda.memory_allocated()
+
+        for eng in (_stt_engine, getattr(stt_module, "_stt_engine", None)):
+            if eng is not None and hasattr(eng, "unload"):
+                try:
+                    eng.unload()
+                except Exception as e:
+                    logger.warning(f"STT engine unload error: {e}")
+
         _stt_engine = None
         stt_module._stt_engine = None
-        freed = await asyncio.to_thread(_release_cuda_cache)
+
+        gc.collect()
+        _release_cuda_cache()
         await asyncio.to_thread(_evict_stranded_modules)
+        gc.collect()
+        freed = await asyncio.to_thread(_release_cuda_cache)
+
         after = torch.cuda.memory_allocated()
         total = int((before - after) // (1024 * 1024))
         logger.info(
@@ -1210,16 +1225,19 @@ async def release_models(request: dict):
             await asyncio.to_thread(_release_cuda_cache)
             await asyncio.to_thread(_evict_stranded_modules)
 
-    if what in ("all", "stt") and _stt_loaded():
+    if what in ("all", "stt"):
+        # If wake detector is running, stop it and switch to hotkey so STT can actually unload
+        global _input_mode
         if _input_mode == INPUT_MODE_BACKGROUND or _wake_detector is not None:
-            # The detector borrowed this exact model. Unloading it here would
-            # break the mode the user is in.
-            result["stt_blocked"] = "background"
-        else:
-            result["stt_released"] = (await _release_stt_async()) > 0 or not _stt_loaded()
+            _wake_stop()
+            _input_mode = INPUT_MODE_HOTKEY
+
+        freed_stt = await _release_stt_async()
+        result["stt_released"] = freed_stt > 0 or not _stt_loaded()
 
     state = await gpu_memory_status()
     state.update(result)
+    state["input_mode"] = _input_mode
     state["freed_mb"] = int(
         (before.get("allocated_mb") or 0) - (state.get("allocated_mb") or 0)
     )
@@ -1640,16 +1658,16 @@ async def chat(request: ChatMessage):
     )
 
 
-_cached_lm_models: list[str] | None = None
-_cached_lm_model_time: float = 0.0
+_cached_lm_models_info: list[dict] | None = None
+_cached_lm_models_time: float = 0.0
 
-async def get_lmstudio_loaded_models() -> list[str]:
-    """IDs of every model currently loaded in LM Studio (30s cache)."""
-    global _cached_lm_models, _cached_lm_model_time
+async def get_lmstudio_loaded_models_info() -> list[dict]:
+    """Models currently loaded in LM Studio with full metadata (10s cache)."""
+    global _cached_lm_models_info, _cached_lm_models_time
     import time
     now = time.monotonic()
-    if _cached_lm_models is not None and (now - _cached_lm_model_time) < 30.0:
-        return _cached_lm_models
+    if _cached_lm_models_info is not None and (now - _cached_lm_models_time) < 10.0:
+        return _cached_lm_models_info
     try:
         cfg = get_config().llm
         if cfg.provider.value != "lm_studio":
@@ -1659,16 +1677,21 @@ async def get_lmstudio_loaded_models() -> list[str]:
             resp = await client.get(f"{cfg.host}/api/v0/models")
             if resp.status_code == 200:
                 loaded = [
-                    m.get("id")
+                    m
                     for m in resp.json().get("data", [])
                     if m.get("state") == "loaded" and m.get("id")
                 ]
-                _cached_lm_models = loaded
-                _cached_lm_model_time = now
+                _cached_lm_models_info = loaded
+                _cached_lm_models_time = now
                 return loaded
     except Exception:
         pass
     return []
+
+async def get_lmstudio_loaded_models() -> list[str]:
+    """IDs of every model currently loaded in LM Studio."""
+    info = await get_lmstudio_loaded_models_info()
+    return [m["id"] for m in info if m.get("id")]
 
 async def get_lmstudio_loaded_model() -> str | None:
     """First model loaded in LM Studio, or None. Used for status display."""
@@ -1676,8 +1699,24 @@ async def get_lmstudio_loaded_model() -> str | None:
     return loaded[0] if loaded else None
 
 async def get_effective_context_length() -> int:
-    """Return the context limit from the config (for LM Studio — also from .env, no extra requests)."""
+    """Return the context limit (from LM Studio runtime if loaded, else from config)."""
     cfg = get_config().llm
+    if cfg.provider.value == "lm_studio":
+        try:
+            loaded_info = await get_lmstudio_loaded_models_info()
+            if loaded_info:
+                current_model = getattr(cfg, "model", "")
+                chosen_m = None
+                for m in loaded_info:
+                    if m.get("id") == current_model:
+                        chosen_m = m
+                        break
+                if not chosen_m and loaded_info:
+                    chosen_m = loaded_info[0]
+                if chosen_m and chosen_m.get("loaded_context_length"):
+                    return int(chosen_m["loaded_context_length"])
+        except Exception as e:
+            logger.debug(f"Could not get LM Studio loaded_context_length: {e}")
     return int(getattr(cfg, 'num_ctx', 8192))
 
 
@@ -1713,7 +1752,8 @@ async def get_status():
 
 @app.get("/api/config")
 async def get_current_config():
-    """Get the current configuration. For LM Studio — returns the actually loaded model."""
+    """Get the current configuration. For LM Studio — returns the actually loaded model and context."""
+    effective_ctx = await get_effective_context_length() if _config else 8192
     if not _config:
         return {
             "provider": "ollama", "model": "", "ollama_host": "http://localhost:11434",
@@ -1737,7 +1777,7 @@ async def get_current_config():
         "model": _config.llm.model,
         "ollama_host": _config.llm.host,
         "api_key": _config.llm.api_key or "",
-        "num_ctx": _config.llm.num_ctx,
+        "num_ctx": effective_ctx if _config.llm.provider.value == "lm_studio" else _config.llm.num_ctx,
         "temperature": _config.llm.temperature,
         "tts_steps": _config.tts.steps,
         "tts_temperature": _config.tts.temperature,

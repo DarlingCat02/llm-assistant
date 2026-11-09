@@ -409,6 +409,28 @@ class STTEngine:
     def is_initialized(self) -> bool:
         return self._initialized
 
+    def unload(self) -> None:
+        """Unload Whisper model from GPU and memory."""
+        if self._model is not None:
+            try:
+                self._model.to("cpu")
+            except Exception:
+                pass
+            del self._model
+            self._model = None
+        self._processor = None
+        self._initialized = False
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except Exception:
+            pass
+        logger.info("STT engine unloaded")
+
 
 # Global instance
 _stt_engine: Optional[STTEngine] = None

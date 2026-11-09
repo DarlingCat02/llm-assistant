@@ -787,7 +787,7 @@ async function selectChat(chatId) {
     setChatHeader(chatTitles[chatId]);
     
     // Reset the context indicator (it updates after the next response)
-    updateContextIndicator(0, 8192);
+    updateContextIndicator(0, currentMaxContext);
 }
 
 async function loadChatMessages(chatId) {
@@ -853,7 +853,7 @@ async function clearChat() {
         });
         
         document.getElementById('messages-container').innerHTML = '';
-        updateContextIndicator(0, 8192);
+        updateContextIndicator(0, currentMaxContext);
     } catch (error) {
         console.error('Ошибка очистки чата:', error);
     }
@@ -1128,7 +1128,14 @@ function hideTypingIndicator() {
     document.getElementById('typing-indicator').classList.add('hidden');
 }
 
+let currentMaxContext = 8192;
+
 function updateContextIndicator(usedTokens, maxTokens) {
+    if (typeof maxTokens === 'number' && maxTokens > 0) {
+        currentMaxContext = maxTokens;
+    } else {
+        maxTokens = currentMaxContext;
+    }
     const indicator = document.getElementById('context-indicator');
     const fill = document.getElementById('context-bar-fill');
     const label = document.getElementById('context-label');
@@ -1833,6 +1840,11 @@ async function refreshGpuMemory() {
         const data = await resp.json();
         gpuMemoryState = data;
         renderGpuMemory();
+        if (data.input_mode === INPUT_MODE_HOTKEY && inputMode === INPUT_MODE_BACKGROUND) {
+            inputMode = INPUT_MODE_HOTKEY;
+            renderInputMode();
+            clearInputModeNote();
+        }
         return data;
     } catch (e) {
         return null;
@@ -1879,6 +1891,11 @@ async function releaseModels() {
         const data = await resp.json();
         gpuMemoryState = data;
         renderGpuMemory();
+        if (data.input_mode === INPUT_MODE_HOTKEY && inputMode === INPUT_MODE_BACKGROUND) {
+            inputMode = INPUT_MODE_HOTKEY;
+            renderInputMode();
+            clearInputModeNote();
+        }
         if (note) {
             if (data.stt_blocked === 'background') {
                 // Say why instead of appearing to do nothing.
@@ -2607,6 +2624,14 @@ async function updateStatus() {
     const data = await response.json();
     console.log('Статус:', data);
     
+    if (data.loaded_context_length || data.max_context_length) {
+        currentMaxContext = data.loaded_context_length || data.max_context_length;
+        const label = document.getElementById('context-label');
+        if (label && label.textContent.startsWith('0 /')) {
+            label.textContent = `0 / ${currentMaxContext}`;
+        }
+    }
+
     // Update the reasoning toggle state
     const thinkingToggle = document.getElementById('thinking-toggle');
     if (thinkingToggle) {
@@ -2623,6 +2648,14 @@ async function updateStatus() {
             const st = await resp.json();
             console.log('Статус:', st);
             
+            if (st.loaded_context_length || st.max_context_length) {
+                currentMaxContext = st.loaded_context_length || st.max_context_length;
+                const label = document.getElementById('context-label');
+                if (label && label.textContent.startsWith('0 /')) {
+                    label.textContent = `0 / ${currentMaxContext}`;
+                }
+            }
+
             const tg = document.getElementById('thinking-toggle');
             if (tg) {
                 const supports = st.supports_thinking === true;
