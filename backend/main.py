@@ -1477,21 +1477,26 @@ def claims_an_action_was_done(text: str) -> bool:
     instead of calling app_open.
     """
     low = (text or "").lower()
-    return any(m in low for m in _DONE_MARKERS_RU + _DONE_MARKERS_EN)
+    # Explicit negation or inability is NOT claiming success
+    if any(neg in low for neg in ("не могу", "не умею", "не получается", "не удалось", "невозможно", "cannot", "can't", "unable", "failed")):
+        return False
+    # Use word boundary check so substrings like 'открыть' do not match 'открыт'
+    import re as _re
+    return any(_re.search(r'\b' + _re.escape(m) + r'\b', low) for m in _DONE_MARKERS_RU + _DONE_MARKERS_EN)
 
 
 _RETRY_NUDGE_RU = (
     "\n\n[Системное уточнение] В предыдущем ответе инструмент не был вызван, "
     "но действие было заявлено выполненным. Это неверно: действие выполняется "
-    "ТОЛЬКО вызовом инструмента. Если нужно открыть приложение, создать файл "
-    "или сделать скриншот — вызови соответствующий инструмент сейчас. "
+    "ТОЛЬКО вызовом инструмента (app_open, browser_open, file_create и др.). "
+    "Вызови соответствующий инструмент прямо сейчас. "
     "Если инструмент не нужен — так и скажи прямо."
 )
 _RETRY_NUDGE_EN = (
     "\n\n[System note] Your previous reply claimed an action was done without "
     "calling any tool. That is not correct: an action only happens when a tool "
-    "is called. If you need to open an app, create a file or take a screenshot, "
-    "call the tool now. If no tool is needed, say so plainly."
+    "is called (app_open, browser_open, file_create, etc.). "
+    "Call the appropriate tool now. If no tool is needed, say so plainly."
 )
 
 

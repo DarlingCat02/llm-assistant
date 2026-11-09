@@ -467,8 +467,8 @@ class Assistant:
         if screen_config.enabled:
             screenshot_triggers = [tr.strip() for tr in screen_config.triggers.split(",") if tr.strip()]
             
-            msg_lower = user_message.lower()
-            needs_screenshot = any(trigger in msg_lower for trigger in screenshot_triggers)
+            clean_msg = user_message.split("\n\n[Системное уточнение]")[0].split("\n\n[System note]")[0].lower()
+            needs_screenshot = any(trigger in clean_msg for trigger in screenshot_triggers)
             
             if needs_screenshot:
                 self._logger.info(f"Screenshot trigger detected: '{user_message[:50]}...'")

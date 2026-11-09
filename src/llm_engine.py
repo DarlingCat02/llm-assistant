@@ -552,6 +552,7 @@ class LLMEngine:
 
         if tools:
             payload["tools"] = tools
+            payload["tool_choice"] = "auto"
 
         # num_ctx and thinking are Ollama-specific
         if self._config.provider == LLMProvider.OLLAMA:

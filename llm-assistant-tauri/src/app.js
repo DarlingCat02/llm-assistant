@@ -2826,7 +2826,7 @@ function stopVoiceRecording() {
         mediaRecorder.stop();
         isRecording = false;
         
-        if (cueStopEnabled) {
+        if (cueStopEnabled && inputMode === INPUT_MODE_BACKGROUND) {
             playSoundCue('stop');
         }
         
