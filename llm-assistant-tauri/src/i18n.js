@@ -106,11 +106,12 @@ function applyTranslations() {
     // Slider labels look like "Temperature: {value}" and carry a live
     // <span id="...-value"> child. textContent would wipe that span, so the
     // placeholder is replaced by the span itself.
-    if (val.includes('{value}')) {
+    if (val.includes('{value}') || val.includes('{val}')) {
       const holder = el.querySelector('span[id]');
       if (holder) {
+        const placeholder = val.includes('{value}') ? '{value}' : '{val}';
         const inner = `<span id="${holder.id}">${escapeHtml(holder.textContent)}</span>`;
-        el.innerHTML = escapeHtml(val).split('{value}').join(inner);
+        el.innerHTML = escapeHtml(val).split(placeholder).join(inner);
         return;
       }
     }
