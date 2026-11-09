@@ -27,18 +27,35 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 STORE = Path(__file__).parent.parent / "storage" / "tts_voices.json"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def normalize(path: str | os.PathLike) -> str:
     """
     One canonical form for a path.
 
-    The same file arrived as 'voices/x.mp3' and as an absolute path with
-    backslashes, which the engine counted as two different samples and
-    transcribed twice in a row. normcase folds the case and separators on
-    Windows; abspath makes the key independent of the working directory.
+    If the file is inside the project root, normalize it as a forward-slash
+    relative path (e.g. 'voices/sample.mp3') so the cache is completely
+    portable across different directories and machines.
+    External files outside the project use canonical lowercase absolute paths.
     """
-    return os.path.normcase(os.path.abspath(os.path.expanduser(str(path))))
+    try:
+        resolved = Path(os.path.expanduser(str(path))).resolve()
+        try:
+            rel = resolved.relative_to(PROJECT_ROOT)
+            return str(rel).replace("\\", "/").lower()
+        except ValueError:
+            return os.path.normcase(str(resolved))
+    except Exception:
+        return os.path.normcase(os.path.abspath(os.path.expanduser(str(path))))
+
+
+def _resolve_key_path(key: str) -> Path:
+    """Get the Path object for stat/checking, resolving relative keys against PROJECT_ROOT."""
+    p = Path(key)
+    if not p.is_absolute():
+        return PROJECT_ROOT / p
+    return p
 
 
 def load() -> dict:
@@ -89,7 +106,18 @@ def lookup(sample: str) -> str | None:
     words.
     """
     key = normalize(sample)
-    entry = load().get(key)
+    data = load()
+    entry = data.get(key)
+
+    # Fallback lookup for legacy entries or paths saved with old absolute keys
+    if not isinstance(entry, dict):
+        sample_name = Path(key).name.lower()
+        for k, v in data.items():
+            norm_k = k.replace("\\", "/").lower()
+            if norm_k.endswith("/" + key) or norm_k == key or Path(norm_k).name.lower() == sample_name:
+                entry = v
+                break
+
     if not isinstance(entry, dict):
         return None
     text = entry.get("text")
@@ -97,7 +125,8 @@ def lookup(sample: str) -> str | None:
         return None
 
     try:
-        st = Path(key).stat()
+        target_path = _resolve_key_path(key)
+        st = target_path.stat()
         if st.st_size != entry.get("size"):
             logger.info("Voice sample changed (size) - transcription will be redone")
             return None
@@ -126,7 +155,8 @@ def remember(sample: str, text: str) -> bool:
     if key in data:
         return False
     try:
-        st = Path(key).stat()
+        target_path = _resolve_key_path(key)
+        st = target_path.stat()
         mtime, size = st.st_mtime, st.st_size
     except OSError:
         mtime, size = 0.0, 0

@@ -69,7 +69,9 @@ def acoustic(wav: Path, seconds: int = 12) -> None:
     print(f"\nbest score : {best:.2f}")
     print(f"triggers   : {len(fired)}")
     try:
-        with open(r"F:\TEMP\Temp\wake_acoustic.txt", "w", encoding="utf-8") as f:
+        report_file = Path(__file__).parent.parent / "logs" / "wake_acoustic.txt"
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(report_file, "w", encoding="utf-8") as f:
             f.write(f"best score: {best:.2f}\ntriggers: {len(fired)}\nbest: {best_text}\n")
             for x in fired:
                 f.write(f"  {x}\n")

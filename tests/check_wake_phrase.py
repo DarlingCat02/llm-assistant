@@ -85,7 +85,9 @@ def main() -> None:
     print("triggered:", len(fired))
     # Write the result to a file: the Windows console mangles Cyrillic
     try:
-        with open(r"F:\TEMP\Temp\wake_phrase_report.txt", "w", encoding="utf-8") as f:
+        report_file = Path(__file__).parent.parent / "logs" / "wake_phrase_report.txt"
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(report_file, "w", encoding="utf-8") as f:
             f.write(f"phrase: {phrase}\nbest score: {best:.2f}\n")
             f.write(f"best transcript: {best_label}\n")
             f.write(f"triggered: {len(fired)}\n\n")

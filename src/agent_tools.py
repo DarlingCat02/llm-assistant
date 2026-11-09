@@ -1,6 +1,8 @@
 import os
+import re
 import json
 import logging
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -20,42 +22,105 @@ def _load_apps_config() -> dict:
         return json.load(f)
 
 
+COMMON_APP_CANDIDATES = {
+    "chrome": [
+        r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe",
+        r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe",
+        r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+    ],
+    "firefox": [
+        r"%PROGRAMFILES%\Mozilla Firefox\firefox.exe",
+        r"%PROGRAMFILES(X86)%\Mozilla Firefox\firefox.exe",
+    ],
+    "yandex": [
+        r"%LOCALAPPDATA%\Yandex\YandexBrowser\Application\browser.exe",
+        r"%PROGRAMFILES(X86)%\Yandex\YandexBrowser\Application\browser.exe",
+    ],
+    "vscode": [
+        r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe",
+        r"%PROGRAMFILES%\Microsoft VS Code\Code.exe",
+    ],
+    "telegram": [
+        r"%APPDATA%\Telegram Desktop\Telegram.exe",
+        r"%PROGRAMFILES%\Telegram Desktop\Telegram.exe",
+    ],
+    "discord": [
+        r"%LOCALAPPDATA%\Discord\Update.exe --processStart Discord.exe",
+    ],
+    "spotify": [
+        r"%APPDATA%\Spotify\Spotify.exe",
+    ],
+    "steam": [
+        r"%PROGRAMFILES(X86)%\Steam\steam.exe",
+        r"%PROGRAMFILES%\Steam\steam.exe",
+    ],
+    "task_manager": [
+        "taskmgr.exe",
+    ],
+}
+
+
 def _resolve_path(path: str) -> str:
-    """Resolve environment variables in a path."""
-    if "%USERNAME%" in path:
-        path = path.replace("%USERNAME%", os.environ.get("USERNAME", ""))
-    return path
+    """Resolve environment variables and user paths (e.g. %USERPROFILE%, %APPDATA%, ~)."""
+    if not path:
+        return ""
+    expanded = os.path.expandvars(os.path.expanduser(str(path)))
+    if "c:\\users\\user" in expanded.lower():
+        user_home = os.environ.get("USERPROFILE") or str(Path.home())
+        pattern = re.compile(re.escape("C:\\Users\\User"), re.IGNORECASE)
+        expanded = pattern.sub(lambda _: user_home, expanded)
+        pattern_fwd = re.compile(re.escape("C:/Users/User"), re.IGNORECASE)
+        expanded = pattern_fwd.sub(lambda _: user_home.replace("\\", "/"), expanded)
+    return expanded
 
 
 def _find_app(name: str) -> str | None:
-    """Find an application by name or alias."""
+    """Find an application by name or alias, with portable standard locations fallback."""
     config = _load_apps_config()
     name_lower = name.lower().strip()
-    
+
+    candidate_path = None
+    matched_app_name = None
+
     for app in config.get("apps", []):
-        # Check the primary name
-        if app["name"].lower() == name_lower:
-            return _resolve_path(app["path"])
-        
-        # Check aliases
+        app_name = app.get("name", "").lower()
+        if app_name == name_lower:
+            candidate_path = _resolve_path(app.get("path", ""))
+            matched_app_name = app_name
+            break
+
         for alias in app.get("aliases", []):
             if alias.lower() == name_lower:
-                return _resolve_path(app["path"])
-    
-    # Try to find as exe in PATH
+                candidate_path = _resolve_path(app.get("path", ""))
+                matched_app_name = app_name
+                break
+        if candidate_path:
+            break
+
+    if candidate_path:
+        clean_path = candidate_path.split(" --")[0].strip('"')
+        if os.path.exists(clean_path):
+            return candidate_path
+
+    lookup_key = matched_app_name or name_lower
+    for cand in COMMON_APP_CANDIDATES.get(lookup_key, []):
+        cand_resolved = _resolve_path(cand)
+        clean_cand = cand_resolved.split(" --")[0].strip('"')
+        if os.path.exists(clean_cand):
+            return cand_resolved
+
     for ext in ["", ".exe", ".cmd", ".bat"]:
-        if name_lower.endswith(ext) or True:
-            try:
-                result = subprocess.run(
-                    ["where", name_lower + ext],
-                    capture_output=True, text=True, timeout=5
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    return result.stdout.strip().split("\n")[0]
-            except Exception:
-                pass
-    
-    return None
+        try:
+            result = subprocess.run(
+                ["where", name_lower + ext],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip().split("\n")[0].strip()
+        except Exception:
+            pass
+
+    return candidate_path
 
 
 # === Tool Definitions ===
