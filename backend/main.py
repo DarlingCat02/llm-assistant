@@ -437,15 +437,16 @@ async def _ensure_omnivoice_loaded() -> bool:
     return success
 
 
-async def _ensure_live_models_ready() -> None:
+async def _ensure_live_models_ready():
     """Ensure STT Whisper and OmniVoice TTS are warm before listening in Live Mode."""
-    stt = get_stt_engine()
+    stt = await get_stt_engine()
     if stt is not None and not stt.is_initialized:
-        await asyncio.to_thread(asyncio.run, stt.initialize())
+        await stt.initialize()
     if _assistant and getattr(_assistant, "_tts", None) and not _tts_engine_ready():
         ok = await _ensure_omnivoice_loaded()
         if not ok:
             logger.warning("Live Mode: OmniVoice failed to load; continuing without TTS audio")
+    return stt
 
 
 async def _sync_lmstudio_before_live_turn() -> None:
@@ -516,21 +517,21 @@ async def live_websocket_endpoint(
         except Exception:
             pass
 
-    session = LiveSessionManager(
-        assistant=_assistant,
-        stt=get_stt_engine(),
-        tts=_assistant._tts,
-        db=_db,
-        config=_config,
-        event_cb=send_live_event,
-        before_turn_cb=_sync_lmstudio_before_live_turn,
-        get_context_max_cb=get_effective_context_length,
-    )
-    _live_session = session
-
+    session = None
     try:
         await send_live_event({"type": "live_state", "state": "connecting"})
-        await _ensure_live_models_ready()
+        stt = await _ensure_live_models_ready()
+        session = LiveSessionManager(
+            assistant=_assistant,
+            stt=stt,
+            tts=_assistant._tts,
+            db=_db,
+            config=_config,
+            event_cb=send_live_event,
+            before_turn_cb=_sync_lmstudio_before_live_turn,
+            get_context_max_cb=get_effective_context_length,
+        )
+        _live_session = session
         await session.start(chat_id=chat_id, thinking=thinking)
 
         while True:
@@ -566,10 +567,15 @@ async def live_websocket_endpoint(
         await send_live_event({"type": "error", "detail": str(e)})
     finally:
         ws_closed = True
-        if _live_session is session:
+        if session is not None and _live_session is session:
             await _stop_live_session()
         else:
-            await session.stop()
+            if session is not None:
+                await session.stop()
+            if _live_restore_wake:
+                _live_restore_wake = False
+                if _input_mode == INPUT_MODE_BACKGROUND and _wake_detector is None:
+                    _wake_start()
         logger.info("Live WebSocket closed")
 
 

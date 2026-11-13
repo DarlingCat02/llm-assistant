@@ -331,3 +331,87 @@ async def test_live_session_barge_in_cancels_llm_and_tts():
     assert any(e.get("type") == "interrupt" for e in events)
     # Slow TTS should have been aborted / dropped due to generation_id increment
     assert not any(e.get("type") == "ai_audio" for e in events)
+
+
+def test_backend_live_websocket_wiring(monkeypatch):
+    from fastapi.testclient import TestClient
+    import backend.main as bm
+
+    fake_db = _FakeDB()
+
+    class _MockSTT:
+        is_initialized = True
+
+        async def initialize(self):
+            pass
+
+        async def transcribe_numpy(self, audio, sample_rate=16000) -> str:
+            return "Привет"
+
+    class _MockTTS:
+        is_dummy = False
+        is_omnivoice_loaded = True
+
+        async def speak(self, text: str):
+            return SimpleNamespace(success=True, audio_data=b"WAVDATA")
+
+    class _MockAssistant:
+        _tts = _MockTTS()
+        _llm = None
+
+        async def process_message_stream(
+            self,
+            user_message: str,
+            thinking: bool = False,
+            search: str = "",
+            chat_history=None,
+            images=None,
+            cancel_event=None,
+        ):
+            yield LLMStreamEvent(type="token", token="Привет!")
+            yield LLMStreamEvent(
+                type="done",
+                response=LLMResponse(content="Привет!", model="test", prompt_tokens=10),
+            )
+
+    async def _fake_get_stt_engine():
+        return _MockSTT()
+
+    async def _fake_noop():
+        return None
+
+    async def _fake_ctx():
+        return 8192
+
+    # Avoid opening a real hardware microphone during CI/sandbox test
+    orig_start = LiveSessionManager.start
+
+    async def _safe_start(self, chat_id=None, thinking=False, open_mic=True):
+        return await orig_start(self, chat_id=chat_id, thinking=thinking, open_mic=False)
+
+    monkeypatch.setattr(bm, "_assistant", _MockAssistant())
+    monkeypatch.setattr(bm, "_db", fake_db)
+    monkeypatch.setattr(bm, "_config", None)
+    monkeypatch.setattr(bm, "get_stt_engine", _fake_get_stt_engine)
+    monkeypatch.setattr(bm, "_tts_engine_ready", lambda: True)
+    monkeypatch.setattr(bm, "_sync_lmstudio_before_live_turn", _fake_noop)
+    monkeypatch.setattr(bm, "get_effective_context_length", _fake_ctx)
+    monkeypatch.setattr(LiveSessionManager, "start", _safe_start)
+
+    client = TestClient(bm.app)
+    with client.websocket_connect("/ws/live?thinking=false") as ws:
+        connecting = ws.receive_json()
+        assert connecting == {"type": "live_state", "state": "connecting"}
+        listening = ws.receive_json()
+        assert listening == {"type": "live_state", "state": "listening"}
+        ws.send_json({"type": "text", "content": "Привет"})
+        seen = []
+        for _ in range(15):
+            ev = ws.receive_json()
+            seen.append(ev["type"])
+            if ev["type"] == "ai_done":
+                break
+        assert "user_transcript" in seen
+        assert "ai_token" in seen
+        assert "ai_done" in seen
+        ws.send_json({"type": "stop"})
