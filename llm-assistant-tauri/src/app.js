@@ -385,6 +385,7 @@ function initEventListeners() {
     document.getElementById('close-settings-btn').addEventListener('click', closeSettings);
     document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
     initHotkeyRecorders();
+    initLiveModeControls();
     document.getElementById('provider-select').addEventListener('change', onProviderChange);
     const cueModeSel = document.getElementById('wake-cue-mode-select');
     if (cueModeSel) cueModeSel.addEventListener('change', () => {
@@ -2373,6 +2374,9 @@ function initSliders() {
         ttsVolSlider.addEventListener('input', () => {
             ttsVolume = parseInt(ttsVolSlider.value);
             if (ttsVolValue) ttsVolValue.textContent = `${ttsVolume}%`;
+            if (liveGainNode) {
+                liveGainNode.gain.value = Math.max(0, Math.min(1, ttsVolume / 100));
+            }
         });
     }
     
@@ -2712,29 +2716,479 @@ function startVoiceInput() {
     };
 }
 
-// === Live mode ===
+// === Live mode (Full-Duplex Voice Call + Chat Sync) ===
 let liveModeActive = false;
+let liveWs = null;
+let liveMuted = false;
+let liveMinimized = false;
+let liveState = 'idle';
+let liveStartedAt = 0;
+let liveTimerInterval = null;
+
+// Live streaming chat bubble state
+let liveActiveTurnEl = null;
+let liveActiveTurnText = '';
+let liveActiveTurnActions = [];
+let liveActiveToolLabel = '';
+
+// Seamless Web Audio chunk queue
+let liveAudioCtx = null;
+let liveGainNode = null;
+let liveNextStartTime = 0;
+let liveGenerationId = 0;
+let liveDecodeChain = Promise.resolve();
+const liveScheduledSources = new Set();
+
+function initLiveModeControls() {
+    const headerBtn = document.getElementById('live-mode-btn');
+    if (headerBtn) headerBtn.addEventListener('click', toggleLiveMode);
+
+    const muteBtn = document.getElementById('live-mute-btn');
+    if (muteBtn) muteBtn.addEventListener('click', toggleLiveMute);
+
+    const miniMuteBtn = document.getElementById('live-mini-mute-btn');
+    if (miniMuteBtn) miniMuteBtn.addEventListener('click', toggleLiveMute);
+
+    const interruptBtn = document.getElementById('live-interrupt-btn');
+    if (interruptBtn) interruptBtn.addEventListener('click', sendLiveInterrupt);
+
+    const hangupBtn = document.getElementById('live-hangup-btn');
+    if (hangupBtn) hangupBtn.addEventListener('click', () => stopLiveMode(true));
+
+    const miniHangupBtn = document.getElementById('live-mini-hangup-btn');
+    if (miniHangupBtn) miniHangupBtn.addEventListener('click', () => stopLiveMode(true));
+
+    const minBtn = document.getElementById('live-minimize-btn');
+    if (minBtn) minBtn.addEventListener('click', () => setLiveMinimized(true));
+
+    const expBtn = document.getElementById('live-expand-btn');
+    if (expBtn) expBtn.addEventListener('click', () => setLiveMinimized(false));
+}
+
+function ensureLiveAudioContext() {
+    if (!liveAudioCtx) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        liveAudioCtx = new AudioCtx();
+        liveGainNode = liveAudioCtx.createGain();
+        liveGainNode.gain.value = Math.max(0, Math.min(1, ttsVolume / 100));
+        liveGainNode.connect(liveAudioCtx.destination);
+    }
+    if (liveAudioCtx.state === 'suspended') {
+        liveAudioCtx.resume().catch(() => {});
+    }
+    if (liveGainNode) {
+        liveGainNode.gain.value = Math.max(0, Math.min(1, ttsVolume / 100));
+    }
+}
+
+function sendLiveControl(payload) {
+    if (liveWs && liveWs.readyState === WebSocket.OPEN) {
+        try {
+            liveWs.send(JSON.stringify(payload));
+        } catch (e) {
+            console.debug('Live control send skipped:', e);
+        }
+    }
+}
+
+function stopLiveAudioPlayback() {
+    liveGenerationId += 1;
+    liveNextStartTime = 0;
+    for (const src of liveScheduledSources) {
+        try {
+            src.onended = null;
+            src.stop();
+            src.disconnect();
+        } catch (e) {}
+    }
+    liveScheduledSources.clear();
+    sendLiveControl({ type: 'playback_state', playing: false });
+}
+
+function enqueueLiveAudioBase64(b64Data, genId) {
+    if (!b64Data) return;
+    const expectedGen = liveGenerationId;
+
+    liveDecodeChain = liveDecodeChain.then(async () => {
+        if (!liveModeActive || expectedGen !== liveGenerationId) return;
+        ensureLiveAudioContext();
+        if (!liveAudioCtx || !liveGainNode) return;
+
+        const raw = atob(b64Data);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) {
+            bytes[i] = raw.charCodeAt(i);
+        }
+
+        const audioBuffer = await liveAudioCtx.decodeAudioData(bytes.buffer.slice(0));
+        if (!liveModeActive || expectedGen !== liveGenerationId) return;
+
+        const source = liveAudioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(liveGainNode);
+
+        const now = liveAudioCtx.currentTime;
+        const startAt = Math.max(now + 0.02, liveNextStartTime);
+        liveNextStartTime = startAt + audioBuffer.duration;
+
+        const wasEmpty = liveScheduledSources.size === 0;
+        liveScheduledSources.add(source);
+        if (wasEmpty) {
+            sendLiveControl({ type: 'playback_state', playing: true });
+        }
+
+        source.onended = () => {
+            liveScheduledSources.delete(source);
+            try { source.disconnect(); } catch (e) {}
+            if (liveScheduledSources.size === 0 && liveModeActive) {
+                sendLiveControl({ type: 'playback_state', playing: false });
+            }
+        };
+        source.start(startAt);
+    }).catch((err) => {
+        console.debug('Live audio decode error:', err);
+    });
+}
 
 function toggleLiveMode() {
-    liveModeActive = !liveModeActive;
-    console.log('Live режим:', liveModeActive ? 'ВКЛ' : 'ВЫКЛ');
-    
     if (liveModeActive) {
-        startLiveMode();
+        stopLiveMode(true);
     } else {
-        stopLiveMode();
+        startLiveMode();
+    }
+}
+
+function setLiveMinimized(minimized) {
+    liveMinimized = !!minimized;
+    const overlay = document.getElementById('live-overlay');
+    const pill = document.getElementById('live-mini-pill');
+    if (!overlay || !pill) return;
+    if (!liveModeActive) {
+        overlay.classList.add('hidden');
+        pill.classList.add('hidden');
+        return;
+    }
+    overlay.classList.toggle('hidden', liveMinimized);
+    pill.classList.toggle('hidden', !liveMinimized);
+}
+
+function updateLiveTimerDisplay() {
+    if (!liveStartedAt) return;
+    const sec = Math.max(0, Math.floor((Date.now() - liveStartedAt) / 1000));
+    const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+    const ss = String(sec % 60).padStart(2, '0');
+    const text = `${mm}:${ss}`;
+    const t1 = document.getElementById('live-timer');
+    const t2 = document.getElementById('live-mini-timer');
+    if (t1) t1.textContent = text;
+    if (t2) t2.textContent = text;
+}
+
+function updateLiveStateUI(state, extra = '') {
+    liveState = state || 'idle';
+    const orb = document.getElementById('live-orb');
+    const statusEl = document.getElementById('live-status-text');
+    const miniStatusEl = document.getElementById('live-mini-status');
+    const headerBtn = document.getElementById('live-mode-btn');
+
+    if (headerBtn) headerBtn.classList.toggle('active', liveModeActive);
+
+    if (orb) {
+        orb.className = `live-orb state-${liveState}`;
+        if (liveState !== 'listening') {
+            orb.style.transform = '';
+            const ring = document.getElementById('live-orb-ring');
+            if (ring) ring.style.transform = '';
+        }
+    }
+
+    let label = t('live.listening');
+    if (liveState === 'connecting') label = t('live.connecting');
+    else if (liveState === 'thinking') label = t('live.thinking');
+    else if (liveState === 'tool') label = t('live.tool', { tool: extra || liveActiveToolLabel || 'tool' });
+    else if (liveState === 'speaking') label = t('live.speaking');
+    else if (liveState === 'muted') label = t('live.muted');
+
+    if (statusEl) statusEl.textContent = label;
+    if (miniStatusEl) miniStatusEl.textContent = label;
+}
+
+function updateLiveMicMeter(level) {
+    const clamped = Math.max(0, Math.min(1, Number(level) || 0));
+    const bar = document.getElementById('live-mic-bar');
+    if (bar) bar.style.width = `${Math.round(clamped * 100)}%`;
+
+    if (liveState === 'listening') {
+        const orb = document.getElementById('live-orb');
+        const ring = document.getElementById('live-orb-ring');
+        if (orb) orb.style.transform = `scale(${(1 + clamped * 0.16).toFixed(3)})`;
+        if (ring) ring.style.transform = `scale(${(1 + clamped * 0.28).toFixed(3)})`;
+    }
+}
+
+function toggleLiveMute() {
+    if (!liveModeActive) return;
+    liveMuted = !liveMuted;
+    const muteBtn = document.getElementById('live-mute-btn');
+    const muteIcon = document.getElementById('live-mute-icon');
+    const miniMuteBtn = document.getElementById('live-mini-mute-btn');
+    if (muteBtn) muteBtn.classList.toggle('muted', liveMuted);
+    if (muteIcon) muteIcon.textContent = liveMuted ? '🔇' : '🎙️';
+    if (miniMuteBtn) miniMuteBtn.textContent = liveMuted ? '🔇' : '🎙️';
+    sendLiveControl({ type: 'mute', muted: liveMuted });
+}
+
+function sendLiveInterrupt() {
+    if (!liveModeActive) return;
+    stopLiveAudioPlayback();
+    sendLiveControl({ type: 'interrupt' });
+}
+
+function ensureLiveAssistantBubble() {
+    if (liveActiveTurnEl) return liveActiveTurnEl;
+    const container = document.getElementById('messages-container');
+    if (!container) return null;
+    const welcome = container.querySelector('.welcome-message');
+    if (welcome) welcome.remove();
+
+    liveActiveTurnText = '';
+    liveActiveTurnActions = [];
+
+    const div = document.createElement('div');
+    div.className = 'message assistant';
+    const time = new Date().toLocaleTimeString(
+        getLang() === 'ru' ? 'ru-RU' : 'en-US',
+        { hour: '2-digit', minute: '2-digit' }
+    );
+    div.innerHTML = `
+        <div class="message-avatar">${avatarHtml('bot')}</div>
+        <div class="message-content">
+            <div class="live-actions-slot"></div>
+            <div class="message-live-tool hidden"></div>
+            <div class="message-text"></div>
+            <div class="message-time">${time}</div>
+        </div>
+    `;
+    container.appendChild(div);
+    scrollToBottom();
+    liveActiveTurnEl = div;
+    return div;
+}
+
+function handleLiveEvent(data) {
+    if (!data || !liveModeActive) return;
+    const sub = document.getElementById('live-subtitle');
+
+    switch (data.type) {
+        case 'live_state':
+            updateLiveStateUI(data.state);
+            break;
+
+        case 'mic_level':
+            updateLiveMicMeter(data.level);
+            break;
+
+        case 'chat_created':
+            if (data.chat_id && !currentChatId) {
+                currentChatId = data.chat_id;
+                loadChats().then(() => {
+                    setChatHeader(chatTitles[currentChatId] || data.title || 'Live');
+                }).catch(() => {});
+            }
+            break;
+
+        case 'user_transcript':
+            if (data.text) {
+                appendMessage('user', data.text);
+                if (sub) sub.textContent = data.text;
+            }
+            break;
+
+        case 'tool_start': {
+            liveActiveToolLabel = data.tool || '';
+            updateLiveStateUI('tool', data.tool);
+            const bubble = ensureLiveAssistantBubble();
+            const badge = bubble && bubble.querySelector('.message-live-tool');
+            if (badge) {
+                badge.textContent = `🔧 ${t('live.tool', { tool: data.tool || 'tool' })}`;
+                badge.classList.remove('hidden');
+            }
+            break;
+        }
+
+        case 'tool_done': {
+            const bubble = ensureLiveAssistantBubble();
+            const badge = bubble && bubble.querySelector('.message-live-tool');
+            if (badge) badge.classList.add('hidden');
+            if (data.action) {
+                liveActiveTurnActions.push(data.action);
+                const slot = bubble && bubble.querySelector('.live-actions-slot');
+                if (slot) slot.innerHTML = renderActions(liveActiveTurnActions);
+            }
+            scrollToBottom();
+            break;
+        }
+
+        case 'ai_token': {
+            const bubble = ensureLiveAssistantBubble();
+            liveActiveTurnText += data.content || '';
+            const textEl = bubble && bubble.querySelector('.message-text');
+            if (textEl) textEl.textContent = liveActiveTurnText;
+            if (sub && liveActiveTurnText) {
+                sub.textContent = liveActiveTurnText.slice(-220);
+            }
+            scrollToBottom();
+            break;
+        }
+
+        case 'ai_audio':
+            enqueueLiveAudioBase64(data.data, data.gen_id);
+            break;
+
+        case 'interrupt':
+            stopLiveAudioPlayback();
+            break;
+
+        case 'ai_done': {
+            const bubble = liveActiveTurnEl;
+            if (bubble) {
+                const badge = bubble.querySelector('.message-live-tool');
+                if (badge) badge.classList.add('hidden');
+                const finalText = (data.content || liveActiveTurnText || '').trim();
+                const textEl = bubble.querySelector('.message-text');
+                if (textEl) {
+                    textEl.textContent = finalText || (data.cancelled ? '…' : '');
+                }
+                if (Array.isArray(data.actions) && data.actions.length > 0) {
+                    const slot = bubble.querySelector('.live-actions-slot');
+                    if (slot) slot.innerHTML = renderActions(data.actions);
+                }
+            }
+            liveActiveTurnEl = null;
+            liveActiveTurnText = '';
+            liveActiveTurnActions = [];
+            if (typeof data.used_context_tokens === 'number' && data.used_context_tokens > 0) {
+                updateContextIndicator(data.used_context_tokens, data.max_context_tokens);
+            }
+            scrollToBottom();
+            break;
+        }
+
+        case 'error':
+            showToast(t('live.error', { msg: data.detail || 'Error' }), 'error', 4000);
+            break;
     }
 }
 
 function startLiveMode() {
-    const input = document.getElementById('message-input');
-    input.placeholder = t('voice.liveActive');
-    input.focus();
+    if (liveModeActive) return;
+
+    // Stop any push-to-talk recording or standalone TTS first
+    if (typeof isRecording !== 'undefined' && isRecording) {
+        stopVoiceRecording();
+    }
+    stopTTSPlayback();
+    ensureLiveAudioContext();
+
+    liveModeActive = true;
+    liveMuted = false;
+    liveActiveTurnEl = null;
+    liveActiveTurnText = '';
+    liveActiveTurnActions = [];
+    liveStartedAt = Date.now();
+
+    const muteBtn = document.getElementById('live-mute-btn');
+    const muteIcon = document.getElementById('live-mute-icon');
+    const miniMuteBtn = document.getElementById('live-mini-mute-btn');
+    if (muteBtn) muteBtn.classList.remove('muted');
+    if (muteIcon) muteIcon.textContent = '🎙️';
+    if (miniMuteBtn) miniMuteBtn.textContent = '🎙️';
+    const sub = document.getElementById('live-subtitle');
+    if (sub) sub.textContent = t('live.subtitleIdle');
+
+    setLiveMinimized(false);
+    updateLiveStateUI('connecting');
+    updateLiveMicMeter(0);
+    updateLiveTimerDisplay();
+    clearInterval(liveTimerInterval);
+    liveTimerInterval = setInterval(updateLiveTimerDisplay, 1000);
+
+    const thinkingToggle = document.getElementById('thinking-toggle');
+    const thinking = thinkingToggle ? thinkingToggle.checked : false;
+    const params = new URLSearchParams();
+    if (currentChatId) params.set('chat_id', String(currentChatId));
+    params.set('thinking', thinking ? 'true' : 'false');
+
+    const socket = new WebSocket(`${wsBase()}/ws/live?${params.toString()}`);
+    liveWs = socket;
+
+    socket.onopen = () => {
+        console.log('Live WebSocket connected');
+    };
+
+    socket.onmessage = (event) => {
+        try {
+            const payload = JSON.parse(event.data);
+            handleLiveEvent(payload);
+        } catch (e) {
+            console.error('Live WS parse error:', e);
+        }
+    };
+
+    socket.onerror = () => {
+        if (liveModeActive) {
+            showToast(t('live.error', { msg: 'WebSocket connection failed' }), 'error', 3500);
+        }
+    };
+
+    socket.onclose = () => {
+        if (liveWs === socket) {
+            liveWs = null;
+        }
+        if (liveModeActive) {
+            stopLiveMode(false);
+        }
+    };
 }
 
-function stopLiveMode() {
+function stopLiveMode(notifyBackend = true) {
+    if (!liveModeActive && !liveWs) return;
+    liveModeActive = false;
+    liveMuted = false;
+
+    clearInterval(liveTimerInterval);
+    liveTimerInterval = null;
+    liveStartedAt = 0;
+
+    stopLiveAudioPlayback();
+
+    const socket = liveWs;
+    liveWs = null;
+    if (socket) {
+        if (notifyBackend && socket.readyState === WebSocket.OPEN) {
+            try { socket.send(JSON.stringify({ type: 'stop' })); } catch (e) {}
+        }
+        try { socket.close(); } catch (e) {}
+    }
+
+    if (notifyBackend) {
+        fetch(`${apiBase()}/api/live/stop`, { method: 'POST' }).catch(() => {});
+    }
+
+    liveActiveTurnEl = null;
+    liveActiveTurnText = '';
+    liveActiveTurnActions = [];
+
+    const overlay = document.getElementById('live-overlay');
+    const pill = document.getElementById('live-mini-pill');
+    const headerBtn = document.getElementById('live-mode-btn');
+    if (overlay) overlay.classList.add('hidden');
+    if (pill) pill.classList.add('hidden');
+    if (headerBtn) headerBtn.classList.remove('active');
+
+    updateLiveMicMeter(0);
     const input = document.getElementById('message-input');
-    input.placeholder = t('voice.placeholder');
+    if (input) input.placeholder = t('voice.placeholder');
 }
 
 // === Voice Recording (Web Audio API + VAD) ===
@@ -2963,6 +3417,10 @@ function stopTTSPlayback() {
             currentCueAudio.currentTime = 0;
         } catch (e) {}
         currentCueAudio = null;
+        stopped = true;
+    }
+    if (liveModeActive && liveScheduledSources.size > 0) {
+        sendLiveInterrupt();
         stopped = true;
     }
     if (stopped) {

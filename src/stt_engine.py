@@ -295,6 +295,84 @@ class STTEngine:
             logger.error(f"STT initialization error: {e}")
             raise
     
+    def _transcribe_array(self, audio) -> str:
+        """Run Whisper inference synchronously on a mono/stereo 16 kHz numpy array."""
+        import numpy as np
+        import torch
+
+        arr = np.asarray(audio)
+        if len(arr.shape) > 1:
+            arr = arr.mean(axis=1)
+        arr = arr.astype(np.float32, copy=False)
+
+        input_features = self._processor(
+            arr,
+            sampling_rate=16000,
+            return_tensors="pt"
+        ).input_features
+
+        if self._device == "cuda":
+            input_features = input_features.half()
+
+        input_features = input_features.to(self._device)
+        forced_decoder_ids = self._processor.get_decoder_prompt_ids(
+            language="russian", task="transcribe"
+        )
+
+        with torch.no_grad():
+            predicted_ids = self._model.generate(
+                input_features,
+                forced_decoder_ids=forced_decoder_ids
+            )
+
+        transcription = self._processor.batch_decode(
+            predicted_ids,
+            skip_special_tokens=True
+        )[0]
+
+        logger.info(f"Recognized: {transcription[:100]}...")
+        return transcription.strip()
+
+    async def transcribe_numpy(self, audio, sample_rate: int = 16000) -> str:
+        """
+        Recognize speech directly from an in-memory PCM numpy array (no temp file / ffmpeg).
+
+        Args:
+            audio: 1D or 2D numpy float array of audio samples
+            sample_rate: Sample rate of input audio (resampled to 16000 Hz if different)
+
+        Returns:
+            str: Recognized text
+        """
+        import asyncio
+        import numpy as np
+
+        if not self._initialized:
+            await self.initialize()
+
+        if audio is None:
+            return ""
+        arr = np.asarray(audio)
+        if arr.size == 0:
+            return ""
+
+        if len(arr.shape) > 1:
+            arr = arr.mean(axis=1)
+        arr = arr.astype(np.float32, copy=False)
+
+        if sample_rate != 16000:
+            import librosa
+            arr = librosa.resample(arr, orig_sr=sample_rate, target_sr=16000)
+
+        if len(arr) < 1600:
+            logger.warning(f"Very short in-memory audio: {len(arr)} samples ({len(arr)/16000:.2f}s)")
+
+        try:
+            return await asyncio.to_thread(self._transcribe_array, arr)
+        except Exception as e:
+            logger.error(f"In-memory recognition error: {e}", exc_info=True)
+            raise
+
     async def transcribe(self, audio_path: str) -> str:
         """
         Recognize speech from an audio file.
@@ -311,10 +389,7 @@ class STTEngine:
         logger.info(f"Speech recognition from: {audio_path}")
         
         try:
-            import torch
             import librosa
-            import os
-            import shutil
             # Make sure a working ffmpeg is on PATH (needed for webm/ogg decode)
             ensure_ffmpeg()
             
@@ -331,46 +406,8 @@ class STTEngine:
                 raise ValueError("Аудио пустое (0 samples) — запись слишком короткая или повреждена")
             if len(audio) < 1600:  # <0.1 sec
                 logger.warning(f"Very short audio: {len(audio)} samples ({len(audio)/sr:.2f}s), possibly silence")
-            
-            # If stereo - convert to mono
-            if len(audio.shape) > 1:
-                audio = audio.mean(axis=1)
-            
-            # Convert to float32 if needed
-            audio = audio.astype(np.float32)
-            
-            # Process audio
-            input_features = self._processor(
-                audio, 
-                sampling_rate=16000, 
-                return_tensors="pt"
-            ).input_features
-            
-            # Cast to the model dtype
-            if self._device == "cuda":
-                input_features = input_features.half()
-            
-            # Move to device
-            input_features = input_features.to(self._device)
-            
-            # Force Russian language
-            forced_decoder_ids = self._processor.get_decoder_prompt_ids(language="russian", task="transcribe")
 
-            # Generate
-            with torch.no_grad():
-                predicted_ids = self._model.generate(
-                    input_features,
-                    forced_decoder_ids=forced_decoder_ids
-                )
-            
-            # Decode
-            transcription = self._processor.batch_decode(
-                predicted_ids, 
-                skip_special_tokens=True
-            )[0]
-            
-            logger.info(f"Recognized: {transcription[:100]}...")
-            return transcription.strip()
+            return self._transcribe_array(audio)
             
         except Exception as e:
             logger.error(f"Recognition error: {e}", exc_info=True)

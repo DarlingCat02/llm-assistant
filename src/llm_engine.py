@@ -13,7 +13,7 @@ the code is the same for all of them — only the URL and API key change.
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Any
+from typing import AsyncIterator, Callable, Any
 from enum import Enum
 
 import httpx
@@ -95,6 +95,17 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     # Executed tool calls across all rounds (for UI display)
     actions: list[ToolAction] = field(default_factory=list)
+
+
+@dataclass
+class LLMStreamEvent:
+    """Event emitted during streaming generation with tool-call support."""
+    type: str  # "token" | "tool_start" | "tool_done" | "done"
+    token: str = ""
+    tool_name: str = ""
+    tool_arguments: dict[str, Any] = field(default_factory=dict)
+    action: ToolAction | None = None
+    response: LLMResponse | None = None
 
 
 class LLMEngine:
@@ -539,38 +550,15 @@ class LLMEngine:
         if not self._initialized:
             raise RuntimeError("LLM Engine not initialized. Call initialize().")
 
-        messages, thinking_enabled = await self._build_messages(
-            user_message, additional_context, thinking, chat_history, images
+        payload = await self._build_chat_payload(
+            user_message=user_message,
+            additional_context=additional_context,
+            stream=stream,
+            thinking=thinking,
+            tools=tools,
+            chat_history=chat_history,
+            images=images,
         )
-
-        payload = {
-            "model": self._config.model,
-            "messages": messages,
-            "stream": stream,
-            "temperature": self._config.temperature,
-        }
-
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-
-        # num_ctx and thinking are Ollama-specific
-        if self._config.provider == LLMProvider.OLLAMA:
-            thinking_type = "on" if thinking_enabled else "off"
-            payload["options"] = {
-                "num_ctx": self._config.num_ctx,
-                "temperature": self._config.temperature,
-                "thinking": {"type": thinking_type},
-            }
-            del payload["temperature"]
-
-        logger.debug(
-            f"Request to LLM: {len(messages)} messages, "
-            f"provider={self._config.provider.value}, "
-            f"model={self._config.model}"
-        )
-        if tools:
-            logger.info(f"Tools: {[t['function']['name'] for t in tools]}")
 
         try:
             max_rounds = 5
@@ -790,6 +778,235 @@ class LLMEngine:
         
         logger.debug(f"Streaming LLM response: {len(llm_response.content)} characters")
         return llm_response
+
+    async def _build_chat_payload(
+        self,
+        user_message: str,
+        additional_context: list[str] | None = None,
+        stream: bool = False,
+        thinking: bool = False,
+        tools: list[dict] | None = None,
+        chat_history: list[dict] | None = None,
+        images: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Build an OpenAI-compatible request payload shared by single and streaming modes."""
+        messages, thinking_enabled = await self._build_messages(
+            user_message, additional_context, thinking, chat_history, images
+        )
+        payload: dict[str, Any] = {
+            "model": self._config.model,
+            "messages": messages,
+            "stream": stream,
+            "temperature": self._config.temperature,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        # num_ctx and thinking are Ollama-specific
+        if self._config.provider == LLMProvider.OLLAMA:
+            thinking_type = "on" if thinking_enabled else "off"
+            payload["options"] = {
+                "num_ctx": self._config.num_ctx,
+                "temperature": self._config.temperature,
+                "thinking": {"type": thinking_type},
+            }
+            del payload["temperature"]
+
+        logger.debug(
+            f"Request to LLM: {len(messages)} messages, "
+            f"provider={self._config.provider.value}, "
+            f"model={self._config.model}"
+        )
+        if tools:
+            logger.info(f"Tools: {[t['function']['name'] for t in tools]}")
+        return payload
+
+    @staticmethod
+    def _parse_streamed_tool_calls(raw_calls: dict[int, dict[str, str]]) -> list[ToolCall]:
+        """Convert accumulated SSE tool_call deltas into ToolCall objects."""
+        import json
+        parsed: list[ToolCall] = []
+        for idx in sorted(raw_calls.keys()):
+            entry = raw_calls[idx]
+            name = entry.get("name", "") or "unknown"
+            raw_args = entry.get("arguments", "") or "{}"
+            try:
+                arguments = json.loads(raw_args)
+                if not isinstance(arguments, dict):
+                    arguments = {"value": arguments}
+            except json.JSONDecodeError:
+                arguments = {"raw": raw_args}
+            parsed.append(
+                ToolCall(
+                    id=entry.get("id") or f"call_{idx}",
+                    name=name,
+                    arguments=arguments,
+                )
+            )
+        return parsed
+
+    async def stream_generate(
+        self,
+        user_message: str,
+        additional_context: list[str] | None = None,
+        thinking: bool = False,
+        tools: list[dict] | None = None,
+        chat_history: list[dict] | None = None,
+        images: list[str] | None = None,
+        cancel_event: asyncio.Event | None = None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        """
+        Stream tokens incrementally while still supporting multi-round tool calls.
+
+        Yields ``LLMStreamEvent`` items for token deltas, tool starts/completions,
+        and a final ``done`` event carrying the aggregated ``LLMResponse``.
+        """
+        if not self._initialized:
+            raise RuntimeError("LLM Engine not initialized. Call initialize().")
+
+        import json
+
+        payload = await self._build_chat_payload(
+            user_message=user_message,
+            additional_context=additional_context,
+            stream=True,
+            thinking=thinking,
+            tools=tools,
+            chat_history=chat_history,
+            images=images,
+        )
+
+        max_rounds = 5
+        executed_actions: list[ToolAction] = []
+        spoken_segments: list[str] = []
+        model_name = self._config.model
+        prompt_tokens = 0
+
+        for round_idx in range(max_rounds):
+            if cancel_event and cancel_event.is_set():
+                break
+
+            round_content: list[str] = []
+            raw_tool_calls: dict[int, dict[str, str]] = {}
+
+            async with self._client.stream("POST", "/chat/completions", json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if cancel_event and cancel_event.is_set():
+                        break
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        line = line[6:]
+                    if line.strip() == "[DONE]":
+                        break
+
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if data.get("model"):
+                        model_name = data["model"]
+
+                    usage = data.get("usage")
+                    if isinstance(usage, dict) and usage.get("prompt_tokens"):
+                        prompt_tokens = int(usage["prompt_tokens"])
+                    elif data.get("prompt_eval_count"):
+                        prompt_tokens = int(data["prompt_eval_count"])
+
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+
+                    token = delta.get("content") or ""
+                    if token:
+                        round_content.append(token)
+                        yield LLMStreamEvent(type="token", token=token)
+
+                    tc_deltas = delta.get("tool_calls")
+                    if tc_deltas:
+                        for tc in tc_deltas:
+                            idx = int(tc.get("index", 0))
+                            buf = raw_tool_calls.setdefault(
+                                idx, {"id": "", "name": "", "arguments": ""}
+                            )
+                            if tc.get("id"):
+                                buf["id"] = tc["id"]
+                            fn = tc.get("function") or {}
+                            if fn.get("name"):
+                                buf["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                buf["arguments"] += fn["arguments"]
+
+            if cancel_event and cancel_event.is_set():
+                break
+
+            round_text = "".join(round_content)
+            if round_text.strip():
+                spoken_segments.append(round_text.strip())
+
+            tool_calls = self._parse_streamed_tool_calls(raw_tool_calls)
+            if not tool_calls:
+                break
+
+            logger.info(
+                f"Live round {round_idx + 1}: LLM called tool(s): "
+                f"{[tc.name for tc in tool_calls]}"
+            )
+            assistant_msg = Message(
+                role=MessageRole.ASSISTANT,
+                content=round_text,
+                tool_calls=[
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
+                    }
+                    for tc in tool_calls
+                ],
+            )
+            payload["messages"].append(assistant_msg.to_dict())
+
+            for tc in tool_calls:
+                if cancel_event and cancel_event.is_set():
+                    break
+                yield LLMStreamEvent(
+                    type="tool_start",
+                    tool_name=tc.name,
+                    tool_arguments=tc.arguments,
+                )
+                tool_result = await self._execute_tool(tc)
+                action = self._make_action(tc, tool_result)
+                executed_actions.append(action)
+                yield LLMStreamEvent(
+                    type="tool_done",
+                    tool_name=tc.name,
+                    action=action,
+                )
+                tool_msg = Message(
+                    role=MessageRole.TOOL,
+                    content=tool_result,
+                    tool_call_id=tc.id,
+                )
+                payload["messages"].append(tool_msg.to_dict())
+
+        final_content = "\n".join(spoken_segments).strip()
+        yield LLMStreamEvent(
+            type="done",
+            response=LLMResponse(
+                content=final_content,
+                model=model_name,
+                done=True,
+                prompt_tokens=prompt_tokens,
+                actions=executed_actions,
+            ),
+        )
     
     async def generate_with_context(
         self,

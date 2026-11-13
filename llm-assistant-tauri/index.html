@@ -47,6 +47,10 @@
                     <span class="context-label" id="context-label">0 / 8192</span>
                 </div>
                 <div class="chat-actions">
+                    <button id="live-mode-btn" class="live-header-btn" title="Live Mode" data-i18n="live.buttonTitle" data-i18n-attr="title">
+                        <span class="live-dot"></span>
+                        <span data-i18n="live.button">Live</span>
+                    </button>
                     <button id="clear-chat-btn" class="btn-icon" title="Очистить чат" data-i18n="chat.clear" data-i18n-attr="title">🧹</button>
                     <button id="delete-chat-btn" class="btn-icon" title="Удалить чат" data-i18n="chat.delete" data-i18n-attr="title">🗑️</button>
                 </div>
@@ -498,6 +502,48 @@
             <button class="btn-secondary" id="avatar-reset-btn" data-i18n="avatar.reset">Reset</button>
             <button class="btn-secondary" id="avatar-delete-btn" data-i18n="avatar.delete">Delete selected</button>
         </div>
+    </div>
+
+    <!-- Live Mode Call Overlay -->
+    <div id="live-overlay" class="live-overlay hidden" role="dialog" aria-label="Live Mode">
+        <div class="live-card">
+            <div class="live-card-header">
+                <div class="live-badge">
+                    <span class="live-dot active"></span>
+                    <span data-i18n="live.button">Live</span>
+                    <span id="live-timer" class="live-timer">00:00</span>
+                </div>
+                <button id="live-minimize-btn" class="btn-icon" title="Minimize" data-i18n="live.minimize" data-i18n-attr="title">🗕</button>
+            </div>
+            <div class="live-orb-stage">
+                <div id="live-orb-ring" class="live-orb-ring"></div>
+                <div id="live-orb" class="live-orb state-connecting">
+                    <span class="live-orb-core"></span>
+                </div>
+            </div>
+            <div id="live-status-text" class="live-status-text" data-i18n="live.connecting">Starting models...</div>
+            <div class="live-mic-meter" aria-hidden="true">
+                <div id="live-mic-bar" class="live-mic-bar"></div>
+            </div>
+            <div id="live-subtitle" class="live-subtitle" data-i18n="live.subtitleIdle">Speak naturally — I'm listening and ready to help.</div>
+            <div class="live-controls">
+                <button id="live-mute-btn" class="live-ctrl-btn" title="Mute" data-i18n="live.mute" data-i18n-attr="title">
+                    <span id="live-mute-icon">🎙️</span>
+                </button>
+                <button id="live-interrupt-btn" class="live-ctrl-btn" title="Interrupt" data-i18n="live.interrupt" data-i18n-attr="title">✋</button>
+                <button id="live-hangup-btn" class="live-ctrl-btn danger" title="End call" data-i18n="live.hangup" data-i18n-attr="title">📞</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Live Mode Minimized Pill (chat view remains visible) -->
+    <div id="live-mini-pill" class="live-mini-pill hidden">
+        <span class="live-dot active"></span>
+        <span id="live-mini-status" class="live-mini-status" data-i18n="live.listening">Listening...</span>
+        <span id="live-mini-timer" class="live-timer">00:00</span>
+        <button id="live-mini-mute-btn" class="live-mini-btn" title="Mute">🎙️</button>
+        <button id="live-expand-btn" class="live-mini-btn" title="Expand" data-i18n="live.expand" data-i18n-attr="title">⤢</button>
+        <button id="live-mini-hangup-btn" class="live-mini-btn danger" title="End call" data-i18n="live.hangup" data-i18n-attr="title">✕</button>
     </div>
 
     <div id="toast-container" aria-live="polite"></div>

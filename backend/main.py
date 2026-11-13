@@ -272,6 +272,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # Shutdown
     logger.info("Stopping Backend...")
 
+    # Stop active Live Mode session if any
+    try:
+        await _stop_live_session()
+    except Exception:
+        pass
+
     # Stop wake-word (releases the microphone)
     try:
         _wake_stop()
@@ -374,6 +380,197 @@ async def global_websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         manager.disconnect(websocket)
+
+
+# === Live Mode (full-duplex voice conversation) ===
+
+_live_session = None
+_live_restore_wake: bool = False
+
+
+async def _stop_live_session() -> None:
+    """Stop active Live Mode session cleanly and restore wake-word if it was active."""
+    global _live_session, _live_restore_wake
+    session = _live_session
+    _live_session = None
+    if session is not None:
+        try:
+            await session.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping live session: {e}")
+    if _live_restore_wake:
+        _live_restore_wake = False
+        if _input_mode == INPUT_MODE_BACKGROUND and _wake_detector is None:
+            _wake_start()
+
+
+async def _ensure_omnivoice_loaded() -> bool:
+    """Load OmniVoice off-loop, persist voice transcription cache, and drop duplicate Whisper."""
+    global _tts_load_task
+    if not _assistant or not getattr(_assistant, "_tts", None):
+        return False
+    if _tts_engine_ready():
+        return True
+
+    pending = _tts_load_task
+    if pending is not None and not pending.done():
+        return bool(await asyncio.shield(pending))
+
+    def _run_off_loop(coro_factory):
+        return asyncio.run(coro_factory())
+
+    task = asyncio.create_task(
+        asyncio.to_thread(_run_off_loop, _assistant._tts.enable_omnivoice)
+    )
+    _tts_load_task = task
+    success = bool(await asyncio.shield(task))
+    if success:
+        ref = getattr(_assistant._tts, "_voice_ref_audio", "") or ""
+        if ref:
+            await asyncio.to_thread(_remember_voice_transcription, ref)
+        if _drop_tts_whisper_copy():
+            freed = await asyncio.to_thread(_release_cuda_cache)
+            logger.info(
+                f"TTS: dropped the Whisper copy after caching, "
+                f"returned {freed} MB to the GPU"
+            )
+    return success
+
+
+async def _ensure_live_models_ready() -> None:
+    """Ensure STT Whisper and OmniVoice TTS are warm before listening in Live Mode."""
+    stt = get_stt_engine()
+    if stt is not None and not stt.is_initialized:
+        await asyncio.to_thread(asyncio.run, stt.initialize())
+    if _assistant and getattr(_assistant, "_tts", None) and not _tts_engine_ready():
+        ok = await _ensure_omnivoice_loaded()
+        if not ok:
+            logger.warning("Live Mode: OmniVoice failed to load; continuing without TTS audio")
+
+
+async def _sync_lmstudio_before_live_turn() -> None:
+    """Keep LM Studio model selection synced with currently loaded model."""
+    if _config and _config.llm.provider.value == "lm_studio" and _assistant and _assistant._llm:
+        current = _assistant._llm._config.model
+        loaded = await get_lmstudio_loaded_models()
+        target = pick_lmstudio_model(current, loaded)
+        if target and target != current:
+            logger.info(f"Live Mode: syncing LM Studio model {current} -> {target}")
+            _assistant._llm._config.model = target
+
+
+@app.get("/api/live/status")
+async def get_live_status():
+    """Current Live Mode session state."""
+    session = _live_session
+    return {
+        "active": bool(session and session.running),
+        "state": session.state if session else "idle",
+        "chat_id": session.chat_id if session else None,
+        "muted": bool(session and session.vad.muted),
+    }
+
+
+@app.post("/api/live/stop")
+async def stop_live_mode():
+    """Stop active Live Mode session if running."""
+    await _stop_live_session()
+    return {"status": "stopped"}
+
+
+@app.websocket("/ws/live")
+async def live_websocket_endpoint(
+    websocket: WebSocket,
+    chat_id: int | None = None,
+    thinking: bool = False,
+):
+    """Full-duplex Live Mode WebSocket endpoint."""
+    from fastapi import WebSocketDisconnect
+    from src.live_session import LiveSessionManager
+
+    global _live_session, _live_restore_wake
+
+    await websocket.accept()
+    if not _assistant:
+        await websocket.send_json({"type": "error", "detail": "Assistant not initialized"})
+        await websocket.close()
+        return
+
+    # Tear down any lingering previous session before capturing microphone again.
+    if _live_session is not None:
+        await _stop_live_session()
+
+    if _wake_detector is not None:
+        _live_restore_wake = _input_mode == INPUT_MODE_BACKGROUND
+        _wake_stop()
+    else:
+        _live_restore_wake = False
+
+    ws_closed = False
+
+    async def send_live_event(payload: dict) -> None:
+        if ws_closed:
+            return
+        try:
+            await websocket.send_json(payload)
+        except Exception:
+            pass
+
+    session = LiveSessionManager(
+        assistant=_assistant,
+        stt=get_stt_engine(),
+        tts=_assistant._tts,
+        db=_db,
+        config=_config,
+        event_cb=send_live_event,
+        before_turn_cb=_sync_lmstudio_before_live_turn,
+        get_context_max_cb=get_effective_context_length,
+    )
+    _live_session = session
+
+    try:
+        await send_live_event({"type": "live_state", "state": "connecting"})
+        await _ensure_live_models_ready()
+        await session.start(chat_id=chat_id, thinking=thinking)
+
+        while True:
+            try:
+                msg = await websocket.receive_json()
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.debug(f"Live WS receive error: {e}")
+                break
+
+            if not isinstance(msg, dict):
+                continue
+            mtype = str(msg.get("type", "")).lower()
+
+            if mtype == "mute":
+                await session.set_muted(bool(msg.get("muted", False)))
+            elif mtype == "interrupt":
+                await session.interrupt()
+            elif mtype == "playback_state":
+                session.set_client_playing(bool(msg.get("playing", False)))
+            elif mtype == "set_thinking":
+                session.thinking = bool(msg.get("thinking", False))
+            elif mtype == "set_chat":
+                if msg.get("chat_id") is not None:
+                    session.chat_id = int(msg["chat_id"])
+            elif mtype == "text":
+                await session.submit_text(str(msg.get("content", "")))
+            elif mtype == "stop":
+                break
+    except Exception as e:
+        logger.error(f"Live WebSocket error: {e}", exc_info=True)
+        await send_live_event({"type": "error", "detail": str(e)})
+    finally:
+        ws_closed = True
+        if _live_session is session:
+            await _stop_live_session()
+        else:
+            await session.stop()
+        logger.info("Live WebSocket closed")
 
 
 # === Input mode + wake word ===
@@ -1211,6 +1408,9 @@ async def release_models(request: dict):
     result = {"tts_released": False, "stt_released": False,
               "tts_blocked": None, "stt_blocked": None}
 
+    if _live_session is not None and _live_session.running:
+        await _stop_live_session()
+
     if what in ("all", "tts") and _tts_engine_ready():
         pending = _tts_load_task
         if pending is not None and not pending.done():
@@ -1950,28 +2150,9 @@ async def toggle_tts(request: Request):
     def _run_off_loop(coro_factory):
         return asyncio.run(coro_factory())
 
-    global _tts_load_task
     try:
         if enabled:
-            task = asyncio.create_task(
-                asyncio.to_thread(_run_off_loop, _assistant._tts.enable_omnivoice)
-            )
-            _tts_load_task = task
-            success = await asyncio.shield(task)
-            if success:
-                # enable_omnivoice applies the saved voice config while
-                # loading, so a sample may have just been transcribed. Save it
-                # now - that is what makes every later switch-on free - and
-                # hand the copy back: its only job was that one transcription.
-                ref = getattr(_assistant._tts, "_voice_ref_audio", "") or ""
-                if ref:
-                    await asyncio.to_thread(_remember_voice_transcription, ref)
-                if _drop_tts_whisper_copy():
-                    freed = await asyncio.to_thread(_release_cuda_cache)
-                    logger.info(
-                        f"TTS: dropped the Whisper copy after caching, "
-                        f"returned {freed} MB to the GPU"
-                    )
+            success = await _ensure_omnivoice_loaded()
         else:
             # Turning TTS off has to be possible while the model is still
             # loading. Racing it would leave OmniVoice installed after the user

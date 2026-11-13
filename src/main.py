@@ -439,37 +439,24 @@ class Assistant:
                 f"Duration: {duration}"
             )
     
-    async def process_message(self, user_message: str, thinking: bool = False, search: str = "", chat_history: list[dict] | None = None, images: list[str] | None = None) -> LLMResponse:
-        """
-        Process a user message.
-
-        Args:
-            user_message: User message.
-            thinking: Enable reasoning mode (for Qwen3).
-            search: Enable web search.
-            chat_history: Chat message history (list of dicts with role/content).
-            images: List of base64-encoded images.
-
-        Returns:
-            LLMResponse: Assistant response with content and metadata.
-        """
-        if not self._llm or not self._memory:
-            lang = get_config().general.language
-            raise RuntimeError(assistant_not_init_detail(lang))
-
-        self._message_count += 1
-
-        # Auto-detection for screenshot trigger
+    async def _prepare_request_context(
+        self,
+        user_message: str,
+        search: str = "",
+        images: list[str] | None = None,
+    ) -> tuple[list[str], list[dict], list[str]]:
+        """Prepare screenshot attachments, RAG memory context, and language-aware tools."""
         if images is None:
             images = []
-        
+        else:
+            images = list(images)
+
         screen_config = self._config.screen
         if screen_config.enabled:
             screenshot_triggers = [tr.strip() for tr in screen_config.triggers.split(",") if tr.strip()]
-            
             clean_msg = user_message.split("\n\n[Системное уточнение]")[0].split("\n\n[System note]")[0].lower()
             needs_screenshot = any(trigger in clean_msg for trigger in screenshot_triggers)
-            
+
             if needs_screenshot:
                 self._logger.info(f"Screenshot trigger detected: '{user_message[:50]}...'")
                 try:
@@ -486,8 +473,7 @@ class Assistant:
                 except Exception as e:
                     self._logger.error(f"Auto-screenshot error: {e}")
 
-        # 1. Smart memory search (RAG)
-        context = []
+        context: list[str] = []
         if self._should_search_memory(user_message):
             self._logger.debug(f"Searching context for: {user_message[:50]}...")
             context = await self._memory.search_context(user_message, scopes=self.memory_scopes())
@@ -499,7 +485,6 @@ class Assistant:
         else:
             self._logger.debug("RAG skipped (greeting/short message)")
 
-        # 2. Prepare tools (language-aware)
         try:
             _tool_lang = get_config().general.language
         except Exception:
@@ -514,9 +499,8 @@ class Assistant:
             except ImportError:
                 from src.agent_tools import FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION
                 tools = [FILE_CREATE_DEFINITION, APP_OPEN_DEFINITION, FILE_OPEN_DEFINITION, BROWSER_OPEN_DEFINITION, SCREENSHOT_DEFINITION]
-        
+
         if search and search == "ddg" and self._search_tool:
-            # Language-aware DDG definition (fresh, not cached)
             try:
                 from src.web_search import DDG_TOOL_DEFINITION as DDG_RU, DDG_TOOL_DEFINITION_EN as DDG_EN
                 ddg_def = DDG_RU if _tool_lang == "ru" else DDG_EN
@@ -524,10 +508,7 @@ class Assistant:
                 ddg_def = self._ddg_tool_def
             tools.append(ddg_def)
 
-        # 2.1. If search enabled — always search web
-        if search and search == "ddg" and self._search_tool:
             web_results = await self._search_tool.search(user_message, max_results=7)
-
             if web_results and not web_results.startswith("["):
                 if _tool_lang == "ru":
                     search_context = f"\n\n=== РЕЗУЛЬТАТЫ ПОИСКА В ИНТЕРНЕТЕ ===\n{web_results}\n=== КОНЕЦ РЕЗУЛЬТАТОВ ==="
@@ -537,6 +518,19 @@ class Assistant:
                 self._logger.info("Search results added to context")
             else:
                 self._logger.warning(f"Search returned no results: {web_results}")
+
+        return context, tools, images
+
+    async def process_message(self, user_message: str, thinking: bool = False, search: str = "", chat_history: list[dict] | None = None, images: list[str] | None = None) -> LLMResponse:
+        """
+        Process a user message.
+        """
+        if not self._llm or not self._memory:
+            lang = get_config().general.language
+            raise RuntimeError(assistant_not_init_detail(lang))
+
+        self._message_count += 1
+        context, tools, images = await self._prepare_request_context(user_message, search, images)
 
         # 3. Generate response via LLM
         self._logger.debug("Generating response...")
@@ -561,6 +555,42 @@ class Assistant:
             await self._extract_and_save_facts(user_message, answer)
 
         return response
+
+    async def process_message_stream(
+        self,
+        user_message: str,
+        thinking: bool = False,
+        search: str = "",
+        chat_history: list[dict] | None = None,
+        images: list[str] | None = None,
+        cancel_event: asyncio.Event | None = None,
+    ):
+        """
+        Stream assistant response events for Live mode (without calling TTS directly).
+        Yields ``LLMStreamEvent`` items from ``LLMEngine.stream_generate``.
+        """
+        if not self._llm or not self._memory:
+            lang = get_config().general.language
+            raise RuntimeError(assistant_not_init_detail(lang))
+
+        self._message_count += 1
+        context, tools, images = await self._prepare_request_context(user_message, search, images)
+
+        async for event in self._llm.stream_generate(
+            user_message=user_message,
+            additional_context=context,
+            thinking=thinking,
+            tools=tools,
+            chat_history=chat_history,
+            images=images,
+            cancel_event=cancel_event,
+        ):
+            if event.type == "done" and event.response and (not cancel_event or not cancel_event.is_set()):
+                if self._looks_like_new_fact(user_message) and event.response.content:
+                    asyncio.create_task(
+                        self._extract_and_save_facts(user_message, event.response.content)
+                    )
+            yield event
 
     async def _execute_web_search_ddg(self, query: str) -> str:
         """Search via DuckDuckGo (callback for LLM)."""
