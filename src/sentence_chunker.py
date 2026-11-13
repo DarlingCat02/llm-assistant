@@ -57,10 +57,19 @@ class SentenceChunker:
     latency low via optional clause breaks on long sentences.
     """
 
-    def __init__(self, min_clause_words: int = 8, max_chunk_words: int = 26) -> None:
+    def __init__(
+        self,
+        min_clause_words: int = 8,
+        max_chunk_words: int = 26,
+        min_emit_words: int = 3,
+        min_emit_chars: int = 18,
+    ) -> None:
         self._min_clause_words = max(3, min_clause_words)
         self._max_chunk_words = max(self._min_clause_words + 4, max_chunk_words)
-        self._raw_buffer: str = ""
+        self._min_emit_words = max(1, min_emit_words)
+        self._min_emit_chars = max(1, min_emit_chars)
+        self._scan_buffer: str = ""
+        self._text_buffer: str = ""
         self._in_think: bool = False
         self._in_code_block: bool = False
         self._emitted_any: bool = False
@@ -70,97 +79,88 @@ class SentenceChunker:
         if not token:
             return []
 
-        self._raw_buffer += token
-        self._filter_hidden_blocks()
+        self._scan_buffer += token
+        self._filter_hidden_blocks(final=False)
         return self._extract_ready_chunks(final=False)
 
     def flush(self) -> list[str]:
         """Flush any remaining buffered speech at the end of the stream."""
         self._filter_hidden_blocks(final=True)
         chunks = self._extract_ready_chunks(final=True)
-        self._raw_buffer = ""
+        self._scan_buffer = ""
+        self._text_buffer = ""
         return chunks
 
     def reset(self) -> None:
         """Reset all internal state (e.g., on barge-in cancellation)."""
-        self._raw_buffer = ""
+        self._scan_buffer = ""
+        self._text_buffer = ""
         self._in_think = False
         self._in_code_block = False
         self._emitted_any = False
 
     def _filter_hidden_blocks(self, final: bool = False) -> None:
-        """Strip ``<think>...</think>`` and fenced code blocks incrementally."""
-        # Handle <think> blocks
-        while True:
+        """Move visible text to ``_text_buffer`` while stripping ``<think>`` and fenced code."""
+        while self._scan_buffer:
             if self._in_think:
-                end_idx = self._raw_buffer.find("</think>")
+                end_idx = self._scan_buffer.find("</think>")
                 if end_idx == -1:
-                    # Keep only a small tail in case '</think>' is split across tokens
-                    if not final and len(self._raw_buffer) > 8:
-                        self._raw_buffer = self._raw_buffer[-8:]
-                    elif final:
-                        self._raw_buffer = ""
+                    self._scan_buffer = "" if final else self._scan_buffer[-7:]
                     return
-                self._raw_buffer = self._raw_buffer[end_idx + len("</think>"):]
+                self._scan_buffer = self._scan_buffer[end_idx + len("</think>") :]
                 self._in_think = False
-            else:
-                start_idx = self._raw_buffer.find("<think>")
-                if start_idx == -1:
-                    break
-                before = self._raw_buffer[:start_idx]
-                after = self._raw_buffer[start_idx + len("<think>"):]
-                self._in_think = True
-                end_idx = after.find("</think>")
-                if end_idx != -1:
-                    self._raw_buffer = before + after[end_idx + len("</think>"):]
-                    self._in_think = False
-                else:
-                    self._raw_buffer = before
-                    return
+                continue
 
-        # Handle fenced code blocks ```...``` (don't read raw code aloud)
-        while "```" in self._raw_buffer:
-            first = self._raw_buffer.find("```")
             if self._in_code_block:
-                self._raw_buffer = self._raw_buffer[first + 3:]
+                end_idx = self._scan_buffer.find("```")
+                if end_idx == -1:
+                    self._scan_buffer = "" if final else self._scan_buffer[-2:]
+                    return
+                self._text_buffer += " "
+                self._scan_buffer = self._scan_buffer[end_idx + 3 :]
                 self._in_code_block = False
-            else:
-                second = self._raw_buffer.find("```", first + 3)
-                if second != -1:
-                    self._raw_buffer = (
-                        self._raw_buffer[:first] + " " + self._raw_buffer[second + 3:]
-                    )
-                else:
-                    self._raw_buffer = self._raw_buffer[:first]
-                    self._in_code_block = True
-                    break
+                continue
 
-    def _holdback_tail_len(self) -> int:
+            think_idx = self._scan_buffer.find("<think>")
+            code_idx = self._scan_buffer.find("```")
+            candidates = [(idx, kind) for idx, kind in ((think_idx, "think"), (code_idx, "code")) if idx != -1]
+            if not candidates:
+                holdback = 0 if final else self._holdback_tail_len(self._scan_buffer)
+                cut = len(self._scan_buffer) - holdback
+                if cut > 0:
+                    self._text_buffer += self._scan_buffer[:cut]
+                    self._scan_buffer = self._scan_buffer[cut:]
+                return
+
+            idx, kind = min(candidates, key=lambda pair: pair[0])
+            self._text_buffer += self._scan_buffer[:idx]
+            if kind == "think":
+                self._scan_buffer = self._scan_buffer[idx + len("<think>") :]
+                self._in_think = True
+            else:
+                self._scan_buffer = self._scan_buffer[idx + 3 :]
+                self._in_code_block = True
+
+    @staticmethod
+    def _holdback_tail_len(buf: str) -> int:
         """Keep incomplete tag prefixes like '<th' or '``' until next token."""
-        if not self._raw_buffer:
+        if not buf:
             return 0
         for prefix in ("<think>", "</think>"):
             for k in range(len(prefix) - 1, 0, -1):
-                if self._raw_buffer.endswith(prefix[:k]):
+                if buf.endswith(prefix[:k]):
                     return k
-        if self._raw_buffer.endswith("``"):
+        if buf.endswith("``"):
             return 2
-        if self._raw_buffer.endswith("`"):
+        if buf.endswith("`"):
             return 1
         return 0
 
     def _extract_ready_chunks(self, final: bool) -> list[str]:
-        """Extract complete sentences/clauses from ``_raw_buffer``."""
-        if self._in_think or self._in_code_block:
+        """Extract complete sentences/clauses from ``_text_buffer``."""
+        searchable = self._text_buffer
+        if not searchable:
             return []
-
-        holdback = 0 if final else self._holdback_tail_len()
-        searchable = (
-            self._raw_buffer[: len(self._raw_buffer) - holdback]
-            if holdback
-            else self._raw_buffer
-        )
-        tail = self._raw_buffer[len(searchable):]
 
         chunks: list[str] = []
         while searchable:
@@ -181,7 +181,7 @@ class SentenceChunker:
                 self._emitted_any = True
             searchable = ""
 
-        self._raw_buffer = searchable + tail
+        self._text_buffer = searchable
         return chunks
 
     def _find_split_index(self, text: str, final: bool) -> int | None:
@@ -195,7 +195,9 @@ class SentenceChunker:
             if ch == "\n":
                 # Emit if we have speakable content before newline
                 if _HAS_SPEAKABLE_RE.search(text[:i]):
-                    return i + 1
+                    has_more = bool(text[i + 1 :].strip())
+                    if self._is_big_enough_for_stream(text[: i + 1], final, has_more):
+                        return i + 1
                 continue
 
             if ch in _SENTENCE_END_CHARS:
@@ -236,7 +238,12 @@ class SentenceChunker:
                     end_idx = i + 1
                     while end_idx < n and text[end_idx] in ('"', "'", "»", ")"):
                         end_idx += 1
-                    return end_idx
+                    has_more = bool(text[end_idx:].strip())
+                    if self._is_big_enough_for_stream(text[:end_idx], final, has_more):
+                        return end_idx
+                    # Tiny opening word like "Привет!" / "Понял." breaks TTS prosody alone;
+                    # hold it and merge with the following sentence.
+                    continue
 
         # 2. Clause splitting for long sentences (fast first audio)
         words = text.split()
@@ -265,6 +272,20 @@ class SentenceChunker:
                 return space_idx + 1
 
         return None
+
+    def _is_big_enough_for_stream(
+        self, candidate: str, final: bool, has_more_in_buf: bool
+    ) -> bool:
+        """Avoid emitting isolated 1-2 word sentences (OmniVoice clips tiny inputs)."""
+        if final and not has_more_in_buf:
+            return True
+        cleaned = clean_for_speech(candidate)
+        if not cleaned:
+            return False
+        return (
+            len(cleaned.split()) >= self._min_emit_words
+            or len(cleaned) >= self._min_emit_chars
+        )
 
     @staticmethod
     def _trailing_abbreviation(prefix: str) -> str | None:

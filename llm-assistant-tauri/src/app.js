@@ -2916,6 +2916,9 @@ function enqueueLiveAudioBase64(b64Data, genId) {
         if (!liveModeActive || expectedGen !== liveGenerationId) return;
         ensureLiveAudioContext();
         if (!liveAudioCtx || !liveGainNode) return;
+        if (liveAudioCtx.state === 'suspended') {
+            await liveAudioCtx.resume().catch(() => {});
+        }
 
         const raw = atob(b64Data);
         const bytes = new Uint8Array(raw.length);
@@ -2931,7 +2934,8 @@ function enqueueLiveAudioBase64(b64Data, genId) {
         source.connect(liveGainNode);
 
         const now = liveAudioCtx.currentTime;
-        const startAt = Math.max(now + 0.02, liveNextStartTime);
+        const lead = liveNextStartTime === 0 ? 0.08 : 0.02;
+        const startAt = Math.max(now + lead, liveNextStartTime);
         liveNextStartTime = startAt + audioBuffer.duration;
 
         const wasEmpty = liveScheduledSources.size === 0;

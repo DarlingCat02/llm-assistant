@@ -53,7 +53,19 @@ def test_sentence_chunker_strips_think_and_code_blocks():
         out.extend(chunker.feed(stream[i : i + 4]))
     out.extend(chunker.flush())
 
-    assert out == ["Привет!", "Готово."]
+    assert out == ["Привет! Готово."]
+
+
+def test_sentence_chunker_merges_short_opening_word():
+    chunker = SentenceChunker()
+    stream = "Понял. Если что-то понадобится — обращайтесь. Спасибо!"
+    out: list[str] = []
+    for i in range(0, len(stream), 3):
+        out.extend(chunker.feed(stream[i : i + 3]))
+    out.extend(chunker.flush())
+
+    assert out[0] == "Понял. Если что-то понадобится — обращайтесь."
+    assert out[1] == "Спасибо!"
 
 
 def test_sentence_chunker_splits_long_clause_early():
