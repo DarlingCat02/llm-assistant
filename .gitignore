@@ -77,3 +77,7 @@ install.log
 
 # === Agent local workspace configs ===
 .agents/
+
+# === UI Mockups & Redesign Playground (temporary) ===
+ui-mockups/
+
