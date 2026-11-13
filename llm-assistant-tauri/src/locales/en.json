@@ -275,5 +275,8 @@
   "live.subtitleIdle": "Speak naturally — I'm listening and ready to help.",
   "live.connected": "Live Mode connected",
   "live.ended": "Live Mode ended",
-  "live.error": "Live Mode error: {msg}"
+  "live.error": "Live Mode error: {msg}",
+  "live.voiceLabel": "Voice",
+  "live.voiceCloneGroup": "🎤 Cloned (voices/)",
+  "live.voiceSynthGroup": "🎭 Synthesis (presets)"
 }

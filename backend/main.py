@@ -558,6 +558,14 @@ async def live_websocket_endpoint(
             elif mtype == "set_chat":
                 if msg.get("chat_id") is not None:
                     session.chat_id = int(msg["chat_id"])
+            elif mtype == "set_voice":
+                await _apply_tts_voice_config(
+                    mode=str(msg.get("mode", "instruct")),
+                    instruct=str(msg.get("instruct", "female")),
+                    ref_audio=msg.get("ref_audio"),
+                    position_temp=float(msg.get("position_temperature", 0.0) or 0.0),
+                    class_temp=float(msg.get("class_temperature", 0.0) or 0.0),
+                )
             elif mtype == "text":
                 await session.submit_text(str(msg.get("content", "")))
             elif mtype == "stop":
@@ -2238,48 +2246,20 @@ async def get_tts_status():
     }
 
 
-@app.post("/api/tts/config")
-async def tts_config(request: dict):
-    """
-    Configure TTS voice parameters.
-
-    Parameters:
-    - instruct: voice description (female, male, female russian, etc.)
-    - position_temperature: 0 = stable, higher = more random
-    - class_temperature: 0 = stable, higher = more random
-    """
-    if not _assistant or not _assistant._tts:
-        try:
-            lang = get_config().general.language
-        except Exception:
-            lang = "en"
-        raise HTTPException(status_code=503, detail=t("api.tts_not_init", lang=lang))
-    
-    mode = request.get("mode", "instruct")  # "instruct" or "clone"
-    instruct = request.get("instruct", "female")
-    ref_audio = request.get("ref_audio", None)  # path to reference file
-    position_temp = request.get("position_temperature", 0.0)
-    class_temp = request.get("class_temperature", 0.0)
-
-    # One canonical form for the sample, everywhere from here on. The engine
-    # keys its transcription cache on the exact string it is given, so
-    # 'voices/x.mp3' and an absolute path were counted as two different samples
-    # and the same file was transcribed twice in a row.
+async def _apply_tts_voice_config(
+    mode: str = "instruct",
+    instruct: str = "female",
+    ref_audio: str | None = None,
+    position_temp: float = 0.0,
+    class_temp: float = 0.0,
+) -> dict:
+    """Apply (or stage for lazy load) TTS voice mode, instruct, and optional clone reference."""
     if ref_audio:
         ref_audio = tts_voice_cache.normalize(ref_audio)
-    
-    # The facade forwards unconditionally to whatever engine object exists.
-    # While OmniVoice is still loading that object is the un-initialised one,
-    # and its set_voice_config touches self._whisper_model, which does not
-    # exist yet -> AttributeError and HTTP 500 on a perfectly ordinary click.
-    # Storing the values on the facade is enough: enable_omnivoice() applies
-    # the saved config as soon as the model is ready.
+
     applied = False
     if _tts_engine_ready():
         try:
-            # Cloning transcribes the sample once; that needs the copy, which
-            # instruct mode released on load. Put it back for this call - unless
-            # the words are already on disk, in which case nothing loads at all.
             if mode == "clone" and ref_audio:
                 await asyncio.to_thread(_ensure_tts_whisper_copy, ref_audio)
             _assistant._tts.set_voice_config(
@@ -2291,9 +2271,6 @@ async def tts_config(request: dict):
             )
             applied = True
             logger.info(f"Config applied to loaded OmniVoice: mode={mode}, ref={ref_audio}")
-            # set_voice_config is where a voice sample gets transcribed and
-            # cached. Keep the words so no later switch has to do it again,
-            # then hand the copy back - it has nothing left to do.
             if mode == "clone" and ref_audio:
                 await asyncio.to_thread(_remember_voice_transcription, ref_audio)
             if _drop_tts_whisper_copy():
@@ -2327,6 +2304,32 @@ async def tts_config(request: dict):
     }
 
 
+@app.post("/api/tts/config")
+async def tts_config(request: dict):
+    """
+    Configure TTS voice parameters.
+
+    Parameters:
+    - instruct: voice description (female, male, female russian, etc.)
+    - position_temperature: 0 = stable, higher = more random
+    - class_temperature: 0 = stable, higher = more random
+    """
+    if not _assistant or not _assistant._tts:
+        try:
+            lang = get_config().general.language
+        except Exception:
+            lang = "en"
+        raise HTTPException(status_code=503, detail=t("api.tts_not_init", lang=lang))
+
+    return await _apply_tts_voice_config(
+        mode=request.get("mode", "instruct"),
+        instruct=request.get("instruct", "female"),
+        ref_audio=request.get("ref_audio", None),
+        position_temp=request.get("position_temperature", 0.0),
+        class_temp=request.get("class_temperature", 0.0),
+    )
+
+
 @app.get("/api/tts/voices")
 async def get_voices():
     """Get the list of available voices for cloning."""
@@ -2355,8 +2358,13 @@ async def get_tts_config():
                 "class_temperature": 0.0}
 
     engine = _assistant._tts._engine
-    base = {"instruct": "female", "position_temperature": 0.0,
-            "class_temperature": 0.0}
+    base = {
+        "mode": getattr(_assistant._tts, "_voice_mode", "instruct"),
+        "instruct": getattr(_assistant._tts, "_voice_instruct", "female"),
+        "ref_audio": getattr(_assistant._tts, "_voice_ref_audio", None),
+        "position_temperature": 0.0,
+        "class_temperature": 0.0,
+    }
     if hasattr(engine, '_instruct'):
         base.update({
             "instruct": engine._instruct,

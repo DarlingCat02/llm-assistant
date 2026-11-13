@@ -359,17 +359,20 @@ function initEventListeners() {
                 cloneSelect.style.display = 'none';
             }
             
+            syncLiveVoiceSelector();
             await updateTTSConfig();
         });
     });
     
     // Voice selection in synthesis mode
     document.getElementById('tts-voice-select').addEventListener('change', async (e) => {
+        syncLiveVoiceSelector();
         await updateTTSConfig();
     });
     
     // Voice selection in cloning mode
     document.getElementById('tts-clone-select').addEventListener('change', async (e) => {
+        syncLiveVoiceSelector();
         await updateTTSConfig();
     });
     
@@ -2763,6 +2766,106 @@ function initLiveModeControls() {
 
     const expBtn = document.getElementById('live-expand-btn');
     if (expBtn) expBtn.addEventListener('click', () => setLiveMinimized(false));
+
+    const liveVoiceSel = document.getElementById('live-voice-select');
+    if (liveVoiceSel) liveVoiceSel.addEventListener('change', onLiveVoiceSelectChange);
+}
+
+function populateLiveVoiceSelect(voices = []) {
+    const liveSel = document.getElementById('live-voice-select');
+    const synthSel = document.getElementById('tts-voice-select');
+    if (!liveSel) return;
+
+    liveSel.innerHTML = '';
+
+    if (Array.isArray(voices) && voices.length > 0) {
+        const cloneGroup = document.createElement('optgroup');
+        cloneGroup.label = t('live.voiceCloneGroup') || 'Cloned (voices/)';
+        voices.forEach((v) => {
+            const opt = document.createElement('option');
+            opt.value = `clone:${v.path}`;
+            opt.textContent = `🎤 ${v.name}`;
+            cloneGroup.appendChild(opt);
+        });
+        liveSel.appendChild(cloneGroup);
+    }
+
+    if (synthSel) {
+        const synthGroup = document.createElement('optgroup');
+        synthGroup.label = t('live.voiceSynthGroup') || 'Synthesis (presets)';
+        Array.from(synthSel.options).forEach((o) => {
+            const opt = document.createElement('option');
+            opt.value = `instruct:${o.value}`;
+            opt.textContent = o.textContent;
+            synthGroup.appendChild(opt);
+        });
+        liveSel.appendChild(synthGroup);
+    }
+
+    syncLiveVoiceSelector();
+}
+
+function syncLiveVoiceSelector() {
+    const liveSel = document.getElementById('live-voice-select');
+    if (!liveSel) return;
+    const modeRadio = document.querySelector('input[name="tts-mode"]:checked');
+    const mode = modeRadio ? modeRadio.value : 'instruct';
+    const synthSel = document.getElementById('tts-voice-select');
+    const cloneSel = document.getElementById('tts-clone-select');
+
+    const desired = mode === 'clone' && cloneSel && cloneSel.value
+        ? `clone:${cloneSel.value}`
+        : `instruct:${(synthSel && synthSel.value) || 'female'}`;
+
+    const hasMatch = Array.from(liveSel.options).some((o) => o.value === desired);
+    if (hasMatch) {
+        liveSel.value = desired;
+    }
+}
+
+async function onLiveVoiceSelectChange() {
+    const liveSel = document.getElementById('live-voice-select');
+    if (!liveSel || !liveSel.value) return;
+    const val = liveSel.value;
+
+    const voiceSelect = document.getElementById('tts-voice-select');
+    const cloneSelect = document.getElementById('tts-clone-select');
+
+    let mode = 'instruct';
+    let instruct = (voiceSelect && voiceSelect.value) || 'female';
+    let ref_audio = null;
+
+    if (val.startsWith('clone:')) {
+        mode = 'clone';
+        ref_audio = val.slice('clone:'.length);
+        const cloneRadio = document.querySelector('input[name="tts-mode"][value="clone"]');
+        if (cloneRadio) cloneRadio.checked = true;
+        if (cloneSelect) {
+            cloneSelect.value = ref_audio;
+            cloneSelect.style.display = 'block';
+        }
+        if (voiceSelect) voiceSelect.style.display = 'none';
+    } else if (val.startsWith('instruct:')) {
+        mode = 'instruct';
+        instruct = val.slice('instruct:'.length);
+        const synthRadio = document.querySelector('input[name="tts-mode"][value="instruct"]');
+        if (synthRadio) synthRadio.checked = true;
+        if (voiceSelect) {
+            voiceSelect.value = instruct;
+            voiceSelect.style.display = 'block';
+        }
+        if (cloneSelect) cloneSelect.style.display = 'none';
+    }
+
+    if (liveModeActive) {
+        sendLiveControl({
+            type: 'set_voice',
+            mode,
+            instruct,
+            ref_audio,
+        });
+    }
+    await updateTTSConfig();
 }
 
 function ensureLiveAudioContext() {
@@ -3080,7 +3183,7 @@ function handleLiveEvent(data) {
     }
 }
 
-function startLiveMode() {
+async function startLiveMode() {
     if (liveModeActive) return;
 
     // Stop any push-to-talk recording or standalone TTS first
@@ -3112,6 +3215,11 @@ function startLiveMode() {
     updateLiveTimerDisplay();
     clearInterval(liveTimerInterval);
     liveTimerInterval = setInterval(updateLiveTimerDisplay, 1000);
+
+    // Ensure voice list is up-to-date and stage chosen voice (instruct/clone) BEFORE opening Live WS
+    await loadTTSVoices();
+    await updateTTSConfig();
+    if (!liveModeActive) return;
 
     const thinkingToggle = document.getElementById('thinking-toggle');
     const thinking = thinkingToggle ? thinkingToggle.checked : false;
@@ -3725,6 +3833,7 @@ async function loadTTSVoices() {
         const data = await response.json();
         
         const cloneSelect = document.getElementById('tts-clone-select');
+        const prevCloneValue = cloneSelect ? cloneSelect.value : '';
         cloneSelect.innerHTML = '';
         
         if (data.voices && data.voices.length > 0) {
@@ -3734,6 +3843,9 @@ async function loadTTSVoices() {
                 option.textContent = `🎤 ${voice.name}`;
                 cloneSelect.appendChild(option);
             });
+            if (prevCloneValue && Array.from(cloneSelect.options).some(o => o.value === prevCloneValue)) {
+                cloneSelect.value = prevCloneValue;
+            }
         } else {
             const option = document.createElement('option');
             option.value = '';
@@ -3741,6 +3853,7 @@ async function loadTTSVoices() {
             cloneSelect.appendChild(option);
         }
         
+        populateLiveVoiceSelect(data.voices || []);
         console.log(t('voice.loaded'), data.voices?.length || 0);
         await refreshWakeCueVoices();
     } catch (err) {

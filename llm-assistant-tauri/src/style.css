@@ -1818,6 +1818,37 @@ body {
     text-align: center;
 }
 
+.live-voice-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+}
+
+.live-voice-row label {
+    white-space: nowrap;
+    font-weight: 500;
+}
+
+.live-voice-select {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 12.5px;
+    cursor: pointer;
+    outline: none;
+}
+
+.live-voice-select:focus {
+    border-color: var(--accent-primary);
+}
+
 .live-controls {
     display: flex;
     align-items: center;

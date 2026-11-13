@@ -275,5 +275,8 @@
   "live.subtitleIdle": "Говорите свободно — я слушаю и могу выполнять действия.",
   "live.connected": "Live-режим включён",
   "live.ended": "Live-режим завершён",
-  "live.error": "Ошибка Live-режима: {msg}"
+  "live.error": "Ошибка Live-режима: {msg}",
+  "live.voiceLabel": "Голос",
+  "live.voiceCloneGroup": "🎤 Клонирование (voices/)",
+  "live.voiceSynthGroup": "🎭 Синтез (пресеты)"
 }
