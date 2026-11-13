@@ -11,6 +11,7 @@ Local AI assistant with voice input/output, web search, **Vision-Language (VL) c
 
 - 🎙️ **Voice input (STT)** — local Whisper, Russian only
 - 🔊 **Voice output (TTS)** — OmniVoice synthesis and voice cloning
+- 📞 **Live mode** — full-duplex real-time voice call (Silero VAD + streaming LLM + tools + OmniVoice chunks) with barge-in, voice selection (`voices/`), and chat sync
 - 🌐 **Web search** — DuckDuckGo (free, no API keys)
 - 📁 **Agent skills** — file creation, opening apps, websites and folders
 - 🔧 **Visible agent actions** — every tool call the assistant made is shown above the answer (collapsible)
@@ -578,15 +579,24 @@ After stopping — 1 second pause, then text is sent to AI.
 
 ### How to change hotkeys
 
-Set in `.env` (applied on app restart, format `Ctrl+Shift+V`, `Alt+F9`, `F12`, ...):
+Click any hotkey field in **Settings → General** and press your desired key combination directly (`Escape` to cancel, `Backspace` to clear), or set them in `.env` (applied on app restart, format `Ctrl+Shift+V`, `Alt+F9`, `F12`, ...):
 
 ```env
 HOTKEY_VOICE=Ctrl+Shift+V
 HOTKEY_VOICE_NUM=Ctrl+Num0
 HOTKEY_LIVE=Ctrl+Shift+L
 HOTKEY_STOP_TTS=Ctrl+Shift+X
-HOTKEY_STOP_TTS=Ctrl+Shift+X
 ```
+
+## Live mode (full-duplex voice call)
+
+Press the **Live** button in the chat header (or global hotkey `Ctrl+Shift+L`) to start a continuous two-way voice conversation:
+
+- **End-of-utterance detection** — Silero VAD detects speech start/pause (~500 ms silence) and transcribes directly in memory via Whisper (no temporary files).
+- **Streaming + tools** — tokens, ChromaDB RAG memory, and agent tools (`app_open`, `file_create`, `browser_open`, `capture_screen`, `web_search_ddg`) stream simultaneously into the active chat window and save to `storage/chats.db`.
+- **Voice choice (`voices/`)** — pick any synthesis preset or cloned voice file from `voices/` directly inside the Live overlay before or during a call.
+- **Fast Barge-In** — start speaking while the assistant is talking (or press Stop/Interrupt) to cancel active LLM generation and immediately flush buffered audio playback.
+- **Call overlay + chat sync** — keep the orb call card expanded or minimize it into a floating pill to read the live chat uninterrupted.
 
 ## Input modes: hotkey or background
 
@@ -744,6 +754,9 @@ LOG_LEVEL=INFO
 | POST | `/api/tts/config` | Configure voice |
 | GET | `/api/tts/voices` / `/api/tts/config` | Voice list / current voice |
 | POST | `/api/tts/speak` | Synthesize speech |
+| WS | `/ws/live` | Full-duplex Live Mode WebSocket (VAD, streaming LLM/tools, chunked WAV audio, barge-in) |
+| GET | `/api/live/status` | Current Live Mode state |
+| POST | `/api/live/stop` | Stop active Live Mode call |
 
 ## Project structure
 
@@ -774,6 +787,8 @@ local_assistant/
 │   ├── personas.py         # Persona storage
 │   ├── stt_engine.py       # Whisper STT (Russian)
 │   ├── tts_engine.py       # OmniVoice TTS
+│   ├── live_session.py     # Live Mode VAD, streaming session & barge-in
+│   ├── sentence_chunker.py # Streaming sentence splitter for low-latency TTS
 │   ├── wake_word.py        # Wake-word listener (VAD + borrowed Whisper)
 │   ├── tts_voice_cache.py  # Saved transcriptions of voice samples
 │   ├── web_search.py       # DuckDuckGo search
@@ -935,6 +950,7 @@ MIT
 
 - 🎙️ **Голосовой ввод (STT)** — локальный Whisper, только русский язык
 - 🔊 **Голосовой вывод (TTS)** — OmniVoice синтез и клонирование голоса
+- 📞 **Live-режим** — полнодуплексный голосовой звонок в реальном времени (Silero VAD + потоковые ответы и инструменты + OmniVoice по фразам) с перебиванием (barge-in), выбором голоса из `voices/` и синхронизацией в чат
 - 🌐 **Поиск в интернете** — DuckDuckGo (бесплатно, без API ключей)
 - 📁 **Агентные способности** — создание файлов, открытие приложений, сайтов и папок
 - 🔧 **Видимые действия ассистента** — каждый вызов инструмента показан над ответом (сворачиваемый блок)
@@ -1499,13 +1515,24 @@ Whisper транскрибирует только на русском языке
 
 ### Как изменить горячие клавиши
 
-Задайте в `.env` (применяется при перезапуске приложения, формат `Ctrl+Shift+V`, `Alt+F9`, `F12`, ...):
+Нажмите на любое поле горячей клавиши в **Настройки → Общие** и сразу нажмите нужное сочетание клавиш (`Escape` — отмена, `Backspace` — очистить), либо задайте в `.env` (применяется при перезапуске приложения, формат `Ctrl+Shift+V`, `Alt+F9`, `F12`, ...):
 
 ```env
 HOTKEY_VOICE=Ctrl+Shift+V
 HOTKEY_VOICE_NUM=Ctrl+Num0
 HOTKEY_LIVE=Ctrl+Shift+L
+HOTKEY_STOP_TTS=Ctrl+Shift+X
 ```
+
+## Live-режим (голосовой звонок)
+
+Нажмите кнопку **Live** в шапке чата (или глобальную клавишу `Ctrl+Shift+L`), чтобы начать непрерывный двусторонний голосовой диалог:
+
+- **Детекция речи (Silero VAD + Whisper)** — автоматически определяет начало речи и паузу (~500 мс тишины), распознаёт напрямую из памяти без временных файлов.
+- **Потоковые ответы и инструменты** — токены ответа, память ChromaDB и вызовы инструментов (`app_open`, `file_create`, `browser_open`, `capture_screen`, `web_search_ddg`) синхронно отображаются в активном чате и сохраняются в `storage/chats.db`.
+- **Выбор голоса (`voices/`)** — переключение между пресетами синтеза и клонированными голосами из папки `voices/` прямо в окне Live-звонка (до старта или во время разговора).
+- **Быстрое перебивание (Barge-In)** — начните говорить поверх речи ассистента (или нажмите кнопку прерывания), чтобы мгновенно остановить генерацию LLM и очистить буфер озвучки.
+- **Окно звонка и мини-режим** — анимированное окно с индикатором микрофона и субтитрами можно свернуть в компактную плашку, не прерывая звонок.
 
 ## Режимы ввода: горячая клавиша или фон
 
@@ -1661,6 +1688,9 @@ LOG_LEVEL=INFO
 | POST | `/api/tts/config` | Настроить голос |
 | GET | `/api/tts/voices` / `/api/tts/config` | Список голосов / текущий голос |
 | POST | `/api/tts/speak` | Озвучить текст |
+| WS | `/ws/live` | WebSocket Live-режима (VAD, потоковый LLM + инструменты, WAV-чанки, barge-in) |
+| GET | `/api/live/status` | Текущее состояние Live-режима |
+| POST | `/api/live/stop` | Остановить активный Live-звонок |
 
 ## Структура проекта
 
@@ -1691,6 +1721,8 @@ local_assistant/
 │   ├── personas.py         # Хранилище персон
 │   ├── stt_engine.py       # Whisper STT (русский)
 │   ├── tts_engine.py       # OmniVoice TTS
+│   ├── live_session.py     # Live-режим: VAD, потоковая сессия и barge-in
+│   ├── sentence_chunker.py # Потоковая разбивка фраз для быстрого TTS
 │   ├── wake_word.py        # Пробуждающая фраза (VAD + общий Whisper)
 │   ├── tts_voice_cache.py  # Сохранённые расшифровки образцов голоса
 │   ├── web_search.py       # DuckDuckGo поиск
